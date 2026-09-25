@@ -7,10 +7,10 @@ import type { FolderRecord, FileRecord } from '~/types/file-browser'
 export function useNameEditing(
   folders: Ref<FolderRecord[]>,
   files: Ref<FileRecord[]>,
-  breadcrumbs: Ref<Array<{ id: number; name: string }>>,
+  breadcrumbs: Ref<Array<{ id: number | null; name: string }>>,
   currentFolderId: Ref<number | null>,
   fetchFiles: () => Promise<void>,
-  options?: { targetUserId?: Ref<number | null> }
+  options?: { targetUserId?: Ref<number | null | undefined> }
 ) {
   const tRef = options?.targetUserId
 
