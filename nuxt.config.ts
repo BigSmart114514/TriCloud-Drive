@@ -57,8 +57,12 @@ export default defineNuxtConfig({
   vite: {
     optimizeDeps: {
       // 重要：不要预打包 @zip.js/zip.js，避免 dev 时 esbuild 选到 Node 条件
-      exclude: ['@zip.js/zip.js']
+      exclude: ['@zip.js/zip.js'],
       // 不要 include '@zip.js/zip.js'
+      include: [
+        '@heroicons/vue/24/outline',
+        'cos-js-sdk-v5', // CJS
+      ]
     }
   }/*,
   

@@ -37,7 +37,7 @@
       <div class="flex items-center gap-2">
         <!-- 返回上一级 -->
         <button
-          class="p-2 text-sm text-gray-600 hover:text-gray-800"
+          class="p-1 text-sm text-gray-600 hover:text-gray-800"
           v-if="breadcrumbs.length > 1"
           @click="handleGoUp"
           title="返回上一级"
@@ -48,7 +48,7 @@
 
         <!-- 批量删除（小屏隐藏，进“更多”） -->
         <button
-          class="p-2 text-sm text-red-600 hover:text-red-500 disabled:opacity-50 hidden sm:inline-flex"
+          class="p-1 text-sm text-red-600 hover:text-red-500 disabled:opacity-50 hidden sm:inline-flex"
           :disabled="selectedCount === 0 || bulkDeleting"
           @click="deleteSelected"
           title="删除所选"
@@ -59,7 +59,7 @@
 
         <!-- 批量下载（小屏隐藏，进“更多”） -->
         <button
-          class="p-2 text-sm text-indigo-600 hover:text-indigo-500 disabled:opacity-50 hidden sm:inline-flex"
+          class="p-1 text-sm text-indigo-600 hover:text-indigo-500 disabled:opacity-50 hidden sm:inline-flex"
           :disabled="selectedCount === 0 || bulkDownloading"
           @click="downloadSelected"
           title="下载所选"
@@ -70,7 +70,7 @@
 
         <!-- 剪贴（小屏隐藏，进“更多”） -->
         <button
-          class="p-2 text-sm text-indigo-600 hover:text-indigo-500 disabled:opacity-50 hidden sm:inline-flex"
+          class="p-1 text-sm text-indigo-600 hover:text-indigo-500 disabled:opacity-50 hidden sm:inline-flex"
           :disabled="selectedCount === 0"
           @click="clipSelection"
           title="剪贴所选（移动）"
@@ -81,7 +81,7 @@
 
         <!-- 复制（小屏隐藏，进“更多”） -->
         <button
-          class="p-2 text-sm text-indigo-600 hover:text-indigo-500 disabled:opacity-50 hidden sm:inline-flex"
+          class="p-1 text-sm text-indigo-600 hover:text-indigo-500 disabled:opacity-50 hidden sm:inline-flex"
           :disabled="selectedCount === 0"
           @click="copySelection"
           title="复制所选（拷贝）"
@@ -92,7 +92,7 @@
 
         <!-- 粘贴（小屏隐藏，进“更多”） -->
         <button
-          class="p-2 text-sm text-green-600 hover:text-green-500 disabled:opacity-50 hidden sm:inline-flex"
+          class="p-1 text-sm text-green-600 hover:text-green-500 disabled:opacity-50 hidden sm:inline-flex"
           :disabled="!hasClipboard || pasting"
           @click="pasteClipboard"
           :title="clipboard?.mode === 'cut' ? '移动到当前文件夹' : '复制到当前文件夹'"
@@ -108,7 +108,7 @@
         <!-- 上传按钮（悬浮菜单） -->
         <div class="relative" ref="uploadMenuRef" @mouseenter="openUploadMenu" @mouseleave="scheduleCloseUploadMenu">
           <button
-            class="p-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
+            class="p-1 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
             @click.stop="toggleUploadMenu"
             title="上传"
             aria-label="上传"
@@ -157,7 +157,7 @@
 
         <!-- 新建文件夹（小屏隐藏，进“更多”） -->
         <button
-          class="p-2 text-sm text-indigo-600 hover:text-indigo-500 hidden sm:inline-flex"
+          class="p-1 text-sm text-indigo-600 hover:text-indigo-500 hidden sm:inline-flex"
           @click="createFolder"
           title="新建文件夹"
           aria-label="新建文件夹"
@@ -168,7 +168,7 @@
         <!-- 刷新 -->
         <button
           @click="fetchFiles"
-          class="p-2 text-sm text-indigo-600 hover:text-indigo-500"
+          class="p-1 text-sm text-indigo-600 hover:text-indigo-500"
           title="刷新"
           aria-label="刷新"
         >
@@ -177,7 +177,7 @@
 
         <!-- 小屏“更多”菜单（有图标） -->
         <div class="relative sm:hidden">
-          <button class="p-2 text-gray-600 hover:text-gray-800" @click.stop="mobileMoreOpen = !mobileMoreOpen" title="更多" aria-label="更多">
+          <button class="p-1 text-gray-600 hover:text-gray-800" @click.stop="mobileMoreOpen = !mobileMoreOpen" title="更多" aria-label="更多">
             <EllipsisVerticalIcon class="h-5 w-5" />
           </button>
 
@@ -284,18 +284,19 @@
       <div
         v-for="folder in folders"
         :key="'folder-' + folder.id"
-        class="flex items-center justify-between p-3 sm:p-4 border border-gray-200 rounded-lg hover:bg-gray-50"
+        class="flex items-center gap-2 p-3 sm:p-4 border border-gray-200 rounded-lg hover:bg-gray-50"
       >
-        <div class="flex items-center space-x-3">
+        <!-- 左侧：flex-1 + min-w-0 才能让 truncate 生效 -->
+        <div class="flex items-center gap-3 flex-1 min-w-0">
           <input
             type="checkbox"
-            class="h-4 w-4 text-indigo-600 rounded border-gray-300"
+            class="h-4 w-4 shrink-0 text-indigo-600 rounded border-gray-300"
             :checked="selectedFolderIds.has(folder.id)"
             @change.stop="toggleSelectFolder(folder)"
             @click.stop
             :title="`选择文件夹：${folder.name}`"
           />
-          <div class="flex-shrink-0 cursor-pointer" @click="handleNavigateToFolder(folder)">
+          <div class="shrink-0 cursor-pointer" @click="handleNavigateToFolder(folder)">
             <svg class="h-8 w-8 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
               <path d="M2 6a2 2 0 012-2h3l2 2h7a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
             </svg>
@@ -304,18 +305,18 @@
             <p class="text-sm sm:text-base font-medium text-gray-900 truncate">
               {{ folder.name }}
             </p>
-            <p class="text-xs sm:text-sm text-gray-500">
+            <p class="text-xs sm:text-sm text-gray-500 truncate">
               {{ formatToUTC8(folder.createdAt) }}
             </p>
           </div>
         </div>
 
-        <!-- 右侧操作：大屏完整，小屏收纳 -->
-        <div class="flex items-center space-x-3">
+        <!-- 右侧：shrink-0 + 紧凑间距 -->
+        <div class="flex items-center gap-1 shrink-0">
           <!-- 大屏：完整按钮组 -->
-          <div class="hidden sm:flex items-center space-x-3">
+          <div class="hidden sm:flex items-center gap-0.5">
             <button
-              class="p-2 text-sm text-blue-600 hover:text-blue-500"
+              class="p-1 text-sm text-blue-600 hover:text-blue-500"
               @click.stop="downloadFolder(folder)"
               :disabled="downloadingFolderId2 === folder.id"
               title="下载"
@@ -332,44 +333,44 @@
                 <ArrowDownTrayIcon class="h-5 w-5" />
               </template>
             </button>
-            <button class="p-2 text-sm text-red-600 hover:text-red-500" @click.stop="deleteFolder(folder)" title="删除" aria-label="删除">
+            <button class="p-1 text-sm text-red-600 hover:text-red-500" @click.stop="deleteFolder(folder)" title="删除" aria-label="删除">
               <TrashIcon class="h-5 w-5" />
             </button>
-            <button class="p-2 text-sm text-gray-600 hover:text-gray-800" @click.stop="renameFolder(folder)" title="重命名" aria-label="重命名">
+            <button class="p-1 text-sm text-gray-600 hover:text-gray-800" @click.stop="renameFolder(folder)" title="重命名" aria-label="重命名">
               <PencilSquareIcon class="h-5 w-5" />
             </button>
-            <button class="p-2 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="clipFolder(folder)" title="剪贴" aria-label="剪贴">
+            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="clipFolder(folder)" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
-            <button class="p-2 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="copyFolder(folder)" title="复制" aria-label="复制">
+            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="copyFolder(folder)" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
-            <button
-              class="p-2 flex items-center text-sm text-gray-400 hover:text-gray-600"
+            <!-- <button
+              class="p-1 flex items-center text-sm text-gray-400 hover:text-gray-600"
               @click="handleNavigateToFolder(folder)"
               title="进入"
               aria-label="进入"
             >
               <ArrowRightIcon class="h-5 w-5" />
-            </button>
+            </button> -->
           </div>
 
           <!-- 小屏：下载 + 更多 + 进入 -->
-          <div class="flex sm:hidden items-center gap-2">
-            <button class="p-2 text-blue-600 hover:text-blue-500" @click.stop="downloadFolder(folder)" title="下载" aria-label="下载">
+          <div class="flex sm:hidden items-center gap-1">
+            <button class="p-1 text-blue-600 hover:text-blue-500" @click.stop="downloadFolder(folder)" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5" />
             </button>
-            <button class="p-2 text-gray-600 hover:text-gray-800" @click.stop="openRowMenu('folder', folder)" title="更多" aria-label="更多">
+            <button class="p-1 text-gray-600 hover:text-gray-800" @click.stop="openRowMenu('folder', folder)" title="更多" aria-label="更多">
               <EllipsisVerticalIcon class="h-5 w-5" />
             </button>
-            <button
-              class="p-2 flex items-center text-sm text-gray-400 hover:text-gray-600"
+            <!-- <button
+              class="p-1 flex items-center text-sm text-gray-400 hover:text-gray-600"
               @click="handleNavigateToFolder(folder)"
               title="进入"
               aria-label="进入"
             >
               <ArrowRightIcon class="h-5 w-5" />
-            </button>
+            </button> -->
           </div>
         </div>
       </div>
@@ -378,60 +379,61 @@
       <div
         v-for="file in files"
         :key="'file-' + file.id"
-        class="flex items-center justify-between p-3 sm:p-4 border border-gray-200 rounded-lg hover:bg-gray-50"
+        class="flex items-center gap-2 p-3 sm:p-4 border border-gray-200 rounded-lg hover:bg-gray-50"
       >
-        <div class="flex items-center space-x-3">
+        <!-- 左侧：flex-1 + min-w-0 -->
+        <div class="flex items-center gap-3 flex-1 min-w-0">
           <input
             type="checkbox"
-            class="h-4 w-4 text-indigo-600 rounded border-gray-300"
+            class="h-4 w-4 shrink-0 text-indigo-600 rounded border-gray-300"
             :checked="selectedFileIds.has(file.id)"
             @change.stop="toggleSelectFile(file)"
             @click.stop
             :title="`选择文件：${file.filename}`"
           />
-          <div class="flex-shrink-0">
+          <div class="shrink-0">
             <FileIcon class="h-8 w-8 text-gray-400" :filename="file.filename" />
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="openPreview(file)">
             <p class="text-sm sm:text-base font-medium text-gray-900 truncate">
               {{ file.filename }}
             </p>
-            <p class="text-xs sm:text-sm text-gray-500">
+            <p class="text-xs sm:text-sm text-gray-500 truncate">
               {{ formatFileSize(file.fileSize) }} • {{ formatToUTC8(file.createdAt) }}
             </p>
           </div>
         </div>
 
-        <!-- 右侧操作：大屏完整，小屏收纳 -->
-        <div class="flex items-center space-x-2">
+        <!-- 右侧：shrink-0 + 紧凑间距 -->
+        <div class="flex items-center gap-1 shrink-0">
           <!-- 大屏：完整按钮组 -->
-          <div class="hidden sm:flex items-center space-x-2">
-            <button @click="openPreview(file)" class="p-2 text-sm text-gray-600 hover:text-gray-800" title="预览" aria-label="预览">
+          <div class="hidden sm:flex items-center gap-0.5">
+            <!-- <button @click="openPreview(file)" class="p-1 text-sm text-gray-600 hover:text-gray-800" title="预览" aria-label="预览">
               <EyeIcon class="h-5 w-5" />
-            </button>
-            <button @click="downloadFile(file)" class="p-2 text-sm text-blue-600 hover:text-blue-500" title="下载" aria-label="下载">
+            </button> -->
+            <button @click="downloadFile(file)" class="p-1 text-sm text-blue-600 hover:text-blue-500" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5" />
             </button>
-            <button @click="renameFile(file)" class="p-2 text-sm text-gray-600 hover:text-gray-800" title="重命名" aria-label="重命名">
+            <button @click="renameFile(file)" class="p-1 text-sm text-gray-600 hover:text-gray-800" title="重命名" aria-label="重命名">
               <PencilSquareIcon class="h-5 w-5" />
             </button>
-            <button @click="deleteFile(file)" class="p-2 text-sm text-red-600 hover:text-red-500" title="删除" aria-label="删除">
+            <button @click="deleteFile(file)" class="p-1 text-sm text-red-600 hover:text-red-500" title="删除" aria-label="删除">
               <TrashIcon class="h-5 w-5" />
             </button>
-            <button @click="clipFile(file)" class="p-2 text-sm text-indigo-600 hover:text-indigo-500" title="剪贴" aria-label="剪贴">
+            <button @click="clipFile(file)" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
-            <button @click="copyFile(file)" class="p-2 text-sm text-indigo-600 hover:text-indigo-500" title="复制" aria-label="复制">
+            <button @click="copyFile(file)" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
           </div>
 
           <!-- 小屏：下载 + 更多 -->
-          <div class="flex sm:hidden items-center gap-2">
-            <button class="p-2 text-blue-600 hover:text-blue-500" @click="downloadFile(file)" title="下载" aria-label="下载">
+          <div class="flex sm:hidden items-center gap-1">
+            <button class="p-1 text-blue-600 hover:text-blue-500" @click="downloadFile(file)" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5" />
             </button>
-            <button class="p-2 text-gray-600 hover:text-gray-800" @click.stop="openRowMenu('file', file)" title="更多" aria-label="更多">
+            <button class="p-1 text-gray-600 hover:text-gray-800" @click.stop="openRowMenu('file', file)" title="更多" aria-label="更多">
               <EllipsisVerticalIcon class="h-5 w-5" />
             </button>
           </div>
@@ -552,19 +554,19 @@
         <div class="flex items-center justify-between">
           <span class="text-sm text-gray-700">已选 {{ selectedCount }} 项</span>
           <div class="flex items-center gap-3">
-            <button class="p-2 text-red-600 disabled:opacity-50" :disabled="bulkDeleting" @click="deleteSelected" title="删除" aria-label="删除">
+            <button class="p-1 text-red-600 disabled:opacity-50" :disabled="bulkDeleting" @click="deleteSelected" title="删除" aria-label="删除">
               <TrashIcon class="h-5 w-5"/>
             </button>
-            <button class="p-2 text-indigo-600 disabled:opacity-50" :disabled="bulkDownloading" @click="downloadSelected" title="下载" aria-label="下载">
+            <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="bulkDownloading" @click="downloadSelected" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5"/>
             </button>
-            <button class="p-2 text-indigo-600 disabled:opacity-50" :disabled="selectedCount===0" @click="clipSelection" title="剪贴" aria-label="剪贴">
+            <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="selectedCount===0" @click="clipSelection" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5"/>
             </button>
-            <button class="p-2 text-indigo-600 disabled:opacity-50" :disabled="selectedCount===0" @click="copySelection" title="复制" aria-label="复制">
+            <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="selectedCount===0" @click="copySelection" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5"/>
             </button>
-            <button class="p-2 text-green-600 disabled:opacity-50" :disabled="!hasClipboard || pasting" @click="pasteClipboard" title="粘贴" aria-label="粘贴">
+            <button class="p-1 text-green-600 disabled:opacity-50" :disabled="!hasClipboard || pasting" @click="pasteClipboard" title="粘贴" aria-label="粘贴">
               <ClipboardDocumentCheckIcon class="h-5 w-5"/>
             </button>
           </div>
