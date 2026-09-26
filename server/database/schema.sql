@@ -14,6 +14,9 @@ DROP TRIGGER IF EXISTS trg_folders_user_matches_parent_ins;
 DROP TRIGGER IF EXISTS trg_folders_user_matches_parent_upd;
 DROP TRIGGER IF EXISTS trg_folders_no_cycles;
 DROP TRIGGER IF EXISTS trg_file_access_not_owner_ins;
+DROP TRIGGER IF EXISTS trg_file_access_not_owner_upd;
+DROP TRIGGER IF EXISTS trg_folder_access_not_owner_ins;
+DROP TRIGGER IF EXISTS trg_folder_access_not_owner_upd;
 
 DROP INDEX IF EXISTS ux_folders_user_parent_name;
 DROP INDEX IF EXISTS ix_folders_user;
@@ -23,8 +26,11 @@ DROP INDEX IF EXISTS ix_files_user;
 DROP INDEX IF EXISTS ix_files_folder;
 DROP INDEX IF EXISTS ix_file_access_file;
 DROP INDEX IF EXISTS ix_file_access_user;
+DROP INDEX IF EXISTS ix_folder_access_folder;
+DROP INDEX IF EXISTS ix_folder_access_user;
 
 DROP TABLE IF EXISTS file_access;
+DROP TABLE IF EXISTS folder_access;
 DROP TABLE IF EXISTS files;
 DROP TABLE IF EXISTS folders;
 DROP TABLE IF EXISTS users;
@@ -55,6 +61,12 @@ CREATE TABLE folders (
   created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
 
+  -- 共享：Shared=是否为共享边界（向上查找在此终止）；IsPublic=该目录免登录可读
+  -- 不变量：Shared=1 当且仅当 folder_access 中至少有一行
+  -- 注意：边界是「命中即停」，所以公开的子目录会截断祖先的授权（只留只读）
+  Shared      BOOLEAN NOT NULL DEFAULT 0,
+  IsPublic    BOOLEAN NOT NULL DEFAULT 0,
+
   FOREIGN KEY (user_id)   REFERENCES users(id)     ON DELETE CASCADE,
   FOREIGN KEY (parent_id) REFERENCES folders(id)   ON DELETE CASCADE,
 
@@ -81,8 +93,9 @@ CREATE TABLE files (
   content_type TEXT,
   created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
 
-  -- 共享：Shared=是否开启定向共享；IsPublic=是否任何人可公开访问
-  -- 定向共享的成员见 file_access（files 一对多），命名为 AllowedUsers
+  -- 共享：Shared=是否存在直接授权（仅用于不变量与 UI 标记，不作为边界）
+  --       IsPublic=是否免登录可读（只增不减，与祖先授权取并集）
+  -- 不变量：Shared=1 当且仅当 file_access 中至少有一行
   Shared       BOOLEAN NOT NULL DEFAULT 0,
   IsPublic     BOOLEAN NOT NULL DEFAULT 0,
 
@@ -98,22 +111,43 @@ CREATE UNIQUE INDEX ux_files_user_folder_filename
 CREATE INDEX ix_files_user   ON files(user_id);
 CREATE INDEX ix_files_folder ON files(folder_id);
 
--- -------- file_access（允许访问的人员）--------
--- files 一对多：一个文件可授权给多个人员
+-- -------- 授权表（位掩码：1=read 2=write 4=delete，包含关系 read ⊂ write ⊂ delete）--------
+-- 授权信息只存在「最上层被标记的节点」上，子级靠 folder_access + 向上查找继承
+-- file_access：直接授权到某个文件
 CREATE TABLE file_access (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   file_id    INTEGER NOT NULL,                  -- 一对多：指向 files.id
   user_id    INTEGER NOT NULL,
+  permission INTEGER NOT NULL DEFAULT 1,        -- 位掩码，见上
   created_at TEXT DEFAULT CURRENT_TIMESTAMP,
 
   FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE,
   FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
 
-  UNIQUE (file_id, user_id)                     -- 同一人对同一文件只授权一次
+  UNIQUE (file_id, user_id),                    -- 同一人对同一文件只授权一次
+  CHECK (permission >= 0)                       -- 不设上限，将来加位无需重建表
 );
 
 CREATE INDEX ix_file_access_file ON file_access(file_id);
 CREATE INDEX ix_file_access_user ON file_access(user_id);
+
+-- folder_access：授权到某个文件夹，其下所有文件/子文件夹继承（直到遇到下一个边界节点）
+CREATE TABLE folder_access (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  folder_id   INTEGER NOT NULL,                 -- 一对多：指向 folders.id
+  user_id     INTEGER NOT NULL,
+  permission  INTEGER NOT NULL DEFAULT 1,
+  created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (folder_id) REFERENCES folders (id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id)   REFERENCES users (id)   ON DELETE CASCADE,
+
+  UNIQUE (folder_id, user_id),
+  CHECK (permission >= 0)
+);
+
+CREATE INDEX ix_folder_access_folder ON folder_access(folder_id);
+CREATE INDEX ix_folder_access_user   ON folder_access(user_id);
 
 -- -------- Triggers: 数据一致性 --------
 -- 1) files.user_id 必须与其所属 folder 的 user_id 一致
@@ -189,12 +223,34 @@ BEGIN
   END;
 END;
 
--- 4) file_access：不能把文件授权给文件所有者本人（冗余记录）
+-- 4) 授权表：不能把文件/文件夹授权给所有者本人（冗余记录）
+--    INSERT 和 UPDATE 都要拦，否则改 file_id/user_id 可绕过
 CREATE TRIGGER trg_file_access_not_owner_ins
 BEFORE INSERT ON file_access
 WHEN NEW.user_id = (SELECT user_id FROM files WHERE id = NEW.file_id)
 BEGIN
   SELECT RAISE(ABORT, 'file_access.user_id must differ from files.user_id');
+END;
+
+CREATE TRIGGER trg_file_access_not_owner_upd
+BEFORE UPDATE OF file_id, user_id ON file_access
+WHEN NEW.user_id = (SELECT user_id FROM files WHERE id = NEW.file_id)
+BEGIN
+  SELECT RAISE(ABORT, 'file_access.user_id must differ from files.user_id');
+END;
+
+CREATE TRIGGER trg_folder_access_not_owner_ins
+BEFORE INSERT ON folder_access
+WHEN NEW.user_id = (SELECT user_id FROM folders WHERE id = NEW.folder_id)
+BEGIN
+  SELECT RAISE(ABORT, 'folder_access.user_id must differ from folders.user_id');
+END;
+
+CREATE TRIGGER trg_folder_access_not_owner_upd
+BEFORE UPDATE OF folder_id, user_id ON folder_access
+WHEN NEW.user_id = (SELECT user_id FROM folders WHERE id = NEW.folder_id)
+BEGIN
+  SELECT RAISE(ABORT, 'folder_access.user_id must differ from folders.user_id');
 END;
 
 COMMIT;

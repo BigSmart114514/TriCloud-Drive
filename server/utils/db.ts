@@ -1,5 +1,7 @@
 import { placeholders, uniqPositiveInts } from './functions'
 import { fileNotFoundError, folderNotFindError } from '~~/types/error'
+import { hasPermission, normalizePermission, PERM_READ } from '~~/types/share'
+import type { AccessGrant } from '~~/types/share'
 
 export interface User {
   id: number
@@ -109,9 +111,12 @@ export interface OwnedFile {
   fileUrl: string
   contentType: string | null
   createdAt: string
+  /** 是否存在直接授权（不变量标记，不参与权限判定） */
   Shared: boolean
+  /** 免登录可读；与祖先授权取并集 */
   IsPublic: boolean
-  allowedUsers: number[]
+  /** 该文件的直接授权（不含从父文件夹继承的） */
+  grants: AccessGrant[]
 }
 
 export interface ManifestFile {
@@ -121,6 +126,19 @@ export interface ManifestFile {
   fileSize: number
   relDir: string
 }
+
+/**
+ * 某个「边界节点」对某个用户的有效权限。
+ * boundary=false 表示向上找不到任何被标记的节点（未开启共享）。
+ * mask 为归一化后的位掩码，0 = 无权访问。
+ */
+export interface ResolvedAccess {
+  boundary: boolean
+  isPublic: boolean
+  mask: number
+}
+
+export const NO_ACCESS: ResolvedAccess = { boundary: false, isPublic: false, mask: 0 }
 
 function toBool(value: any): boolean {
   return value === true || value === 1 || value === '1'
@@ -150,7 +168,7 @@ function toOwnedFile(row: any): OwnedFile {
     createdAt: row.createdAt ?? row.created_at,
     Shared: toBool(row.Shared),
     IsPublic: toBool(row.IsPublic),
-    allowedUsers: []
+    grants: []
   }
 }
 
@@ -160,6 +178,20 @@ const FOLDER_COLUMNS = 'id, user_id AS userId, name, parent_id AS parentId, crea
  * 文件夹归属校验：所有读写都必须经过这里，SQL 里始终带 user_id
  * find* 返回 null，assert* 直接抛 404
  */
+/**
+ * 边界决策：只看边界节点一个，结果不做跨层合并。
+ *  - 边界节点对该用户有授权行 → 用该行
+ *  - 边界节点是公开的         → 免登录只读
+ *  - 否则                     → 拒绝（命中即停，不再上溯）
+ */
+function decideAccess(isPublic: boolean, row: { permission?: any } | null | undefined): ResolvedAccess {
+  if (row && row.permission !== null && row.permission !== undefined) {
+    return { boundary: true, isPublic, mask: normalizePermission(row.permission) }
+  }
+  if (isPublic) return { boundary: true, isPublic: true, mask: PERM_READ }
+  return { boundary: true, isPublic: false, mask: 0 }
+}
+
 export class FolderService {
   private db: Database
 
@@ -314,6 +346,51 @@ export class FolderService {
       .first()
     return Number(res?.total ?? 0)
   }
+
+  /**
+   * 解析该目录对某用户的有效权限：从目录向上找最近的边界节点（Shared=1 或 IsPublic=1）。
+   * LEFT JOIN 用来区分「没有边界祖先」与「有边界但没授权我」——两者都会得到 NULL 行。
+   * 列目录时整个请求只需调一次本方法，之后在内存里过滤，勿逐文件调用。
+   */
+  async resolveAccess(userId: number, folderId: number | null): Promise<ResolvedAccess> {
+    if (folderId === null || folderId === undefined) return NO_ACCESS
+
+    const res = await this.db
+      .prepare(`
+        WITH RECURSIVE up(id, parent_id, shared, pub, depth) AS (
+          SELECT id, parent_id, Shared, IsPublic, 0 FROM folders WHERE id = ?
+          UNION ALL
+          SELECT f.id, f.parent_id, f.Shared, f.IsPublic, up.depth + 1
+          FROM folders f
+          JOIN up ON f.id = up.parent_id
+        ),
+        nearest AS (
+          SELECT id, pub FROM up WHERE shared = 1 OR pub = 1 ORDER BY depth ASC LIMIT 1
+        )
+        SELECT nearest.id AS folderId, nearest.pub AS isPublic, fa.permission
+        FROM nearest
+        LEFT JOIN folder_access fa ON fa.folder_id = nearest.id AND fa.user_id = ?
+      `)
+      .bind(folderId, userId)
+      .all()
+      .catch(() => ({ results: [] }))
+
+    const row = res?.results?.[0]
+    if (!row || row.folderId === null || row.folderId === undefined) return NO_ACCESS
+    return decideAccess(toBool(row.isPublic), row)
+  }
+
+  /** 该目录被授权给哪些人（展示用，位掩码已归一化） */
+  async listGrants(folderId: number): Promise<AccessGrant[]> {
+    const res = await this.db
+      .prepare('SELECT user_id AS userId, permission FROM folder_access WHERE folder_id = ? ORDER BY user_id ASC')
+      .bind(folderId)
+      .all()
+    return (res?.results || []).map((row: any) => ({
+      userId: Number(row.userId),
+      permission: normalizePermission(row.permission)
+    }))
+  }
 }
 
 /**
@@ -337,13 +414,13 @@ export class FileService {
     return toOwnedFile(row)
   }
 
-  /** 一次查询补齐本批文件的授权人员，避免逐文件查询 */
+  /** 一次查询补齐本批文件的直接授权，避免逐文件查询 */
   private async attachAccess(files: OwnedFile[]): Promise<OwnedFile[]> {
     if (!files.length) return files
     const ids = files.map((file) => file.id)
     const res = await this.db
       .prepare(`
-        SELECT file_id AS fileId, user_id AS userId
+        SELECT file_id AS fileId, user_id AS userId, permission
         FROM file_access
         WHERE file_id IN (${placeholders(ids.length)})
         ORDER BY user_id ASC
@@ -352,14 +429,80 @@ export class FileService {
       .all()
       .catch(() => null)
 
-    const map = new Map<number, number[]>()
+    const map = new Map<number, AccessGrant[]>()
     for (const row of res?.results || []) {
-      const list = map.get(Number(row.fileId)) || []
-      list.push(Number(row.userId))
-      map.set(Number(row.fileId), list)
+      const id = Number(row.fileId)
+      const list = map.get(id) || []
+      list.push({ userId: Number(row.userId), permission: normalizePermission(row.permission) })
+      map.set(id, list)
     }
-    for (const file of files) file.allowedUsers = map.get(file.id) || []
+    for (const file of files) file.grants = map.get(file.id) || []
     return files
+  }
+
+  /**
+   * 解析某用户对某文件的有效权限 = 文件自身授权 ∪ 祖先继承。
+   *
+   * 「命中即停」只作用于文件夹链：某个被标记的祖先没授权此人，就地拒绝、不再上溯。
+   * 但文件自身的授权是「加法」而非「边界」——否则把单个文件分享给外人，
+   * 会连带让该目录的其他共享成员也看不见它。
+   * 祖先链由 folderService 一次解析完，本方法不额外查询。
+   */
+  private resolveFileAccess(userId: number, file: OwnedFile, inherited: ResolvedAccess): ResolvedAccess {
+    const own = file.grants.find((g) => g.userId === userId)
+    const ownMask = own ? own.permission : 0
+    const publicMask = file.IsPublic ? PERM_READ : 0
+    const direct = ownMask | publicMask
+    const mask = direct | inherited.mask
+    return {
+      boundary: inherited.boundary || direct !== 0,
+      isPublic: inherited.isPublic || file.IsPublic,
+      mask: normalizePermission(mask)
+    }
+  }
+
+  /** 单文件完整解析（会走一次上行 CTE），用于 download / rename / delete 这类操作 */
+  async resolveAccessForFile(userId: number, file: OwnedFile): Promise<ResolvedAccess> {
+    const inherited = await this.folders.resolveAccess(userId, file.folderId)
+    return this.resolveFileAccess(userId, file, inherited)
+  }
+
+  async canAccess(userId: number, file: OwnedFile, need: number): Promise<boolean> {
+    const resolved = await this.resolveAccessForFile(userId, file)
+    return hasPermission(resolved.mask, need)
+  }
+
+  /** 校验不通过时抛 403；文件不存在或不属于本人仍抛 404 */
+  async assertCanAccess(userId: number, fileId: number, need: number): Promise<OwnedFile> {
+    const file = await this.assertOwnedById(userId, fileId)
+    const resolved = await this.resolveAccessForFile(userId, file)
+    if (!hasPermission(resolved.mask, need)) {
+      throw createError({ statusCode: 403, statusMessage: '没有该文件的操作权限' })
+    }
+    return file
+  }
+
+  /** 该文件被直接授权给哪些人（不含从父文件夹继承的） */
+  async listGrants(fileId: number): Promise<AccessGrant[]> {
+    const res = await this.db
+      .prepare('SELECT user_id AS userId, permission FROM file_access WHERE file_id = ? ORDER BY user_id ASC')
+      .bind(fileId)
+      .all()
+    return (res?.results || []).map((row: any) => ({
+      userId: Number(row.userId),
+      permission: normalizePermission(row.permission)
+    }))
+  }
+
+  /** 目录级解析一次，然后内存里过滤本目录下的文件（勿对每个文件重复调用） */
+  async filterAccessible(
+    userId: number,
+    files: OwnedFile[],
+    inherited?: ResolvedAccess
+  ): Promise<OwnedFile[]> {
+    if (!files.length) return files
+    const dirAccess = inherited ?? (await this.folders.resolveAccess(userId, files[0]!.folderId))
+    return files.filter((file) => this.resolveFileAccess(userId, file, dirAccess).mask !== 0)
   }
 
   async findOwnedById(userId: number, fileId: number): Promise<OwnedFile | null> {
