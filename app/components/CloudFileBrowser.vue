@@ -1,13 +1,19 @@
 <template>
   <div
-    class="bg-white rounded-lg shadow p-4 sm:p-6 transition-colors"
+    class="bg-white transition-colors"
+    :class="[
+      fill ? 'flex h-full min-h-0 flex-col p-0' : 'rounded-lg shadow p-4 sm:p-6',
+      { 'border-2 border-dashed border-indigo-400 bg-indigo-50': isDragging }
+    ]"
     @dragover.prevent
     @dragenter.prevent="onDragEnter"
     @dragleave.prevent="onDragLeave"
     @drop.prevent="handleDrop"
-    :class="{ 'border-2 border-dashed border-indigo-400 bg-indigo-50': isDragging }"
   >
-    <div class="flex items-center justify-between mb-4 flex-wrap gap-2">
+    <div
+      class="flex items-center justify-between gap-2"
+      :class="fill ? 'shrink-0 border-b border-gray-100 px-4 py-3' : 'mb-4 flex-wrap'"
+    >
       <div class="flex items-center gap-2 min-w-0">
         <input
           ref="masterCheckboxRef"
@@ -169,7 +175,10 @@
     <input ref="fileInputRef" type="file" multiple class="hidden" @change="handleFileSelect" />
     <input ref="folderInputRef" type="file" webkitdirectory directory multiple class="hidden" @change="handleFolderSelect" />
 
-    <div v-if="uploading" class="mt-2 mb-4">
+    <div
+      v-if="uploading"
+      :class="fill ? 'mx-4 mt-3 shrink-0' : 'mt-2 mb-4'"
+    >
       <div class="flex items-center justify-between text-sm text-gray-600 mb-2">
         <span>上传中...</span>
         <span>{{ uploadProgress.percent }}%</span>
@@ -178,35 +187,41 @@
         <div class="bg-indigo-600 h-2 rounded-full transition-all duration-300" :style="{ width: `${uploadProgress.percent}%` }" />
       </div>
     </div>
-    <div v-if="uploadError" class="mt-2 mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">{{ uploadError }}</div>
+    <div
+      v-if="uploadError"
+      :class="fill ? 'mx-4 mt-3 shrink-0 rounded-md bg-red-50 p-3 text-sm text-red-700' : 'mt-2 mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700'"
+    >{{ uploadError }}</div>
 
-    <FileList
-      :folders="folders"
-      :files="files"
-      :loading="loading"
-      :selectable="true"
-      :show-actions="true"
-      :framed="false"
-      :downloading-folder-id="downloadingFolderId"
-      :selected-folder-ids="selectedFolderIds"
-      :selected-file-ids="selectedFileIds"
-      empty-title="这里空空如也"
-      empty-description="拖拽文件/文件夹到此处上传，或使用右上角“上传”按钮。"
-      @navigate-folder="onNavigateFolder"
-      @preview-file="onPreviewFile"
-      @toggle-folder="onToggleFolder"
-      @toggle-file="onToggleFile"
-      @download-folder="onDownloadFolder"
-      @delete-folder="onDeleteFolder"
-      @rename-folder="onRenameFolder"
-      @clip-folder="onClipFolder"
-      @copy-folder="onCopyFolder"
-      @download-file="onDownloadFile"
-      @delete-file="onDeleteFile"
-      @rename-file="onRenameFile"
-      @clip-file="onClipFile"
-      @copy-file="onCopyFile"
-    />
+    <!-- fill 模式下由本层承载滚动，页面本身不再被列表撑高 -->
+    <div :class="fill ? 'min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-24 lg:pb-4' : ''">
+      <FileList
+        :folders="folders"
+        :files="files"
+        :loading="loading"
+        :selectable="true"
+        :show-actions="true"
+        :framed="false"
+        :downloading-folder-id="downloadingFolderId"
+        :selected-folder-ids="selectedFolderIds"
+        :selected-file-ids="selectedFileIds"
+        empty-title="这里空空如也"
+        empty-description="拖拽文件/文件夹到此处上传，或使用右上角“上传”按钮。"
+        @navigate-folder="onNavigateFolder"
+        @preview-file="onPreviewFile"
+        @toggle-folder="onToggleFolder"
+        @toggle-file="onToggleFile"
+        @download-folder="onDownloadFolder"
+        @delete-folder="onDeleteFolder"
+        @rename-folder="onRenameFolder"
+        @clip-folder="onClipFolder"
+        @copy-folder="onCopyFolder"
+        @download-file="onDownloadFile"
+        @delete-file="onDeleteFile"
+        @rename-file="onRenameFile"
+        @clip-file="onClipFile"
+        @copy-file="onCopyFile"
+      />
+    </div>
 
     <transition name="slide-up">
       <div v-show="selectedCount > 0" data-liquid class="ui-glass fixed bottom-0 inset-x-0 z-40 sm:hidden bg-white border-t px-3 py-2 pb-[calc(env(safe-area-inset-bottom)+8px)]">
@@ -282,10 +297,15 @@ import {
   TrashIcon
 } from '@heroicons/vue/24/outline'
 
-const props = defineProps<{
-  targetUserId?: number | null
-  title?: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    targetUserId?: number | null
+    title?: string
+    /** 铺满父容器高度并让列表内部滚动（配合 SidePanelLayout 的全屏页） */
+    fill?: boolean
+  }>(),
+  { fill: false }
+)
 
 const targetUserIdRef = toRef(props, 'targetUserId')
 const previewingFile = ref<FileRecord | null>(null)

@@ -1,13 +1,16 @@
 <template>
   <AppNavbar>
-    <template #extra>
-      <NuxtLink
-        to="/"
-        class="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-      >
-        返回首页
-      </NuxtLink>
-    </template>
+      <template #extra>
+        <NuxtLink
+          to="/"
+          class="flex items-center rounded-md p-2 text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 sm:px-3 sm:py-2 sm:text-sm sm:font-medium"
+          aria-label="返回首页"
+          title="返回首页"
+        >
+          <HomeIcon class="h-5 w-5 shrink-0" />
+          <span class="hidden sm:ml-1.5 sm:inline">返回首页</span>
+        </NuxtLink>
+      </template>
   </AppNavbar>
 
   <!-- 无权限 -->
@@ -127,6 +130,7 @@
 
 <script setup lang="ts">
 import { useRouter } from 'vue-router'
+import { HomeIcon } from '@heroicons/vue/24/outline'
 const router = useRouter()
 definePageMeta({
   layout: false

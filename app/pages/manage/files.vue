@@ -1,18 +1,11 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useAuth } from '~/composables/useAuth'
 import CloudFileBrowser from '~/components/CloudFileBrowser.vue'
+import ManageUserList, { type UserSummary } from '~/components/ManageUserList.vue'
+import { FolderOpenIcon, Bars3Icon, HomeIcon, ShieldExclamationIcon } from '@heroicons/vue/24/outline'
 
-definePageMeta({ title: '管理员 - 文件总览' })
-
-interface UserSummary {
-  id: number
-  email?: string
-  username?: string
-  IsAdmin?: boolean
-  IsSuperAdmin?: boolean
-  created_at?: string
-}
+definePageMeta({ title: '管理员 - 文件总览', layout: false })
 
 const { user, fetchUser } = useAuth()
 await fetchUser()
@@ -25,125 +18,149 @@ const isAdmin = computed(() => {
 // 非管理员直接跳回首页
 if (!isAdmin.value && process.client) navigateTo('/')
 
-/* 左侧用户列表 */
 const users = ref<UserSummary[]>([])
 const loadingUsers = ref(false)
 const userSearch = ref('')
+const selectedUserId = ref<number | null>(null)
+const drawerOpen = ref(false)
+
+const selectedUser = computed(
+  () => users.value.find((u) => u.id === selectedUserId.value) || null
+)
 
 async function fetchUsers() {
   try {
     loadingUsers.value = true
     const headers = process.server ? useRequestHeaders(['cookie']) : undefined
-    const res = await $fetch<{ users: UserSummary[]; totalCount: number }>('/api/manage/listUsers', {
-      params: userSearch.value ? { username: userSearch.value } : undefined,
-      headers,
-      credentials: 'include'
-    })
+    const res = await $fetch<{ users: UserSummary[]; totalCount: number }>(
+      '/api/manage/listUsers',
+      {
+        params: userSearch.value ? { username: userSearch.value } : undefined,
+        headers,
+        credentials: 'include'
+      }
+    )
     users.value = res.users ?? []
   } finally {
     loadingUsers.value = false
   }
 }
 
-const selectedUserId = ref<number | null>(null)
-const selectedUser = computed(() => users.value.find(u => u.id === selectedUserId.value) || null)
-
 function selectUser(u: UserSummary) {
-  if (selectedUserId.value === u.id) return
   selectedUserId.value = u.id
+  drawerOpen.value = false
 }
 
+// 搜索词变化即查询，去抖避免逐字符打接口；回车可立即查
+let timer: ReturnType<typeof setTimeout> | undefined
+watch(userSearch, () => {
+  clearTimeout(timer)
+  timer = setTimeout(fetchUsers, 250)
+})
+onBeforeUnmount(() => clearTimeout(timer))
+
 await fetchUsers()
-// 如需载入后自动选中第一个用户：
-// if (!selectedUserId.value && users.value.length > 0) selectUser(users.value[0])
 </script>
 
 <template>
-  <AppNavbar>
-    <template #extra>
-      <NuxtLink
-        to="/"
-        class="text-gray-700 hover:text-gray-900 px-3 py-2 rounded-md text-sm font-medium"
-      >
-        返回首页
-      </NuxtLink>
-    </template>
-  </AppNavbar>
+  <!-- 整页铺满：上至 NavBar，下至屏幕底部；内容区不产生页面级滚动 -->
+  <div class="flex h-[100dvh] flex-col overflow-hidden bg-gray-50">
+    <AppNavbar fluid>
+      <template #brand>
+        <span
+          class="mr-2 flex items-center gap-1.5 rounded-md bg-indigo-50 p-1.5 text-indigo-700 sm:px-2 sm:py-1 sm:text-xs sm:font-medium"
+          title="管理员 - 文件总览"
+        >
+          <ShieldExclamationIcon class="h-3.5 w-3.5 shrink-0" />
+          <span class="hidden sm:inline">管理</span>
+        </span>
+      </template>
+      <template #extra>
+        <NuxtLink
+          to="/"
+          class="flex items-center rounded-md p-2 text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 sm:px-3 sm:py-2 sm:text-sm sm:font-medium"
+          aria-label="返回首页"
+          title="返回首页"
+        >
+          <HomeIcon class="h-5 w-5 shrink-0" />
+          <span class="hidden sm:ml-1.5 sm:inline">返回首页</span>
+        </NuxtLink>
+      </template>
+    </AppNavbar>
 
-  <div class="p-6">
-    <div class="flex items-center justify-between mb-4">
-      <h1 class="text-xl font-semibold">文件管理（管理员）</h1>
-      <div class="text-xs text-gray-500">完整权限（上传/下载/重命名/删除/新建/剪贴/复制/粘贴）</div>
-    </div>
+    <div class="flex min-h-0 flex-1">
+      <SidePanelLayout v-model:open="drawerOpen" aria-label="用户列表">
+        <template #sidebar>
+          <ManageUserList
+            v-model="userSearch"
+            :users="users"
+            :selected-id="selectedUserId"
+            :loading="loadingUsers"
+            @select="selectUser"
+            @search="fetchUsers"
+            @refresh="fetchUsers"
+          />
+        </template>
 
-    <div class="grid grid-cols-1 md:grid-cols-4 gap-6">
-      <!-- 左侧：用户列表 -->
-      <aside class="md:col-span-1">
-        <div class="bg-white rounded-lg shadow p-4">
-          <div class="flex gap-2 mb-3">
-            <input
-              v-model="userSearch"
-              placeholder="按用户名搜索"
-              class="flex-1 px-3 py-2 border border-gray-200 rounded-md text-sm focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
+        <template #toolbar>
+          <div class="flex shrink-0 items-center gap-3 border-b border-gray-200 bg-white px-4 py-3">
+            <!-- 移动端：抽屉开关 -->
             <button
-              class="px-3 py-2 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50"
-              :disabled="loadingUsers"
-              @click="fetchUsers"
+              type="button"
+              class="-ml-1 rounded-md p-2 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 lg:hidden"
+              aria-label="打开用户列表"
+              title="用户列表"
+              @click="drawerOpen = true"
             >
-              搜索
+              <Bars3Icon class="h-5 w-5" />
             </button>
+
+            <div class="min-w-0 flex-1">
+              <h1 class="truncate text-base font-semibold text-gray-900">文件管理</h1>
+              <p class="truncate text-xs text-gray-500">
+                <template v-if="selectedUser">
+                  {{ selectedUser.username || selectedUser.email }} · ID {{ selectedUser.id }}
+                </template>
+                <template v-else>未选择用户</template>
+              </p>
+            </div>
+
+            <p class="hidden shrink-0 text-xs text-gray-400 xl:block">
+              完整权限：上传 / 下载 / 重命名 / 删除 / 新建 / 剪贴 / 复制 / 粘贴
+            </p>
           </div>
+        </template>
 
-          <div class="text-sm text-gray-500 mb-2">用户列表（{{ users.length }}）</div>
-
-          <div v-if="loadingUsers" class="text-sm text-gray-500">加载用户...</div>
-          <ul v-else class="divide-y divide-gray-100 max-h-[70vh] overflow-auto">
-            <li
-              v-for="u in users"
-              :key="u.id"
-              @click="selectUser(u)"
-              class="p-3 cursor-pointer rounded-md hover:bg-gray-50 flex items-center justify-between"
-              :class="{ 'bg-indigo-50 ring-1 ring-indigo-200': u.id===selectedUserId }"
-            >
-              <div class="flex items-center gap-3">
-                <div class="w-8 h-8 rounded-full bg-indigo-100 text-indigo-600 flex items-center justify-center font-semibold">
-                  {{ (u.username || u.email || 'U').slice(0,1).toUpperCase() }}
-                </div>
-                <div>
-                  <div class="text-sm font-medium text-gray-900">{{ u.username || u.email }}</div>
-                  <div class="text-xs text-gray-500">ID: {{ u.id }}</div>
-                </div>
-              </div>
-              <div class="flex items-center gap-1">
-                <span v-if="u.IsSuperAdmin" class="text-[10px] px-1.5 py-0.5 rounded bg-purple-100 text-purple-700">超管</span>
-                <span v-else-if="u.IsAdmin" class="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">管理员</span>
-              </div>
-            </li>
-          </ul>
-        </div>
-      </aside>
-
-      <!-- 右侧：文件浏览 -->
-      <main class="md:col-span-3">
-        <div class="bg-white rounded-lg shadow p-6 min-h-[70vh]">
-          <div v-if="!isAdmin" class="rounded-md bg-red-50 text-red-700 text-sm p-3">
+        <div class="h-full bg-white">
+          <div
+            v-if="!isAdmin"
+            class="m-4 flex items-center gap-2 rounded-lg bg-red-50 p-4 text-sm text-red-700"
+          >
+            <ShieldExclamationIcon class="h-5 w-5 shrink-0" />
             您没有管理员权限，无法访问此页面。
           </div>
 
-          <div v-else-if="!selectedUser" class="text-center py-16 text-sm text-gray-500">
-            从左侧选择一个用户以浏览并管理其文件。
+          <div
+            v-else-if="!selectedUser"
+            class="flex h-full flex-col items-center justify-center gap-3 px-6 text-center"
+          >
+            <FolderOpenIcon class="h-12 w-12 text-gray-300" />
+            <p class="text-sm text-gray-500">
+              <span class="hidden lg:inline">从左侧选择一个用户</span>
+              <span class="lg:hidden">点击左上角按钮打开用户列表</span>
+              ，以浏览并管理其文件。
+            </p>
           </div>
 
-          <div v-else>
-            <CloudFileBrowser
-              :key="selectedUserId"
-              :target-user-id="selectedUserId!"
-              :title="`用户：${selectedUser.username || selectedUser.email}（ID: ${selectedUser.id}）`"
-            />
-          </div>
+          <CloudFileBrowser
+            v-else
+            :key="selectedUser.id"
+            fill
+            :target-user-id="selectedUser.id"
+            :title="`用户：${selectedUser.username || selectedUser.email}（ID: ${selectedUser.id}）`"
+          />
         </div>
-      </main>
+      </SidePanelLayout>
     </div>
   </div>
 </template>

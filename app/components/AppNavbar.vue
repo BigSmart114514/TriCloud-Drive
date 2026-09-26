@@ -1,17 +1,20 @@
 <!-- components/AppNavbar.vue -->
 <template>
-  <nav data-liquid class="bg-white shadow">
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+  <!-- border-b 是必须的：没有这条细线，导航栏会和下面的内容糊成一片 -->
+  <nav data-liquid class="shrink-0 border-b border-gray-200 bg-white shadow-sm">
+    <div :class="fluid ? 'w-full px-3 sm:px-4' : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8'">
       <div class="flex justify-between h-16">
-        <div class="flex items-center">
-          <h1 class="text-xl font-semibold text-gray-900">
+        <div class="flex items-center min-w-0">
+          <slot name="brand" />
+          <h1 class="truncate text-lg font-semibold text-gray-900 sm:text-xl">
             TriCloud Drive
           </h1>
         </div>
 
-        <div class="flex items-center gap-2 sm:gap-4">
-          <div v-if="isLoggedIn" class="flex items-center gap-2 sm:gap-4">
-            <span class="text-gray-700">
+        <div class="flex shrink-0 items-center gap-1.5 sm:gap-4">
+          <div v-if="isLoggedIn" class="flex items-center gap-1.5 sm:gap-4">
+            <!-- 移动端空间紧张，招呼语直接省略 -->
+            <span class="hidden text-gray-700 sm:inline">
               欢迎，{{ user?.username }}
             </span>
 
@@ -52,8 +55,13 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { ArrowRightOnRectangleIcon } from '@heroicons/vue/24/outline'
 import UiSettingsMenu from '~/components/UiSettingsMenu.vue'
+
+const props = withDefaults(defineProps<{ fluid?: boolean }>(), { fluid: false })
+const fluid = computed(() => props.fluid)
+
 const { user, isLoggedIn, logout } = useAuth()
 const handleLogout = async () => { await logout() }
 </script>
