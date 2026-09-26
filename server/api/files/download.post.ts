@@ -1,6 +1,8 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import crypto from 'crypto'
 import { getDb } from '~~/server/utils/db-adapter'
+import { FileService } from '~~/server/utils/db'
+import { dbConnectionError } from '~~/types/error'
 
 // 生成 CDN 鉴权 URL (TypeA)
 const generateCDNUrl = (
@@ -50,21 +52,14 @@ export default defineEventHandler(async (event) => {
 
     const config = useRuntimeConfig()
     const db = getDb(event)
-    if (!db) {
-      throw createError({ statusCode: 500, statusMessage: '数据库连接失败' })
-    }
+    if (!db) throw dbConnectionError
 
-    // 验证文件所有权
-    const fileRecord = await db
-      .prepare('SELECT * FROM files WHERE user_id = ? AND file_key = ?')
-      .bind(userId, fileKey)
-      .first()
+    const fileService = new FileService(db)
 
-    if (!fileRecord) {
-      throw createError({ statusCode: 404, statusMessage: '文件不存在或无权访问' })
-    }
+    // 归属校验：这里按 file_key 授权，不是按 id
+    const fileRecord = await fileService.assertOwnedByKey(userId, fileKey)
 
-    const fileSize = Number(fileRecord.file_size || 0)
+    const fileSize = fileRecord.fileSize
 
     // ========== 并发安全：原子预占下载额度 ==========
     // 逻辑：直接用一条 UPDATE 做 check+incr。
@@ -121,7 +116,7 @@ export default defineEventHandler(async (event) => {
           data: {
             downloadUrl: cdnUrl,
             filename: filename || fileRecord.filename,
-            fileSize: fileRecord.file_size,
+            fileSize: fileRecord.fileSize,
             expiresAt: new Date(Date.now() + config.cdnAuthTtl * 1000).toISOString(),
             useCDN: true
           }
@@ -135,7 +130,7 @@ export default defineEventHandler(async (event) => {
         data: {
           downloadUrl: cosUrl,
           filename: filename || fileRecord.filename,
-          fileSize: fileRecord.file_size,
+          fileSize: fileRecord.fileSize,
           expiresAt: new Date(Date.now() + 3600 * 1000).toISOString(),
           useCDN: false
         }

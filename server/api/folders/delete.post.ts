@@ -1,13 +1,15 @@
 // server/api/folders/delete.post.ts
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
+import { FileService, FolderService } from '~~/server/utils/db'
+import { dbConnectionError } from '~~/types/error'
 
 export default defineEventHandler(async (event) => {
   try {
     const { targetUserId } = await getMeAndTarget(event)
     const userId = Number(targetUserId)
     const db = getDb(event)
-    if (!db) throw createError({ statusCode: 500, statusMessage: '数据库连接失败' })
+    if (!db) throw dbConnectionError
 
     const { folderId } = await readBody(event)
     const id = Number(folderId)
@@ -15,45 +17,21 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, statusMessage: '非法的 folderId' })
     }
 
-    // 先校验归属
-    const own = await db
-      .prepare('SELECT 1 FROM folders WHERE id = ? AND user_id = ?')
-      .bind(id, userId)
-      .first()
-    if (!own) {
-      throw createError({ statusCode: 404, statusMessage: '文件夹不存在或无权限' })
-    }
+    const folderService = new FolderService(db)
+    const fileService = new FileService(db)
 
-    // 递归收集所有后代文件夹ID（含自身）
-    const rows: any = await db
-      .prepare(`
-        WITH RECURSIVE cte(id) AS (
-          SELECT id FROM folders WHERE id = ? AND user_id = ?
-          UNION ALL
-          SELECT f.id FROM folders f
-          JOIN cte ON f.parent_id = cte.id
-          WHERE f.user_id = ?
-        )
-        SELECT id FROM cte
-      `)
-      .bind(id, userId, userId)
-      .all()
+    // 归属校验
+    await folderService.assertOwned(userId, id)
 
-    const ids: number[] = (rows?.results || []).map((r: any) => Number(r.id)).filter((x: any) => Number.isInteger(x))
+    // 递归收集所有后代文件夹ID（含自身，每一跳都带 user_id）
+    const ids = await folderService.listDescendantIds(userId, id)
     if (ids.length === 0) {
       // 理论上不会发生：至少包含自身
       return { success: true, message: '无需删除' }
     }
 
-    const placeholders = ids.map(() => '?').join(',')
-
     // 在删除数据库前，先查出待删文件（用于COS删除）
-    const filesRes: any = await db
-      .prepare(`SELECT id, file_key, filename FROM files WHERE user_id = ? AND folder_id IN (${placeholders})`)
-      .bind(userId, ...ids)
-      .all()
-    const filesToDelete: { id: number; file_key: string; filename?: string }[] =
-      (filesRes?.results || []).filter((r: any) => !!r?.file_key)
+    const filesToDelete = (await fileService.listByFolders(userId, ids)).filter((f) => !!f.fileKey)
 
     // COS 删除（如果配置了密钥且有文件需要删除）
     const config = useRuntimeConfig()
@@ -72,7 +50,7 @@ export default defineEventHandler(async (event) => {
           SecretKey: config.tencentSecretKey,
         })
 
-        const keys = filesToDelete.map((f) => ({ Key: f.file_key }))
+        const keys = filesToDelete.map((f) => ({ Key: f.fileKey }))
         const chunkSize = 1000
         let deletedCount = 0
 
@@ -112,28 +90,12 @@ export default defineEventHandler(async (event) => {
       }
     }
 
-    // 先删文件，再删文件夹（手动级联）
-    await db
-      .prepare(`DELETE FROM files WHERE user_id = ? AND folder_id IN (${placeholders})`)
-      .bind(userId, ...ids)
-      .run()
-
-    await db
-      .prepare(`DELETE FROM folders WHERE user_id = ? AND id IN (${placeholders})`)
-      .bind(userId, ...ids)
-      .run()
+    // 先删文件，再删文件夹（手动级联，两条都带 user_id）
+    await fileService.deleteOwnedMany(userId, filesToDelete.map((f) => f.id))
+    await folderService.deleteOwned(userId, ids)
 
     // 重算用户存储用量
-    await db
-      .prepare(`
-        UPDATE users
-        SET usedStorage = COALESCE((
-          SELECT SUM(file_size) FROM files WHERE user_id = ?
-        ), 0)
-        WHERE id = ?
-      `)
-      .bind(userId, userId)
-      .run()
+    await fileService.recalculateUsedStorage(userId)
 
     let message = '文件夹及其内容已删除'
     if (cosAttempted && !cosDeleteAll) {

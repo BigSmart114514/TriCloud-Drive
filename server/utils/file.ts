@@ -1,4 +1,4 @@
-import { Database } from '~~/server/utils/db'
+import { Database, FolderService } from '~~/server/utils/db'
 import { FileRecord } from '~~/types/files'
 import { GeneralResponse } from '~~/types/auth'
 import { skipAndOverwriteError, ServerError } from '~~/types/error'
@@ -65,6 +65,9 @@ export async function save(db: Database, file: FileRecord, overwrite: boolean | 
     const folderIdVal =
         Number.isFinite(folderId) && Number(folderId) > 0 ? Number(folderId) : null
     const filename = file.filename?.trim()
+
+    // 目标目录归属校验，根层放行
+    await new FolderService(db).assertOwned(userId, folderIdVal)
 
     if (!overwrite && !skipIfExist) {
 
@@ -142,7 +145,8 @@ export async function save(db: Database, file: FileRecord, overwrite: boolean | 
         throw ServerError
     }
 }
-export async function getFileById(db: Database, fileId: number): Promise<FileRecord | null> {
+// 归属校验请优先用 FileService（server/utils/db.ts）里的 assertOwnedById
+export async function getFileById(db: Database, userId: number, fileId: number): Promise<FileRecord | null> {
 
     const row = await db
         .prepare(`
@@ -157,9 +161,9 @@ export async function getFileById(db: Database, fileId: number): Promise<FileRec
         created_at   AS createdAt,
         user_id
       FROM files
-      WHERE id = ?
+      WHERE id = ? AND user_id = ?
     `)
-        .bind(fileId)
+        .bind(fileId, userId)
         .first()
 
     if (!row) return null
@@ -186,13 +190,13 @@ export async function getFileById(db: Database, fileId: number): Promise<FileRec
     return record
 }
 
-export async function del(db: Database, fileId: number): Promise<undefined> {
+export async function del(db: Database, userId: number, fileId: number): Promise<undefined> {
     await db.prepare(`
-        DELETE FROM files WHERE id = ?;
-    `).bind(fileId).run()
+        DELETE FROM files WHERE id = ? AND user_id = ?;
+    `).bind(fileId, userId).run()
 }
 
-export async function delEmptySubfolder(db: Database, folderId: number) {
+export async function delEmptySubfolder(db: Database, userId: number, folderId: number) {
     if (folderId == null || Number.isNaN(Number(folderId))) return
 
     const CHUNK_SIZE = 500
@@ -206,15 +210,15 @@ export async function delEmptySubfolder(db: Database, folderId: number) {
     }
     const placeholders = (n: number) => new Array(n).fill('?').join(',')
 
-    // 1) 收集整个子树（包含 folderId 自身）
+    // 1) 收集整个子树（包含 folderId 自身），每一跳都限定 user_id
     const subtree = new Set<number>()
     subtree.add(Number(folderId))
     let frontier: number[] = [Number(folderId)]
 
     while (frontier.length > 0) {
         const ph = placeholders(frontier.length)
-        const sql = `SELECT id FROM folders WHERE parent_id IN (${ph})`
-        const res = await db.prepare(sql).bind(...frontier).all()
+        const sql = `SELECT id FROM folders WHERE user_id = ? AND parent_id IN (${ph})`
+        const res = await db.prepare(sql).bind(userId, ...frontier).all()
         const rows = rowsFromAll(res)
 
         const next: number[] = []
@@ -243,11 +247,12 @@ export async function delEmptySubfolder(db: Database, folderId: number) {
             const selSql = `
         SELECT f.id
         FROM folders f
-        WHERE f.id IN (${ph})
+        WHERE f.user_id = ?
+          AND f.id IN (${ph})
           AND NOT EXISTS (SELECT 1 FROM files   WHERE folder_id = f.id)
           AND NOT EXISTS (SELECT 1 FROM folders WHERE parent_id = f.id)
       `
-            const selRes = await db.prepare(selSql).bind(...batch).all()
+            const selRes = await db.prepare(selSql).bind(userId, ...batch).all()
             const selRows = rowsFromAll(selRes)
             for (const r of selRows) {
                 empties.push(Number(r.id))
@@ -261,8 +266,8 @@ export async function delEmptySubfolder(db: Database, folderId: number) {
         for (let i = 0; i < empties.length; i += CHUNK_SIZE) {
             const batch = empties.slice(i, i + CHUNK_SIZE)
             const ph = placeholders(batch.length)
-            const delSql = `DELETE FROM folders WHERE id IN (${ph})`
-            const delRes = await db.prepare(delSql).bind(...batch).run()
+            const delSql = `DELETE FROM folders WHERE user_id = ? AND id IN (${ph})`
+            const delRes = await db.prepare(delSql).bind(userId, ...batch).run()
             deletedThisRound += affectedFromRun(delRes)
         }
 

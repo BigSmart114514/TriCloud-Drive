@@ -1,6 +1,8 @@
 // server/api/folders/manifest.get.ts
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
+import { FolderService } from '~~/server/utils/db'
+import { dbConnectionError } from '~~/types/error'
 
 export default defineEventHandler(async (event) => {
   const { targetUserId } = await getMeAndTarget(event)
@@ -13,52 +15,16 @@ export default defineEventHandler(async (event) => {
   }
 
   const db = getDb(event)
-  if (!db) {
-    throw createError({ statusCode: 500, statusMessage: '数据库连接失败' })
-  }
+  if (!db) throw dbConnectionError
 
-  // 校验文件夹归属
-  const folder = await db
-    .prepare('SELECT id, name FROM folders WHERE id = ? AND user_id = ?')
-    .bind(folderId, userId)
-    .first()
+  const folderService = new FolderService(db)
 
-  if (!folder) {
-    throw createError({ statusCode: 404, statusMessage: '文件夹不存在或无权访问' })
-  }
+  // 归属校验：非本人目录统一 404
+  const folder = (await folderService.assertOwned(userId, folderId))!
 
   // 递归收集文件（带相对路径 relDir）
-  const listRes = await db
-    .prepare(`
-      WITH RECURSIVE tree(id, name, parent_id, rel_dir) AS (
-        SELECT id, name, parent_id, '' AS rel_dir
-        FROM folders
-        WHERE id = ? AND user_id = ?
-        UNION ALL
-        SELECT f.id, f.name, f.parent_id,
-          CASE
-            WHEN tree.rel_dir = '' THEN f.name
-            ELSE tree.rel_dir || '/' || f.name
-          END AS rel_dir
-        FROM folders f
-        JOIN tree ON f.parent_id = tree.id
-        WHERE f.user_id = ?
-      )
-      SELECT fl.id       AS id,
-             fl.filename AS filename,
-             fl.file_key AS fileKey,
-             fl.file_size AS fileSize,
-             tree.rel_dir AS relDir
-      FROM files fl
-      JOIN tree ON fl.folder_id = tree.id
-      WHERE fl.user_id = ?
-      ORDER BY relDir, filename
-    `)
-    .bind(folderId, userId, userId, userId)
-    .all()
-
-  const files = (listRes as any)?.results ?? (listRes as any) ?? []
-  const totalBytes = files.reduce((s: number, f: any) => s + Number(f.fileSize || 0), 0)
+  const files = await folderService.listSubtreeManifest(userId, folderId)
+  const totalBytes = files.reduce((s, f) => s + Number(f.fileSize || 0), 0)
 
   // 预检（不预占）：检查总大小是否会超出下载额度
   const quotaRow = await db

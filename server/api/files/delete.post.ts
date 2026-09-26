@@ -1,12 +1,15 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
+import { FileService } from '~~/server/utils/db'
+import { dbConnectionError } from '~~/types/error'
+
 export default defineEventHandler(async (event) => {
   try {
     // 验证用户认证
     //const user = await requireAuth(event)
     const { targetUserId } = await getMeAndTarget(event)
     const userId = Number(targetUserId)
-    
+
     const { fileId } = await readBody(event)
 
     if (!fileId) {
@@ -21,25 +24,12 @@ export default defineEventHandler(async (event) => {
 
     // 获取数据库连接
     const db = getDb(event)
-    if (!db) {
-      throw createError({
-        statusCode: 500,
-        statusMessage: '数据库连接失败'
-      })
-    }
+    if (!db) throw dbConnectionError
 
-    // 查询文件信息，确保文件属于当前用户
-    const fileRecord = await db
-      .prepare('SELECT id, user_id, filename, file_key, file_size FROM files WHERE id = ? AND user_id = ?')
-      .bind(fileId, userId)
-      .first()
+    const fileService = new FileService(db)
 
-    if (!fileRecord) {
-      throw createError({
-        statusCode: 404,
-        statusMessage: '文件不存在或无权访问'
-      })
-    }
+    // 归属校验：非本人文件一律 404，不区分「不存在」与「无权限」
+    const fileRecord = await fileService.assertOwnedById(userId, Number(fileId))
 
     // 如果配置了腾讯云密钥，则删除COS中的文件
     let cosDeleteSuccess = false
@@ -64,14 +54,14 @@ export default defineEventHandler(async (event) => {
             {
               Bucket: config.cosBucket,
               Region: config.cosRegion,
-              Key: fileRecord.file_key,
+              Key: fileRecord.fileKey,
             },
             (err: any, data: any) => {
               if (err) {
                 console.error('COS delete error:', err)
                 reject(err)
               } else {
-                console.log(`Successfully deleted file from COS: ${fileRecord.file_key}`)
+                console.log(`Successfully deleted file from COS: ${fileRecord.fileKey}`)
                 console.log('COS delete response:', data)
                 resolve(data)
               }
@@ -88,22 +78,10 @@ export default defineEventHandler(async (event) => {
     }
 
     // 从数据库中删除文件记录
-    await db
-      .prepare('DELETE FROM files WHERE id = ? AND user_id = ?')
-      .bind(fileId, userId)
-      .run()
+    await fileService.deleteOwned(userId, Number(fileId))
 
     // 重算法：根据该用户当前files总和重算 usedStorage
-    await db
-      .prepare(`
-        UPDATE users
-        SET usedStorage = COALESCE((
-          SELECT SUM(file_size) FROM files WHERE user_id = ?
-        ), 0)
-        WHERE id = ?
-      `)
-      .bind(userId, userId)
-      .run()
+    await fileService.recalculateUsedStorage(userId)
 
     // 查询最新 usedStorage 以便返回给前端（可用于即时更新UI）
     /*const userAfter = await db
@@ -118,7 +96,7 @@ export default defineEventHandler(async (event) => {
       deletedFile: {
         id: fileRecord.id,
         filename: fileRecord.filename,
-        fileKey: fileRecord.file_key,
+        fileKey: fileRecord.fileKey,
       },
       //usedStorage: userAfter?.usedStorage ?? null,
     }

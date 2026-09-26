@@ -1,6 +1,7 @@
 // server/api/manage/deleteUser.post.ts
 import { defineEventHandler, readBody, createError, getMethod } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
+import { FileService } from '~~/server/utils/db'
 import { requireAuth } from '~~/server/utils/auth-middleware'
 
 function toBool(v: any) {
@@ -73,12 +74,9 @@ export default defineEventHandler(async (event) => {
   }
 
   // 读取待删除用户的全部文件 key（用于 COS 删除）
-  const filesRes: any = await db
-    .prepare('SELECT file_key FROM files WHERE user_id = ?')
-    .bind(userId)
-    .all()
+  const ownedFiles = await new FileService(db).listOwnedByUser(userId)
   const keys: string[] = Array.from(
-    new Set((filesRes?.results || []).map((r: any) => String(r.file_key)).filter(Boolean))
+    new Set(ownedFiles.map((f) => String(f.fileKey)).filter(Boolean))
   )
 
   // 处理 COS 删除

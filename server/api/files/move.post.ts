@@ -1,13 +1,13 @@
 import { defineEventHandler, readBody } from 'h3'
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
+import { FileService, FolderService } from '~~/server/utils/db'
 import { ensurePaths } from '~~/server/utils/folders'
 import { skipAndOverwriteError } from '~~/types/error'
-import { uniqPositiveInts, placeholders } from '~~/server/utils/functions'
+import { uniqPositiveInts } from '~~/server/utils/functions'
 import {
   resolveUniqueFilename,
   delEmptySubfolder,
-  recalculateUsedStorage,
 } from '~~/server/utils/file'
 
 export default defineEventHandler(async (event) => {
@@ -33,48 +33,31 @@ export default defineEventHandler(async (event) => {
     return { success: true, moved: { folders: 0, files: 0 }, skipped: 0, failed: 0, message: '无移动项' }
   }
 
+  const fileService = new FileService(db)
+  const folderService = new FolderService(db)
+
   // 校验目标文件夹
   if (targetFolderId !== null) {
-    const target = await db
-      .prepare('SELECT id FROM folders WHERE user_id = ? AND id = ?')
-      .bind(userId, targetFolderId)
-      .first()
-    if (!target) {
+    if (!(await folderService.findOwnedById(userId, targetFolderId))) {
       return { success: false, message: '目标文件夹不存在或无权限' }
     }
   }
 
   // 拉取待移动文件夹/文件（基本信息）
-  const movedFolders = folderIds.length
-    ? (await db
-      .prepare(`SELECT id, name, parent_id FROM folders WHERE user_id = ? AND id IN (${placeholders(folderIds.length)})`)
-      .bind(userId, ...folderIds)
-      .all()).results as any[]
-    : []
+  const movedFolders = await folderService.findOwnedMany(userId, folderIds)
 
   if (movedFolders.length !== folderIds.length) {
     return { success: false, message: '部分文件夹不存在或无权限' }
   }
 
-  const movedFiles = fileIds.length
-    ? (await db
-      .prepare(`SELECT id, filename, folder_id AS folderId FROM files WHERE user_id = ? AND id IN (${placeholders(fileIds.length)})`)
-      .bind(userId, ...fileIds)
-      .all()).results as any[]
-    : []
+  const movedFiles = await fileService.findOwnedMany(userId, fileIds)
 
   if (movedFiles.length !== fileIds.length) {
     return { success: false, message: '部分文件不存在或无权限' }
   }
 
-  // 工具：取父级 id
-  const getParentId = async (fid: number): Promise<number | null> => {
-    const row: any = await db
-      .prepare('SELECT parent_id FROM folders WHERE user_id = ? AND id = ?')
-      .bind(userId, fid)
-      .first()
-    return row?.parent_id ?? null
-  }
+  // 工具：取父级 id（带 user_id，跨用户目录会直接取不到）
+  const getParentId = (fid: number): Promise<number | null> => folderService.getParentId(userId, fid)
 
   // 防止把文件夹移动到其自身或其子孙中（重要：杜绝将自己移动到自己的子目录）
   const isTargetInsideFolder = async (folderId: number, targetId: number): Promise<boolean> => {
@@ -116,22 +99,16 @@ export default defineEventHandler(async (event) => {
     const subtree = new Set<number>([rootId])
     let frontier: number[] = [rootId]
     while (frontier.length > 0) {
-      const ph = placeholders(frontier.length)
-      const res = await db
-        .prepare(`SELECT id, parent_id, name FROM folders WHERE user_id = ? AND parent_id IN (${ph})`)
-        .bind(userId, ...frontier)
-        .all()
-      const rows = (res?.results || []) as any[]
+      const children = await folderService.listChildrenByParentIds(userId, frontier)
       const next: number[] = []
-      for (const r of rows) {
-        const id = Number(r.id)
-        if (!subtree.has(id)) {
-          subtree.add(id)
-          const parentPath = relPathByFolderId.get(Number(r.parent_id)) || ''
-          const myPath = parentPath ? `${parentPath}/${String(r.name)}` : String(r.name)
-          relPathByFolderId.set(id, myPath)
+      for (const c of children) {
+        if (!subtree.has(c.id)) {
+          subtree.add(c.id)
+          const parentPath = relPathByFolderId.get(c.parentId ?? -1) || ''
+          const myPath = parentPath ? `${parentPath}/${c.name}` : c.name
+          relPathByFolderId.set(c.id, myPath)
           pathsToEnsure.add(myPath)
-          next.push(id)
+          next.push(c.id)
         }
       }
       frontier = next
@@ -141,18 +118,9 @@ export default defineEventHandler(async (event) => {
     const ids = Array.from(subtree)
     for (let i = 0; i < ids.length; i += CHUNK) {
       const batch = ids.slice(i, i + CHUNK)
-      const ph = placeholders(batch.length)
-      const res = await db
-        .prepare(`SELECT id, filename, folder_id AS folderId FROM files WHERE user_id = ? AND folder_id IN (${ph})`)
-        .bind(userId, ...batch)
-        .all()
-      const list = (res?.results || []).map((r: any) => ({
-        id: Number(r.id),
-        filename: String(r.filename),
-        folderId: Number(r.folderId),
-      }))
+      const list = await fileService.listByFolders(userId, batch)
       for (const f of list) {
-        filesFromFolders.push(f)
+        filesFromFolders.push({ id: f.id, filename: f.filename, folderId: f.folderId as number })
         filesFromFoldersSet.add(f.id)
       }
     }
@@ -199,14 +167,8 @@ export default defineEventHandler(async (event) => {
   await db.prepare('SAVEPOINT move_tx').bind().run()
   let moved = 0, skipped = 0, failed = 0
 
-  const findDup = async (destFolderId: number | null, filename: string) => {
-    const sql = destFolderId === null
-      ? `SELECT id FROM files WHERE user_id = ? AND folder_id IS NULL AND filename = ? LIMIT 1`
-      : `SELECT id FROM files WHERE user_id = ? AND folder_id = ? AND filename = ? LIMIT 1`
-    const args = destFolderId === null ? [userId, filename] : [userId, destFolderId, filename]
-    const row = await db.prepare(sql).bind(...args).first()
-    return row ? Number(row.id) : null
-  }
+  const findDup = (destFolderId: number | null, filename: string) =>
+    fileService.findByName(userId, destFolderId, filename).then((row) => (row ? row.id : null))
 
   try {
     for (const item of plan) {
@@ -230,41 +192,32 @@ export default defineEventHandler(async (event) => {
         } else if (body?.overwrite) {
           // 先删目的地重名，再移动源（UPDATE 源记录）
           if (dupId !== id) {
-            await db.prepare('DELETE FROM files WHERE id = ?').bind(dupId).run()
+            await fileService.deleteOwned(userId, dupId)
           }
-          await db
-            .prepare('UPDATE files SET folder_id = ? WHERE id = ?')
-            .bind(destFolderId, id)
-            .run()
+          await fileService.updateLocation(userId, id, destFolderId)
           moved++
         } else {
           // 默认：生成唯一名，直接在源记录上改名 + 改目录
           const { name: newName } = await resolveUniqueFilename(db, userId, destFolderId, filename)
-          await db
-            .prepare('UPDATE files SET folder_id = ?, filename = ? WHERE id = ?')
-            .bind(destFolderId, newName, id)
-            .run()
+          await fileService.updateLocation(userId, id, destFolderId, newName)
           moved++
         }
       } else {
         // 无冲突：直接 MOVE（UPDATE）
-        await db
-          .prepare('UPDATE files SET folder_id = ? WHERE id = ?')
-          .bind(destFolderId, id)
-          .run()
+        await fileService.updateLocation(userId, id, destFolderId)
         moved++
       }
     }
 
     // 清理原空目录（仅对被选中的顶层目录做清理）
     for (const folderId of folderIds) {
-      await delEmptySubfolder(db, folderId)
+      await delEmptySubfolder(db, userId, folderId)
     }
 
     await db.prepare('RELEASE move_tx').bind().run()
 
     // 移动完成后再重算存储
-    await recalculateUsedStorage(db, userId)
+    await fileService.recalculateUsedStorage(userId)
 
     return {
       success: true,

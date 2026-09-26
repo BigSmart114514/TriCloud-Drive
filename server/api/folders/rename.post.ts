@@ -1,6 +1,7 @@
 // server/api/folders/rename.post.ts
 import { defineEventHandler, readBody, createError } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
+import { FolderService } from '~~/server/utils/db'
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { normalizeFolderName } from '~~/server/utils/folders'
 
@@ -32,25 +33,14 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 400, statusMessage: '非法的文件夹名称' })
   }
 
-  // 先查归属
-  const folder = await db.prepare(`
-    SELECT id, user_id AS userId, parent_id AS parentId
-    FROM folders WHERE id = ?
-  `).bind(folderId).first() as { id: number; userId: number; parentId: number | null } | undefined
+  const folderService = new FolderService(db)
 
-  if (!folder) throw createError({ statusCode: 404, statusMessage: '文件夹不存在' })
-  if (folder.userId !== userId) throw createError({ statusCode: 403, statusMessage: '无权限' })
+  // 归属校验，不存在与不属于本人统一 404
+  await folderService.assertOwned(userId, folderId)
 
   try {
-    const result = await db.prepare(`
-      UPDATE folders
-      SET name = ?, updated_at = CURRENT_TIMESTAMP
-      WHERE id = ? AND user_id = ?
-    `).bind(newName, folderId, userId).run()
-
-    // 统一判断影响行数（D1/sqlite: meta.changes；MySQL: affectedRows）
-    const changes = Number(result?.meta?.changes ?? result?.meta?.affectedRows ?? 0)
     // 即使 changes=0（同名或无变化）也当成功返回
+    await folderService.updateName(userId, folderId, newName)
     return { success: true }
   } catch (err: any) {
     if (isUniqueError(err)) {

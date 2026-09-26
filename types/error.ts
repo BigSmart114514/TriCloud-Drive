@@ -4,4 +4,5 @@ export const dbConnectionError = createError({ statusCode: 500, statusMessage: '
 export const userNotFindError = createError({ statusCode: 404, statusMessage: '用户不存在或已被删除' })
 export const userExpiredError = createError({ statusCode: 403, statusMessage: '账号已过期，禁止上传' })
 export const folderNotFindError = createError({ statusCode: 404, statusMessage: '文件夹不存在或无权限' })
+export const fileNotFoundError = createError({ statusCode: 404, statusMessage: '文件不存在或无权访问' })
 export const upload403Error = createError({ statusCode: 403, statusMessage: '存储空间不足或账号已过期，禁止上传' })

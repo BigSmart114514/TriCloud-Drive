@@ -1,7 +1,7 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import crypto from 'crypto'
-import { UserService } from '~~/server/utils/db'
+import { UserService, FileService } from '~~/server/utils/db'
 
 export default defineEventHandler(async (event) => {
   // 处理 CORS 预检
@@ -71,6 +71,7 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 500, statusMessage: '数据库连接失败' })
     }
     const userService = new UserService(db)
+    const fileService = new FileService(db)
 
     const body = await readBody(event)
     const { filename, fileSize, overwrite, skipIfExist } = body
@@ -106,23 +107,10 @@ export default defineEventHandler(async (event) => {
     // 若选择覆盖且存在同名文件，则抵扣旧文件大小
     let usedForCheck = usedStorage
     if (overwrite === true || skipIfExist === true) {
-      let row: any
-      if (folderId === null) {
-        row = await db
-          .prepare('SELECT file_size FROM files WHERE user_id = ? AND folder_id IS NULL AND filename = ? LIMIT 1')
-          .bind(user.id, filename)
-          .first()
-      } else {
-        row = await db
-          .prepare('SELECT file_size FROM files WHERE user_id = ? AND folder_id = ? AND filename = ? LIMIT 1')
-          .bind(user.id, folderId, filename)
-          .first()
-      }
-      if (row?.file_size != null && overwrite === true) {
-        usedForCheck = usedStorage - Number(row.file_size)
-        if (usedForCheck < 0) usedForCheck = 0
-      } else if (row?.file_size != null && skipIfExist === true)
-      {
+      const row = await fileService.findByName(user.id, folderId, filename)
+      if (row && overwrite === true) {
+        usedForCheck = Math.max(0, usedStorage - row.fileSize)
+      } else if (row && skipIfExist === true) {
         return { success: false, message: '当前目录下已存在该文件' }
       }
     }
@@ -131,16 +119,8 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 403, statusMessage: '存储空间不足，上传该文件将超出配额' })
     }
 
-    // 如果指定了 folderId，则校验归属
-    if (folderId !== null) {
-      const chk = await db
-        .prepare('SELECT 1 FROM folders WHERE id = ? AND user_id = ?')
-        .bind(folderId, user.id)
-        .first()
-      if (!chk) {
-        throw createError({ statusCode: 404, statusMessage: '文件夹不存在或无权限' })
-      }
-    }
+    // 目标目录归属校验（放在配额判断之后，与原逻辑保持一致）
+    await fileService.assertFolderOwned(user.id, folderId)
 
     // 生成用于对象存储的 key（与文件夹逻辑解耦，文件夹信息仅存 DB）
     const uuid = crypto.randomUUID()

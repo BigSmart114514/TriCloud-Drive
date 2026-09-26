@@ -3,20 +3,12 @@ import COS from 'cos-nodejs-sdk-v5'
 import { useRuntimeConfig } from '#imports'
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
+import { FileService, FolderService } from '~~/server/utils/db'
 import { ensurePaths } from '~~/server/utils/folders'
-import { resolveUniqueFilename, recalculateUsedStorage } from '~~/server/utils/file'
+import { resolveUniqueFilename } from '~~/server/utils/file'
+import { uniqPositiveInts } from '~~/server/utils/functions'
 import { skipAndOverwriteError } from '~~/types/error'
 
-function placeholders(n: number) {
-  return Array(n).fill('?').join(',')
-}
-function uniqPositiveInts(arr: any[]): number[] {
-  return [...new Set(
-    (Array.isArray(arr) ? arr : [])
-      .map(Number)
-      .filter(n => Number.isInteger(n) && n > 0)
-  )]
-}
 function sanitizeForKey(name: string): string {
   return name.replace(/[\\?%*:|"<>]/g, '_').replace(/[\s]+/g, ' ')
 }
@@ -48,24 +40,18 @@ export default defineEventHandler(async (event) => {
     return { success: true, copied: { folders: 0, files: 0 }, skipped: 0, failed: 0, message: '无复制项' }
   }
 
+  const fileService = new FileService(db)
+  const folderService = new FolderService(db)
+
   // 读取目标文件夹（仅校验属于该用户）
   if (targetFolderId !== null) {
-    const target = await db
-      .prepare('SELECT id FROM folders WHERE user_id = ? AND id = ?')
-      .bind(userId, targetFolderId)
-      .first()
-    if (!target) {
+    if (!(await folderService.findOwnedById(userId, targetFolderId))) {
       return { success: false, message: '目标文件夹不存在或无权限' }
     }
   }
 
   // 拉取待复制的顶层文件夹列表
-  const movedFolders = folderIds.length
-    ? (await db
-      .prepare(`SELECT id, name, parent_id FROM folders WHERE user_id = ? AND id IN (${placeholders(folderIds.length)})`)
-      .bind(userId, ...folderIds)
-      .all()).results as any[]
-    : []
+  const movedFolders = await folderService.findOwnedMany(userId, folderIds)
   if (movedFolders.length !== folderIds.length) {
     return { success: false, message: '部分文件夹不存在或无权限' }
   }
@@ -79,20 +65,14 @@ export default defineEventHandler(async (event) => {
     fileSize: number
     contentType: string | null
   }
-  const movedFiles: SrcFile[] = fileIds.length
-    ? ((await db
-      .prepare(`SELECT id, filename, folder_id AS folderId, file_key AS fileKey, file_size AS fileSize, content_type AS contentType
-                FROM files WHERE user_id = ? AND id IN (${placeholders(fileIds.length)})`)
-      .bind(userId, ...fileIds)
-      .all()).results as any[]).map(r => ({
-        id: Number(r.id),
-        filename: String(r.filename),
-        folderId: r.folderId == null ? null : Number(r.folderId),
-        fileKey: String(r.fileKey),
-        fileSize: Number(r.fileSize),
-        contentType: r.contentType ? String(r.contentType) : null
-      }))
-    : []
+  const movedFiles: SrcFile[] = (await fileService.findOwnedMany(userId, fileIds)).map((r) => ({
+    id: r.id,
+    filename: r.filename,
+    folderId: r.folderId,
+    fileKey: r.fileKey,
+    fileSize: r.fileSize,
+    contentType: r.contentType
+  }))
   if (movedFiles.length !== fileIds.length) {
     return { success: false, message: '部分文件不存在或无权限' }
   }
@@ -112,22 +92,16 @@ export default defineEventHandler(async (event) => {
     const subtree = new Set<number>([rootId])
     let frontier: number[] = [rootId]
     while (frontier.length > 0) {
-      const ph = placeholders(frontier.length)
-      const res = await db
-        .prepare(`SELECT id, parent_id, name FROM folders WHERE user_id = ? AND parent_id IN (${ph})`)
-        .bind(userId, ...frontier)
-        .all()
-      const rows = (res?.results || []) as any[]
+      const children = await folderService.listChildrenByParentIds(userId, frontier)
       const next: number[] = []
-      for (const r of rows) {
-        const id = Number(r.id)
-        if (!subtree.has(id)) {
-          subtree.add(id)
-          const parentPath = relPathByFolderId.get(Number(r.parent_id)) || ''
-          const myPath = parentPath ? `${parentPath}/${String(r.name)}` : String(r.name)
-          relPathByFolderId.set(id, myPath)
+      for (const c of children) {
+        if (!subtree.has(c.id)) {
+          subtree.add(c.id)
+          const parentPath = relPathByFolderId.get(c.parentId ?? -1) || ''
+          const myPath = parentPath ? `${parentPath}/${c.name}` : c.name
+          relPathByFolderId.set(c.id, myPath)
           pathsToEnsure.add(myPath)
-          next.push(id)
+          next.push(c.id)
         }
       }
       frontier = next
@@ -137,19 +111,13 @@ export default defineEventHandler(async (event) => {
     const ids = Array.from(subtree)
     for (let i = 0; i < ids.length; i += CHUNK) {
       const batch = ids.slice(i, i + CHUNK)
-      const ph = placeholders(batch.length)
-      const res = await db
-        .prepare(`SELECT id, filename, folder_id AS folderId, file_key AS fileKey, file_size AS fileSize, content_type AS contentType
-                  FROM files WHERE user_id = ? AND folder_id IN (${ph})`)
-        .bind(userId, ...batch)
-        .all()
-      const list: SrcFile[] = (res?.results || []).map((r: any) => ({
-        id: Number(r.id),
-        filename: String(r.filename),
-        folderId: r.folderId == null ? null : Number(r.folderId),
-        fileKey: String(r.fileKey),
-        fileSize: Number(r.fileSize),
-        contentType: r.contentType ? String(r.contentType) : null
+      const list: SrcFile[] = (await fileService.listByFolders(userId, batch)).map((r) => ({
+        id: r.id,
+        filename: r.filename,
+        folderId: r.folderId,
+        fileKey: r.fileKey,
+        fileSize: r.fileSize,
+        contentType: r.contentType
       }))
       for (const f of list) {
         filesFromFolders.push(f)
@@ -159,7 +127,7 @@ export default defineEventHandler(async (event) => {
   }
 
   for (const f of movedFolders) {
-    await collectSubtree(Number(f.id), String(f.name))
+    await collectSubtree(f.id, f.name)
   }
 
   // 在目标位置创建/复用需要的目录（含空目录）
@@ -200,13 +168,9 @@ export default defineEventHandler(async (event) => {
 
   // 查重复工具
   async function findDup(destFolderId: number | null, filename: string): Promise<DupInfo | null> {
-    const sql = destFolderId === null
-      ? `SELECT id, file_key AS fileKey, file_size AS fileSize FROM files WHERE user_id = ? AND folder_id IS NULL AND filename = ? LIMIT 1`
-      : `SELECT id, file_key AS fileKey, file_size AS fileSize FROM files WHERE user_id = ? AND folder_id = ? AND filename = ? LIMIT 1`
-    const args = destFolderId === null ? [userId, filename] : [userId, destFolderId, filename]
-    const row = await db.prepare(sql).bind(...args).first()
+    const row = await fileService.findByName(userId, destFolderId, filename)
     if (!row) return null
-    return { id: Number(row.id), fileKey: String(row.fileKey), fileSize: Number(row.fileSize) }
+    return { id: row.id, fileKey: row.fileKey, fileSize: row.fileSize }
   }
 
   // 冲突处理：skip/overwrite/rename（并顺便计算净新增空间）
@@ -357,7 +321,7 @@ export default defineEventHandler(async (event) => {
 
       // 若 overwrite：复制成功后再删除旧记录与旧对象（避免先删导致失败后数据丢失）
       if (overwriteExisting) {
-        await db.prepare('DELETE FROM files WHERE id = ?').bind(overwriteExisting.id).run()
+        await fileService.deleteOwned(userId, overwriteExisting.id)
         // 尝试删除旧对象（失败忽略，避免影响整体）
         if (overwriteExisting.fileKey && overwriteExisting.fileKey !== destKey) {
           await cosDeleteObject(overwriteExisting.fileKey).catch(() => {})
@@ -382,7 +346,7 @@ export default defineEventHandler(async (event) => {
   }
 
   // 最终兜底重算（一致性保障）
-  await recalculateUsedStorage(db, userId)
+  await fileService.recalculateUsedStorage(userId)
 
   return {
     success: failed === 0,

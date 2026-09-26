@@ -1,7 +1,8 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
+import { FileService } from '~~/server/utils/db'
 import { resolveUniqueFilename } from '~~/server/utils/file'
-import { userExpiredError, userNotFindError, dbConnectionError, folderNotFindError, upload403Error } from '~~/types/error'
+import { userExpiredError, userNotFindError, dbConnectionError, upload403Error } from '~~/types/error'
 
 export default defineEventHandler(async (event) => {
   function parseSqlDateTime(input: any): Date | null {
@@ -74,28 +75,22 @@ export default defineEventHandler(async (event) => {
     const db = getDb(event)
     if (!db) throw dbConnectionError
 
+    const fileService = new FileService(db)
+
     const userRow: any = await db.prepare('SELECT expire_at FROM users WHERE id = ?').bind(userId).first()
     if (!userRow) throw userNotFindError
     if (isExpired(userRow.expire_at)) throw userExpiredError
-    if (folderId !== null) {
-      const chk = await db.prepare('SELECT 1 FROM folders WHERE id = ? AND user_id = ?').bind(folderId, userId).first()
-      if (!chk) throw folderNotFindError
-    }
+
+    // 目标目录归属校验，根层直接放行
+    await fileService.assertFolderOwned(userId, folderId)
 
     await db.prepare('SAVEPOINT upload_tx').bind().run()
     try {
       if (overwrite === true) {
-        let exist: any
-        if (folderId === null) {
-          exist = await db.prepare('SELECT id, file_size, file_key FROM files WHERE user_id = ? AND folder_id IS NULL AND filename = ? LIMIT 1')
-            .bind(userId, filename).first()
-        } else {
-          exist = await db.prepare('SELECT id, file_size, file_key FROM files WHERE user_id = ? AND folder_id = ? AND filename = ? LIMIT 1')
-            .bind(userId, folderId, filename).first()
-        }
+        const exist = await fileService.findByName(userId, folderId, filename)
 
         if (exist?.id) {
-          const oldSize = Number(exist.file_size || 0)
+          const oldSize = exist.fileSize
           const delta = size - oldSize
 
           const upd = await db.prepare(`
@@ -112,13 +107,14 @@ export default defineEventHandler(async (event) => {
             throw upload403Error
           }
 
-          await db.prepare(`
-            UPDATE files
-            SET file_key = ?, file_size = ?, file_url = ?, content_type = ?, created_at = CURRENT_TIMESTAMP
-            WHERE id = ? AND user_id = ?
-          `).bind(fileKey, size, fileUrl, contentType || 'application/octet-stream', exist.id, userId).run()
+          await fileService.updateContent(userId, exist.id, {
+            fileKey,
+            fileSize: size,
+            fileUrl,
+            contentType: contentType || 'application/octet-stream'
+          })
 
-          const file = await db.prepare('SELECT * FROM files WHERE id = ? AND user_id = ?').bind(exist.id, userId).first()
+          const file = await fileService.findOwnedById(userId, exist.id)
           await db.prepare('RELEASE upload_tx').bind().run()
           return { success: true, message: '文件覆盖成功', file }
         }

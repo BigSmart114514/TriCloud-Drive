@@ -1,6 +1,6 @@
 // server/utils/folders.ts
 import { createError } from 'h3'
-import { Database } from '~~/server/utils/db'
+import { Database, FolderService } from '~~/server/utils/db'
 /*
 type DBLike = {
   prepare: (sql: string) => {
@@ -40,12 +40,13 @@ function getLastInsertId(meta?: any): number | undefined {
   return meta?.lastID ?? meta?.insertId ?? meta?.last_row_id
 }
 
+// 父级归属校验统一走 FolderService，这里只做「根层放行」的短路
 async function assertParent(db: Database, userId: number, parentId: number | null) {
   if (parentId === null) return
-  const p = await db.prepare('SELECT 1 FROM folders WHERE id = ? AND user_id = ?')
-    .bind(parentId, userId)
-    .first()
-  if (!p) throw createError({ statusCode: 404, statusMessage: '父级文件夹不存在或无权限' })
+  const folderService = new FolderService(db)
+  if (!(await folderService.findOwnedById(userId, parentId))) {
+    throw createError({ statusCode: 404, statusMessage: '父级文件夹不存在或无权限' })
+  }
 }
 
 /**
@@ -125,9 +126,10 @@ export async function ensurePaths(
   const parentId = normalizeFolderId(params?.parentId)
   let paths: string[] = Array.isArray(params?.paths) ? params.paths : []
 
-  if (!paths.length) return {}
-
+  // 先校验父级归属，再看有没有路径要建，避免空 paths 绕过校验
   await assertParent(db, userId, parentId)
+
+  if (!paths.length) return {}
 
   const uniq = Array.from(new Set(paths.map(normalizePath)))
   const result: Record<string, number> = {}
