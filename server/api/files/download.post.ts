@@ -3,6 +3,7 @@ import crypto from 'crypto'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
 import { dbConnectionError } from '~~/types/error'
+import { PERM_READ } from '~~/types/share'
 
 // 生成 CDN 鉴权 URL (TypeA)
 const generateCDNUrl = (
@@ -56,8 +57,8 @@ export default defineEventHandler(async (event) => {
 
     const fileService = new FileService(db)
 
-    // 归属校验：这里按 file_key 授权，不是按 id
-    const fileRecord = await fileService.assertOwnedByKey(userId, fileKey)
+    // 归属或授权：所有者、被授权人（含从父文件夹继承的）都可下载
+    const fileRecord = await fileService.findAccessibleByKey(userId, fileKey, PERM_READ)
 
     const fileSize = fileRecord.fileSize
 

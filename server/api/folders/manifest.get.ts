@@ -19,11 +19,13 @@ export default defineEventHandler(async (event) => {
 
   const folderService = new FolderService(db)
 
-  // 归属校验：非本人目录统一 404
-  const folder = (await folderService.assertOwned(userId, folderId))!
+  // 属主直接放行；被授权人需要对整个目录有读权限
+  const folder = await folderService.assertReadable(userId, folderId)
+  // 子树里的行天然都属于属主，用属主 id 继续过滤，访客也能拿到完整清单
+  const subtreeOwnerId = folder?.userId ?? userId
 
   // 递归收集文件（带相对路径 relDir）
-  const files = await folderService.listSubtreeManifest(userId, folderId)
+  const files = await folderService.listSubtreeManifest(subtreeOwnerId, folderId)
   const totalBytes = files.reduce((s, f) => s + Number(f.fileSize || 0), 0)
 
   // 预检（不预占）：检查总大小是否会超出下载额度
@@ -41,7 +43,7 @@ export default defineEventHandler(async (event) => {
 
   return {
     success: true,
-    folder: { id: folder.id, name: folder.name },
+    folder: { id: folder?.id ?? folderId, name: folder?.name ?? '' },
     files, // [{ id, filename, fileKey, fileSize, relDir }]
     totals: {
       count: files.length,

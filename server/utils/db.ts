@@ -156,10 +156,13 @@ function toOwnedFolder(row: any): OwnedFolder {
 }
 
 function toOwnedFile(row: any): OwnedFile {
+  // 注意：SELECT * 返回的是 folder_id，这里必须做兜底，
+  // 否则会被当成根层，向上查找继承时走不到祖先的授权
+  const folderIdRaw = row.folderId ?? row.folder_id
   return {
     id: Number(row.id),
     userId: Number(row.userId ?? row.user_id),
-    folderId: row.folderId === null || row.folderId === undefined ? null : Number(row.folderId),
+    folderId: folderIdRaw === null || folderIdRaw === undefined ? null : Number(folderIdRaw),
     filename: row.filename,
     fileKey: row.fileKey ?? row.file_key,
     fileSize: Number(row.fileSize ?? row.file_size),
@@ -338,7 +341,6 @@ export class FolderService {
       .all()
     return (res?.results || []) as ManifestFile[]
   }
-
   async countChildren(userId: number, folderId: number): Promise<number> {
     const res = await this.db
       .prepare('SELECT COUNT(*) AS total FROM folders WHERE user_id = ? AND parent_id = ?')
@@ -390,6 +392,25 @@ export class FolderService {
       userId: Number(row.userId),
       permission: normalizePermission(row.permission)
     }))
+  }
+
+  /**
+   * 校验访客可读该目录，返回目录（含属主 id）。
+   * 属主直接放行；否则要求该目录对访客的有效权限含 read。
+   * 根层（folderId=null）视为访客自己的根层，放行。
+   */
+  async assertReadable(userId: number, folderId: number | null): Promise<OwnedFolder | null> {
+    if (folderId === null || folderId === undefined) return null
+    const owned = await this.findOwnedById(userId, folderId)
+    if (owned) return owned
+    const access = await this.resolveAccess(userId, folderId)
+    if (!hasPermission(access.mask, PERM_READ)) throw folderNotFindError
+    return this.findOwnedById((await this.getOwnerId(folderId))!, folderId)
+  }
+
+  async getOwnerId(folderId: number): Promise<number | null> {
+    const row = await this.db.prepare('SELECT user_id FROM folders WHERE id = ?').bind(folderId).first()
+    return row ? Number(row.user_id) : null
   }
 }
 
@@ -472,14 +493,46 @@ export class FileService {
     return hasPermission(resolved.mask, need)
   }
 
-  /** 校验不通过时抛 403；文件不存在或不属于本人仍抛 404 */
-  async assertCanAccess(userId: number, fileId: number, need: number): Promise<OwnedFile> {
-    const file = await this.assertOwnedById(userId, fileId)
+  /**
+   * 定位文件并校验权限，**不要求是所有者**——分享出去的入口都走这里。
+   * 错误口径：完全没有访问权 → 404（与不存在相同，避免探测）；
+   *           有访问权但权限不够 → 403。
+   */
+  async findAccessibleByKey(userId: number, fileKey: string, need: number): Promise<OwnedFile> {
+    const row = await this.db.prepare('SELECT * FROM files WHERE file_key = ?').bind(fileKey).first()
+    if (!row) throw fileNotFoundError
+    const [file] = await this.attachAccess([this.toOwned(row)])
+    return this.ensureAccess(userId, file!, need)
+  }
+
+  async findAccessibleById(userId: number, fileId: number, need: number): Promise<OwnedFile> {
+    const row = await this.db.prepare('SELECT * FROM files WHERE id = ?').bind(fileId).first()
+    if (!row) throw fileNotFoundError
+    const [file] = await this.attachAccess([this.toOwned(row)])
+    return this.ensureAccess(userId, file!, need)
+  }
+
+  private async ensureAccess(userId: number, file: OwnedFile, need: number): Promise<OwnedFile> {
+    if (file.userId === userId) return file
     const resolved = await this.resolveAccessForFile(userId, file)
+    if (resolved.mask === 0) throw fileNotFoundError
     if (!hasPermission(resolved.mask, need)) {
-      throw createError({ statusCode: 403, statusMessage: '没有该文件的操作权限' })
+      throw createError({ statusCode: 403, statusMessage: '该文件的权限不足' })
     }
     return file
+  }
+
+  /**
+   * 列出目录下的文件。ownerId 是该目录的属主——子树的行天然都属于他，
+   * 所以访客不是属主时也能继续给 SQL 加 user_id 过滤（保持纵深防御）。
+   */
+  async listFolderContents(folderId: number | null, ownerId: number): Promise<OwnedFile[]> {
+    const sql = folderId === null
+      ? 'SELECT * FROM files WHERE user_id = ? AND folder_id IS NULL ORDER BY created_at DESC'
+      : 'SELECT * FROM files WHERE user_id = ? AND folder_id = ? ORDER BY created_at DESC'
+    const args = folderId === null ? [ownerId] : [ownerId, folderId]
+    const res = await this.db.prepare(sql).bind(...args).all()
+    return this.attachAccess((res?.results || []).map((row: any) => this.toOwned(row)))
   }
 
   /** 该文件被直接授权给哪些人（不含从父文件夹继承的） */

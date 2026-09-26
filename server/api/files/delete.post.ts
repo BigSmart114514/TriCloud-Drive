@@ -2,6 +2,7 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
 import { dbConnectionError } from '~~/types/error'
+import { PERM_DELETE } from '~~/types/share'
 
 export default defineEventHandler(async (event) => {
   try {
@@ -28,8 +29,9 @@ export default defineEventHandler(async (event) => {
 
     const fileService = new FileService(db)
 
-    // 归属校验：非本人文件一律 404，不区分「不存在」与「无权限」
-    const fileRecord = await fileService.assertOwnedById(userId, Number(fileId))
+    // 所有者或被授权人（需要删除权限）
+    const fileRecord = await fileService.findAccessibleById(userId, Number(fileId), PERM_DELETE)
+    const ownerId = fileRecord.userId
 
     // 如果配置了腾讯云密钥，则删除COS中的文件
     let cosDeleteSuccess = false
@@ -78,10 +80,10 @@ export default defineEventHandler(async (event) => {
     }
 
     // 从数据库中删除文件记录
-    await fileService.deleteOwned(userId, Number(fileId))
+    await fileService.deleteOwned(ownerId, Number(fileId))
 
-    // 重算法：根据该用户当前files总和重算 usedStorage
-    await fileService.recalculateUsedStorage(userId)
+    // 重算法：算的是属主的用量，被授权人代删时不能记到自己头上
+    await fileService.recalculateUsedStorage(ownerId)
 
     // 查询最新 usedStorage 以便返回给前端（可用于即时更新UI）
     /*const userAfter = await db

@@ -3,6 +3,7 @@ import { defineEventHandler, readBody, createError } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
+import { PERM_WRITE } from '~~/types/share'
 
 function isUniqueError(err: any) {
   return (
@@ -35,11 +36,12 @@ export default defineEventHandler(async (event) => {
 
   const fileService = new FileService(db)
 
-  // 归属校验，不存在与不属于本人统一 404
-  await fileService.assertOwnedById(userId, fileId)
+  // 所有者或被授权人（需要写权限）；完全无权返回 404，权限不够返回 403
+  const file = await fileService.findAccessibleById(userId, fileId, PERM_WRITE)
 
   try {
-    await fileService.updateName(userId, fileId, newName)
+    // 写入仍按属主 id 限定，保持 SQL 层的纵深防御
+    await fileService.updateName(file.userId, fileId, newName)
     return { success: true }
   } catch (err: any) {
     if (isUniqueError(err)) {
