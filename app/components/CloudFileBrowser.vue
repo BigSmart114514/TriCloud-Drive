@@ -209,7 +209,7 @@
     />
 
     <transition name="slide-up">
-      <div v-show="selectedCount > 0" class="fixed bottom-0 inset-x-0 z-40 sm:hidden bg-white border-t px-3 py-2 pb-[calc(env(safe-area-inset-bottom)+8px)]">
+      <div v-show="selectedCount > 0" data-liquid class="ui-glass fixed bottom-0 inset-x-0 z-40 sm:hidden bg-white border-t px-3 py-2 pb-[calc(env(safe-area-inset-bottom)+8px)]">
         <div class="flex items-center justify-between">
           <span class="text-sm text-gray-700">已选 {{ selectedCount }} 项</span>
           <div class="flex items-center gap-3">

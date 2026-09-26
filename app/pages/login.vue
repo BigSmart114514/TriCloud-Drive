@@ -8,7 +8,7 @@
       <div class="float-circle circle4"></div>
     </div>
     
-    <div class="login-card">
+    <div data-liquid class="login-card">
       <!-- 左侧装饰 -->
       <div class="decoration">
         <div class="logo-container">

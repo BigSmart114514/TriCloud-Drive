@@ -4,6 +4,8 @@ export default defineNuxtConfig({
 
   modules: ['@nuxtjs/tailwindcss'],
 
+  css: ['~/assets/css/experimental.css'],
+
   nitro: {
     preset: 'node-server',
     experimental: {

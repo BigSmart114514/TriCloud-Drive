@@ -1,5 +1,5 @@
 <template>
-  <div class="fixed inset-0 z-50 flex flex-col bg-white">
+  <div data-liquid class="fixed inset-0 z-50 flex flex-col bg-white">
     <div class="flex items-center justify-between border-b px-4 py-3">
       <div class="min-w-0">
         <p class="text-xs text-gray-500">{{ zipEntry ? '压缩包内文件预览' : '文件预览' }}</p>

@@ -75,6 +75,15 @@ function injectStyleOnce() {
     word-break: break-word;
     flex: 1;
   }
+
+  html[data-ui='experimental'] .nuxt-notify-toast {
+    background: rgba(255, 255, 255, 0.72);
+    color: #0F172A;
+    border: 1px solid rgba(255, 255, 255, 0.7);
+    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
+    backdrop-filter: blur(18px) saturate(180%);
+    -webkit-backdrop-filter: blur(18px) saturate(180%);
+  }
   `;
   document.head.appendChild(style);
   styleInjected = true;

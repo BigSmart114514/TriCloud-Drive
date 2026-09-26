@@ -143,7 +143,7 @@
     <transition name="fade">
       <div v-if="rowMenuOpen" class="fixed inset-0 z-50 sm:hidden">
         <div class="absolute inset-0 bg-black/30" @click="closeRowMenu" />
-        <div class="absolute inset-x-0 bottom-0 bg-white rounded-t-2xl p-3 pb-[calc(env(safe-area-inset-bottom)+12px)] shadow-xl">
+        <div data-liquid class="ui-glass absolute inset-x-0 bottom-0 bg-white rounded-t-2xl p-3 pb-[calc(env(safe-area-inset-bottom)+12px)] shadow-xl">
           <div class="mx-auto h-1.5 w-12 rounded bg-gray-300 mb-3" />
           <div class="grid grid-cols-4 gap-2 text-center text-xs">
             <template v-if="rowMenu?.type === 'file'">
