@@ -46,9 +46,11 @@ export default defineNuxtConfig({
     dbPath: process.env.SQLITE_PATH || './data.sqlite',
     https: process.env.HTTPS === 'true',
     maxConcurrency: parseInt(process.env.COS_COPY_CONCURRENCY || '3'),
+    TimeZone: process.env.TIMEZONE || '+8',
     public: {
       apiBase: '',
-      allowRegister: process.env.ALLOW_REGISTER === 'true'
+      allowRegister: process.env.ALLOW_REGISTER === 'true',
+      TimeZone: process.env.TIMEZONE || '+8'
     }
   },
   build: {

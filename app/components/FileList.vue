@@ -196,6 +196,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { formatFileSize } from '~/utils/format'
+import { formatDateTime } from '~/utils/time'
 import FileIcon from '~/components/FileIcon.vue'
 import type { FileListFile, FileListFolder, FileListId } from '~~/types/file-list'
 import {
@@ -255,19 +256,7 @@ const hasItems = computed(() => props.folders.length + props.files.length > 0)
 const rowMenuOpen = ref(false)
 const rowMenu = ref<{ type: 'file' | 'folder'; item: FileListFile | FileListFolder } | null>(null)
 
-const formatDate = (value?: string | null) => {
-  if (!value) return ''
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return value
-  return date.toLocaleString('zh-CN', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit'
-  })
-}
+const formatDate = (value?: string | null) => formatDateTime(value)
 
 const openRowMenu = (type: 'file' | 'folder', item: FileListFile | FileListFolder) => {
   rowMenu.value = { type, item }

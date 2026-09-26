@@ -13,7 +13,7 @@
       </div>
       <div>
         <dt class="text-sm font-medium text-gray-500">注册时间</dt>
-        <dd class="text-sm text-gray-900">{{ formatToUTC8(user?.created_at) }}</dd>
+        <dd class="text-sm text-gray-900">{{ formatDateTime(user?.created_at) }}</dd>
       </div>
       <div>
         <dt class="text-sm font-medium text-gray-500">用户ID</dt>
@@ -33,14 +33,14 @@
       </div>
       <div>
         <dt class="text-sm font-medium text-gray-500">到期时间</dt>
-        <dd class="text-sm text-gray-900">{{ formatToUTC8(user?.expire_at) }}</dd>
+        <dd class="text-sm text-gray-900">{{ formatDateTime(user?.expire_at) }}</dd>
       </div>
     </dl>
   </div>
 </template>
 
 <script setup lang="ts">
-import { formatToUTC8 } from '~~/server/utils/time'
+import { formatDateTime } from '~/utils/time'
 import { formatFileSize } from '~/utils/format'
 const { user } = useAuth()
 </script>

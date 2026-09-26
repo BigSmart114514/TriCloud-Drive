@@ -139,7 +139,7 @@
                 <dd class="text-2xl font-semibold text-gray-900">{{ totalCount }}</dd>
               </div>
               <div v-if="loading" class="text-sm text-gray-500">正在加载用户数据...</div>
-              <div v-else class="text-sm text-gray-500">最近刷新：{{ lastRefreshed ? formatToUTC8(lastRefreshed) : '—' }}</div>
+              <div v-else class="text-sm text-gray-500">最近刷新：{{ lastRefreshed ? formatDateTime(lastRefreshed) : '—' }}</div>
             </dl>
           </div>
         </div>
@@ -180,7 +180,7 @@
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ u.id }}</td>
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ u.email }}</td>
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">{{ u.username }}</td>
-                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ formatToUTC8(u.created_at) }}</td>
+                  <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{{ formatDateTime(u.created_at) }}</td>
                   <!-- 套餐过期时间 -->
                   <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
                     <input
@@ -311,7 +311,7 @@
 </template>
 
 <script setup lang="ts">
-import { formatToUTC8 } from '~~/server/utils/time'
+import { formatDateTime } from '~/utils/time'
 import { notify } from '~/utils/notify'
 
 type DbUser = {
@@ -502,7 +502,7 @@ const fetchUsers = async () => {
       maxStorage: formatBytes(Number(u.maxStorage ?? 0)),
       usedDownload: formatBytes(Number(u.usedDownload ?? 0)),
       maxDownload: formatBytes(Number(u.maxDownload ?? 0)),
-      expire_at: u.expire_at ? formatToUTC8(u.expire_at) : ''
+      expire_at: u.expire_at ? formatDateTime(u.expire_at) : ''
     }))
     totalCount.value = resp.totalCount || 0
     lastRefreshed.value = new Date().toISOString()
