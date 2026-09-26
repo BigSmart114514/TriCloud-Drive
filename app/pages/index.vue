@@ -31,7 +31,7 @@
       </div>
 
       <div v-else class="px-4 py-6 sm:px-0">
-        <FileList
+        <CloudFileBrowser
           ref="fileListRef"
           @folder-change="onFolderChange"
         />
@@ -42,6 +42,7 @@
 
 <script setup lang="ts">
 import { KeyIcon } from '@heroicons/vue/24/outline'
+import CloudFileBrowser from '~/components/CloudFileBrowser.vue'
 
 const { isLoggedIn } = useAuth()
 const fileListRef = ref()

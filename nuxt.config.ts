@@ -52,12 +52,12 @@ export default defineNuxtConfig({
     }
   },
   build: {
-    transpile: ['@zip.js/zip.js', 'streamsaver']
+    transpile: ['@zip.js/zip.js', 'streamsaver', '7z-wasm']
   },
   vite: {
     optimizeDeps: {
       // 重要：不要预打包 @zip.js/zip.js，避免 dev 时 esbuild 选到 Node 条件
-      exclude: ['@zip.js/zip.js'],
+      exclude: ['@zip.js/zip.js', '7z-wasm'],
       // 不要 include '@zip.js/zip.js'
       include: [
         '@heroicons/vue/24/outline',

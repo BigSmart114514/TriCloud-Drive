@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { useAuth } from '~/composables/useAuth'
-import FileList from '~/components/FileList.vue'
+import CloudFileBrowser from '~/components/CloudFileBrowser.vue'
 
 definePageMeta({ title: '管理员 - 文件总览' })
 
@@ -136,7 +136,7 @@ await fetchUsers()
           </div>
 
           <div v-else>
-            <FileList
+            <CloudFileBrowser
               :key="selectedUserId"
               :target-user-id="selectedUserId!"
               :title="`用户：${selectedUser.username || selectedUser.email}（ID: ${selectedUser.id}）`"

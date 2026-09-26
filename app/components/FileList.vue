@@ -1,198 +1,127 @@
 <template>
-  <div
-    class="bg-white rounded-lg shadow p-4 sm:p-6 transition-colors"
-    @dragover.prevent
-    @dragenter.prevent="onDragEnter"
-    @dragleave.prevent="onDragLeave"
-    @drop.prevent="handleDrop"
-    :class="{ 'border-2 border-dashed border-indigo-400 bg-indigo-50': isDragging }"
-  >
-    
-
-    <!-- 隐藏的文件选择器 -->
-    <input ref="fileInputRef" type="file" multiple class="hidden" @change="handleFileSelect" />
-    <input ref="folderInputRef" type="file" webkitdirectory directory multiple class="hidden" @change="handleFolderSelect" />
-
-    <!-- 上传进度与错误 -->
-    <div v-if="uploading" class="mt-2 mb-4">
-      <div class="flex items-center justify-between text-sm text-gray-600 mb-2">
-        <span>上传中...</span>
-        <span>{{ uploadProgress.percent }}%</span>
-      </div>
-      <div class="w-full bg-gray-200 rounded-full h-2">
-        <div class="bg-indigo-600 h-2 rounded-full transition-all duration-300" :style="{ width: uploadProgress.percent + '%' }"></div>
-      </div>
-    </div>
-    <div v-if="uploadError" class="mt-2 mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700">
-      {{ uploadError }}
-    </div>
-
-    <!-- 加载状态 -->
+  <div :class="framed ? 'bg-white rounded-lg shadow p-4 sm:p-6 transition-colors' : 'transition-colors'">
     <div v-if="loading" class="text-center py-8">
       <div class="inline-flex items-center">
         <svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
           <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-          <path class="opacity-75" fill="currentColor"
-            d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z">
-          </path>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
         </svg>
         <span class="text-gray-600">加载中...</span>
       </div>
     </div>
 
-    <!-- 列表 -->
     <div v-else-if="hasItems" class="space-y-3">
-      <!-- 文件夹 -->
       <div
         v-for="folder in folders"
-        :key="'folder-' + folder.id"
+        :key="`folder-${folder.id}`"
         class="flex items-center gap-2 p-3 sm:p-4 border border-gray-200 rounded-lg hover:bg-gray-50"
       >
-        <!-- 左侧：flex-1 + min-w-0 才能让 truncate 生效 -->
         <div class="flex items-center gap-3 flex-1 min-w-0">
           <input
+            v-if="selectable"
             type="checkbox"
             class="h-4 w-4 shrink-0 text-indigo-600 rounded border-gray-300"
-            :checked="selectedFolderIds.has(folder.id)"
-            @change.stop="toggleSelectFolder(folder)"
+            :checked="selectedFolderIds?.has(folder.id) || false"
+            @change.stop="emit('toggle-folder', folder)"
             @click.stop
             :title="`选择文件夹：${folder.name}`"
           />
-          <div class="shrink-0 cursor-pointer" @click="handleNavigateToFolder(folder)">
+          <div class="shrink-0 cursor-pointer" @click="emit('navigate-folder', folder)">
             <svg class="h-8 w-8 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
               <path d="M2 6a2 2 0 012-2h3l2 2h7a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
             </svg>
           </div>
-          <div class="flex-1 min-w-0 cursor-pointer" @click="handleNavigateToFolder(folder)">
-            <p class="text-sm sm:text-base font-medium text-gray-900 truncate">
-              {{ folder.name }}
-            </p>
-            <p class="text-xs sm:text-sm text-gray-500 truncate">
-              {{ formatToUTC8(folder.createdAt) }}
-            </p>
+          <div class="flex-1 min-w-0 cursor-pointer" @click="emit('navigate-folder', folder)">
+            <p class="text-sm sm:text-base font-medium text-gray-900 truncate">{{ folder.name }}</p>
+            <p v-if="formatDate(folder.createdAt)" class="text-xs sm:text-sm text-gray-500 truncate">{{ formatDate(folder.createdAt) }}</p>
           </div>
         </div>
 
-        <!-- 右侧：shrink-0 + 紧凑间距 -->
-        <div class="flex items-center gap-1 shrink-0">
-          <!-- 大屏：完整按钮组 -->
+        <div v-if="showActions" class="flex items-center gap-1 shrink-0">
           <div class="hidden sm:flex items-center gap-0.5">
             <button
               class="p-1 text-sm text-blue-600 hover:text-blue-500"
-              @click.stop="downloadFolder(folder)"
-              :disabled="downloadingFolderId2 === folder.id"
+              @click.stop="emit('download-folder', folder)"
+              :disabled="downloadingFolderId === folder.id"
               title="下载"
               aria-label="下载"
             >
-              <template v-if="downloadingFolderId2 === folder.id">
-                <svg class="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
-                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
-                  <path class="opacity-75" fill="currentColor"
-                        d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-                </svg>
-              </template>
-              <template v-else>
-                <ArrowDownTrayIcon class="h-5 w-5" />
-              </template>
+              <svg v-if="downloadingFolderId === folder.id" class="animate-spin h-5 w-5 text-blue-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+              <ArrowDownTrayIcon v-else class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-red-600 hover:text-red-500" @click.stop="deleteFolder(folder)" title="删除" aria-label="删除">
+            <button class="p-1 text-sm text-red-600 hover:text-red-500" @click.stop="emit('delete-folder', folder)" title="删除" aria-label="删除">
               <TrashIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-gray-600 hover:text-gray-800" @click.stop="renameFolder(folder)" title="重命名" aria-label="重命名">
+            <button class="p-1 text-sm text-gray-600 hover:text-gray-800" @click.stop="emit('rename-folder', folder)" title="重命名" aria-label="重命名">
               <PencilSquareIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="clipFolder(folder)" title="剪贴" aria-label="剪贴">
+            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-folder', folder)" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="copyFolder(folder)" title="复制" aria-label="复制">
+            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-folder', folder)" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
-            <!-- <button
-              class="p-1 flex items-center text-sm text-gray-400 hover:text-gray-600"
-              @click="handleNavigateToFolder(folder)"
-              title="进入"
-              aria-label="进入"
-            >
-              <ArrowRightIcon class="h-5 w-5" />
-            </button> -->
           </div>
-
-          <!-- 小屏：下载 + 更多 + 进入 -->
           <div class="flex sm:hidden items-center gap-1">
-            <button class="p-1 text-blue-600 hover:text-blue-500" @click.stop="downloadFolder(folder)" title="下载" aria-label="下载">
+            <button class="p-1 text-blue-600 hover:text-blue-500" :disabled="downloadingFolderId === folder.id" @click.stop="emit('download-folder', folder)" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5" />
             </button>
             <button class="p-1 text-gray-600 hover:text-gray-800" @click.stop="openRowMenu('folder', folder)" title="更多" aria-label="更多">
               <EllipsisVerticalIcon class="h-5 w-5" />
             </button>
-            <!-- <button
-              class="p-1 flex items-center text-sm text-gray-400 hover:text-gray-600"
-              @click="handleNavigateToFolder(folder)"
-              title="进入"
-              aria-label="进入"
-            >
-              <ArrowRightIcon class="h-5 w-5" />
-            </button> -->
           </div>
         </div>
       </div>
 
-      <!-- 文件 -->
       <div
         v-for="file in files"
-        :key="'file-' + file.id"
+        :key="`file-${file.id}`"
         class="flex items-center gap-2 p-3 sm:p-4 border border-gray-200 rounded-lg hover:bg-gray-50"
       >
-        <!-- 左侧：flex-1 + min-w-0 -->
         <div class="flex items-center gap-3 flex-1 min-w-0">
           <input
+            v-if="selectable"
             type="checkbox"
             class="h-4 w-4 shrink-0 text-indigo-600 rounded border-gray-300"
-            :checked="selectedFileIds.has(file.id)"
-            @change.stop="toggleSelectFile(file)"
+            :checked="selectedFileIds?.has(file.id) || false"
+            @change.stop="emit('toggle-file', file)"
             @click.stop
             :title="`选择文件：${file.filename}`"
           />
           <div class="shrink-0">
             <FileIcon class="h-8 w-8 text-gray-400" :filename="file.filename" />
           </div>
-          <div class="flex-1 min-w-0 cursor-pointer" @click="openPreview(file)">
-            <p class="text-sm sm:text-base font-medium text-gray-900 truncate">
-              {{ file.filename }}
-            </p>
+          <div class="flex-1 min-w-0 cursor-pointer" @click="emit('preview-file', file)">
+            <p class="text-sm sm:text-base font-medium text-gray-900 truncate">{{ file.filename }}</p>
             <p class="text-xs sm:text-sm text-gray-500 truncate">
-              {{ formatFileSize(file.fileSize) }} • {{ formatToUTC8(file.createdAt) }}
+              {{ formatFileSize(file.fileSize) }}<span v-if="formatDate(file.createdAt)"> • {{ formatDate(file.createdAt) }}</span>
             </p>
           </div>
         </div>
 
-        <!-- 右侧：shrink-0 + 紧凑间距 -->
-        <div class="flex items-center gap-1 shrink-0">
-          <!-- 大屏：完整按钮组 -->
+        <div v-if="showActions" class="flex items-center gap-1 shrink-0">
           <div class="hidden sm:flex items-center gap-0.5">
-            <!-- <button @click="openPreview(file)" class="p-1 text-sm text-gray-600 hover:text-gray-800" title="预览" aria-label="预览">
-              <EyeIcon class="h-5 w-5" />
-            </button> -->
-            <button @click="downloadFile(file)" class="p-1 text-sm text-blue-600 hover:text-blue-500" title="下载" aria-label="下载">
+            <button class="p-1 text-sm text-blue-600 hover:text-blue-500" @click.stop="emit('download-file', file)" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5" />
             </button>
-            <button @click="renameFile(file)" class="p-1 text-sm text-gray-600 hover:text-gray-800" title="重命名" aria-label="重命名">
+            <button class="p-1 text-sm text-gray-600 hover:text-gray-800" @click.stop="emit('rename-file', file)" title="重命名" aria-label="重命名">
               <PencilSquareIcon class="h-5 w-5" />
             </button>
-            <button @click="deleteFile(file)" class="p-1 text-sm text-red-600 hover:text-red-500" title="删除" aria-label="删除">
+            <button class="p-1 text-sm text-red-600 hover:text-red-500" @click.stop="emit('delete-file', file)" title="删除" aria-label="删除">
               <TrashIcon class="h-5 w-5" />
             </button>
-            <button @click="clipFile(file)" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" title="剪贴" aria-label="剪贴">
+            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-file', file)" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
-            <button @click="copyFile(file)" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" title="复制" aria-label="复制">
+            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-file', file)" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
           </div>
-
-          <!-- 小屏：下载 + 更多 -->
           <div class="flex sm:hidden items-center gap-1">
-            <button class="p-1 text-blue-600 hover:text-blue-500" @click="downloadFile(file)" title="下载" aria-label="下载">
+            <button class="p-1 text-blue-600 hover:text-blue-500" @click.stop="emit('download-file', file)" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5" />
             </button>
             <button class="p-1 text-gray-600 hover:text-gray-800" @click.stop="openRowMenu('file', file)" title="更多" aria-label="更多">
@@ -203,322 +132,183 @@
       </div>
     </div>
 
-    <!-- 空状态 -->
     <div v-else class="text-center py-8">
       <svg class="mx-auto h-12 w-12 text-gray-400" stroke="currentColor" fill="none" viewBox="0 0 48 48">
-        <path
-          d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02"
-          stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
+        <path d="M28 8H12a4 4 0 00-4 4v20m32-12v8m0 0v8a4 4 0 01-4 4H12a4 4 0 01-4-4v-4m32-4l-3.172-3.172a4 4 0 00-5.656 0L28 28M8 32l9.172-9.172a4 4 0 015.656 0L28 28m0 0l4 4m4-24h8m-4-4v8m-12 4h.02" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" />
       </svg>
-      <h3 class="mt-2 text-sm font-medium text-gray-900">这里空空如也</h3>
-      <p class="mt-1 text-sm text-gray-500">拖拽文件/文件夹到此处上传，或使用右上角“上传”按钮。</p>
+      <h3 class="mt-2 text-sm font-medium text-gray-900">{{ emptyTitle }}</h3>
+      <p class="mt-1 text-sm text-gray-500">{{ emptyDescription }}</p>
     </div>
 
-    <!-- 小屏行内操作菜单（底部抽屉，已加图标） -->
     <transition name="fade">
       <div v-if="rowMenuOpen" class="fixed inset-0 z-50 sm:hidden">
-        <div class="absolute inset-0 bg-black/30" @click="closeRowMenu"></div>
+        <div class="absolute inset-0 bg-black/30" @click="closeRowMenu" />
         <div class="absolute inset-x-0 bottom-0 bg-white rounded-t-2xl p-3 pb-[calc(env(safe-area-inset-bottom)+12px)] shadow-xl">
-          <div class="mx-auto h-1.5 w-12 rounded bg-gray-300 mb-3"></div>
+          <div class="mx-auto h-1.5 w-12 rounded bg-gray-300 mb-3" />
           <div class="grid grid-cols-4 gap-2 text-center text-xs">
-            <!-- 文件动作 -->
-            <button
-                v-if="rowMenu?.type==='file'"
-                class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center"
-                @click="openPreview(rowMenu.item as FileRecord); closeRowMenu()"
-                aria-label="预览"
-              >
-              <EyeIcon class="h-6 w-6 text-gray-700" />
-              <span class="mt-1">预览</span>
-            </button>
-            <button
-              v-if="rowMenu?.type==='file'"
-              class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center"
-              @click="renameFile(rowMenu.item as FileRecord); closeRowMenu()"
-              aria-label="重命名"
-            >
-              <PencilSquareIcon class="h-6 w-6 text-gray-700" />
-              <span class="mt-1">重命名</span>
-            </button>
-            <button
-              v-if="rowMenu?.type==='file'"
-              class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center"
-              @click="deleteFile(rowMenu.item as FileRecord); closeRowMenu()"
-              aria-label="删除"
-            >
-              <TrashIcon class="h-6 w-6 text-red-600" />
-              <span class="mt-1">删除</span>
-            </button>
-            <button
-              v-if="rowMenu?.type==='file'"
-              class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center"
-              @click="clipFile(rowMenu.item as FileRecord); closeRowMenu()"
-              aria-label="剪贴"
-            >
-              <ScissorsIcon class="h-6 w-6 text-indigo-600" />
-              <span class="mt-1">剪贴</span>
-            </button>
-            <button
-              v-if="rowMenu?.type==='file'"
-              class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center"
-              @click="copyFile(rowMenu.item as FileRecord); closeRowMenu()"
-              aria-label="复制"
-            >
-              <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
-              <span class="mt-1">复制</span>
-            </button>
-
-            <!-- 文件夹动作 -->
-            <button
-              v-if="rowMenu?.type==='folder'"
-              class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center"
-              @click="renameFolder(rowMenu.item as FolderRecord); closeRowMenu()"
-              aria-label="重命名"
-            >
-              <PencilSquareIcon class="h-6 w-6 text-gray-700" />
-              <span class="mt-1">重命名</span>
-            </button>
-            <button
-              v-if="rowMenu?.type==='folder'"
-              class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center"
-              @click="deleteFolder(rowMenu.item as FolderRecord); closeRowMenu()"
-              aria-label="删除"
-            >
-              <TrashIcon class="h-6 w-6 text-red-600" />
-              <span class="mt-1">删除</span>
-            </button>
-            <button
-              v-if="rowMenu?.type==='folder'"
-              class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center"
-              @click="clipFolder(rowMenu.item as FolderRecord); closeRowMenu()"
-              aria-label="剪贴"
-            >
-              <ScissorsIcon class="h-6 w-6 text-indigo-600" />
-              <span class="mt-1">剪贴</span>
-            </button>
-            <button
-              v-if="rowMenu?.type==='folder'"
-              class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center"
-              @click="copyFolder(rowMenu.item as FolderRecord); closeRowMenu()"
-              aria-label="复制"
-            >
-              <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
-              <span class="mt-1">复制</span>
-            </button>
+            <template v-if="rowMenu?.type === 'file'">
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('preview-file')">
+                <EyeIcon class="h-6 w-6 text-gray-700" />
+                <span class="mt-1">预览</span>
+              </button>
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('rename-file')">
+                <PencilSquareIcon class="h-6 w-6 text-gray-700" />
+                <span class="mt-1">重命名</span>
+              </button>
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('delete-file')">
+                <TrashIcon class="h-6 w-6 text-red-600" />
+                <span class="mt-1">删除</span>
+              </button>
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('clip-file')">
+                <ScissorsIcon class="h-6 w-6 text-indigo-600" />
+                <span class="mt-1">剪贴</span>
+              </button>
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('copy-file')">
+                <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
+                <span class="mt-1">复制</span>
+              </button>
+            </template>
+            <template v-else-if="rowMenu?.type === 'folder'">
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('rename-folder')">
+                <PencilSquareIcon class="h-6 w-6 text-gray-700" />
+                <span class="mt-1">重命名</span>
+              </button>
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('delete-folder')">
+                <TrashIcon class="h-6 w-6 text-red-600" />
+                <span class="mt-1">删除</span>
+              </button>
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('clip-folder')">
+                <ScissorsIcon class="h-6 w-6 text-indigo-600" />
+                <span class="mt-1">剪贴</span>
+              </button>
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('copy-folder')">
+                <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
+                <span class="mt-1">复制</span>
+              </button>
+            </template>
           </div>
         </div>
       </div>
     </transition>
-
-    <!-- 小屏底部操作条：有选中时出现 -->
-    <transition name="slide-up">
-      <div v-show="selectedCount > 0" class="fixed bottom-0 inset-x-0 z-40 sm:hidden bg-white border-t px-3 py-2 pb-[calc(env(safe-area-inset-bottom)+8px)]">
-        <div class="flex items-center justify-between">
-          <span class="text-sm text-gray-700">已选 {{ selectedCount }} 项</span>
-          <div class="flex items-center gap-3">
-            <button class="p-1 text-red-600 disabled:opacity-50" :disabled="bulkDeleting" @click="deleteSelected" title="删除" aria-label="删除">
-              <TrashIcon class="h-5 w-5"/>
-            </button>
-            <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="bulkDownloading" @click="downloadSelected" title="下载" aria-label="下载">
-              <ArrowDownTrayIcon class="h-5 w-5"/>
-            </button>
-            <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="selectedCount===0" @click="clipSelection" title="剪贴" aria-label="剪贴">
-              <ScissorsIcon class="h-5 w-5"/>
-            </button>
-            <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="selectedCount===0" @click="copySelection" title="复制" aria-label="复制">
-              <DocumentDuplicateIcon class="h-5 w-5"/>
-            </button>
-            <button class="p-1 text-green-600 disabled:opacity-50" :disabled="!hasClipboard || pasting" @click="pasteClipboard" title="粘贴" aria-label="粘贴">
-              <ClipboardDocumentCheckIcon class="h-5 w-5"/>
-            </button>
-          </div>
-        </div>
-      </div>
-    </transition>
-
-    <!-- 小屏悬浮上传按钮（避免滚回顶部） -->
-    <button
-      class="fixed sm:hidden bottom-[72px] right-4 h-12 w-12 rounded-full bg-indigo-600 text-white shadow-lg flex items-center justify-center"
-      @click.stop="toggleUploadMenu"
-      title="上传"
-      aria-label="上传"
-    >
-      <ArrowUpTrayIcon class="h-6 w-6" />
-    </button>
-    <!-- 全屏文件预览 -->
-    <FilePreviewer
-      v-if="previewingFile"
-      :file="previewingFile"
-      :current-folder-id="currentFolderId"
-      :target-user-id="targetUserIdRef?.value ?? null"
-      @close="closePreview"
-      @saved="fetchFiles"
-    />
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, toRef, watch, computed } from 'vue'
-import { formatToUTC8 } from '~~/server/utils/time'
-import { useFileBrowser } from '~/composables/useFileBrowser'
-import { useDualSelection } from '~/composables/useDualSelection'
-import { useBulkActions } from '~/composables/useBulkActions'
+import { computed, ref } from 'vue'
 import { formatFileSize } from '~/utils/format'
-import { useFileUpload } from '~/composables/useFileUpload'
-import type { FolderRecord, FileRecord } from '~/types/file-browser'
-import { useClipboard } from '~/composables/useClipboard'
-import { useUploadMenu } from '~/composables/useUploadMenu'
-import { useNameEditing } from '~/composables/useNameEditing'
-import { useFolderDownload } from '~/composables/useFolderDownload'
-import { useDnDUpload } from '~/composables/useDnDUpload'
 import FileIcon from '~/components/FileIcon.vue'
-import FilePreviewer from '~/components/FilePreviewer.vue'
-import { EyeIcon } from '@heroicons/vue/24/outline'
-
-/* 引入图标 */
+import type { FileListFile, FileListFolder, FileListId } from '~~/types/file-list'
 import {
-  ArrowLeftIcon,
-  TrashIcon,
   ArrowDownTrayIcon,
-  ScissorsIcon,
   DocumentDuplicateIcon,
-  ClipboardDocumentCheckIcon,
-  ArrowUpTrayIcon,
-  FolderPlusIcon,
-  ArrowPathIcon,
+  EllipsisVerticalIcon,
+  EyeIcon,
   PencilSquareIcon,
-  ArrowRightIcon,
-  DocumentArrowUpIcon,
-  EllipsisVerticalIcon
+  ScissorsIcon,
+  TrashIcon
 } from '@heroicons/vue/24/outline'
 
-const props = defineProps<{
-  targetUserId?: number | null
-  title?: string
-}>()
-const targetUserIdRef = toRef(props, 'targetUserId')
-
-const previewingFile = ref<FileRecord | null>(null)
-const openPreview = (file: FileRecord) => { previewingFile.value = file }
-const closePreview = () => { previewingFile.value = null }
-
-
-// 三态单选与两个布尔变量的映射
-const conflictStrategy = computed<'overwrite' | 'skip' | 'rename'>({
-  get() {
-    if (overwriteExisting.value) return 'overwrite'
-    if (skipExisting.value) return 'skip'
-    return 'rename'
-  },
-  set(v) {
-    overwriteExisting.value = v === 'overwrite'
-    skipExisting.value = v === 'skip'
-  }
+const props = withDefaults(defineProps<{
+  folders?: FileListFolder[]
+  files?: FileListFile[]
+  loading?: boolean
+  selectable?: boolean
+  showActions?: boolean
+  framed?: boolean
+  downloadingFolderId?: FileListId | null
+  selectedFolderIds?: ReadonlySet<FileListId>
+  selectedFileIds?: ReadonlySet<FileListId>
+  emptyTitle?: string
+  emptyDescription?: string
+}>(), {
+  folders: () => [],
+  files: () => [],
+  loading: false,
+  selectable: true,
+  showActions: true,
+  framed: true,
+  downloadingFolderId: null,
+  selectedFolderIds: undefined,
+  selectedFileIds: undefined,
+  emptyTitle: '这里空空如也',
+  emptyDescription: '当前目录没有可显示的内容。'
 })
 
-/* 列表/导航 */
-const {
-  folders, files, loading, hasItems,
-  currentFolderId, breadcrumbs,
-  fetchFiles, navigateToFolder, goUp, goToBreadcrumb
-} = useFileBrowser({ targetUserId: targetUserIdRef })
+const emit = defineEmits<{
+  'navigate-folder': [folder: FileListFolder]
+  'preview-file': [file: FileListFile]
+  'toggle-folder': [folder: FileListFolder]
+  'toggle-file': [file: FileListFile]
+  'download-folder': [folder: FileListFolder]
+  'delete-folder': [folder: FileListFolder]
+  'rename-folder': [folder: FileListFolder]
+  'clip-folder': [folder: FileListFolder]
+  'copy-folder': [folder: FileListFolder]
+  'download-file': [file: FileListFile]
+  'delete-file': [file: FileListFile]
+  'rename-file': [file: FileListFile]
+  'clip-file': [file: FileListFile]
+  'copy-file': [file: FileListFile]
+}>()
 
-/* 选择/全选 */
-const {
-  masterCheckboxRef,
-  selectedFolderIds, selectedFileIds,
-  selectedCount, isAllSelected,
-  toggleSelectAll, toggleSelectFolder, toggleSelectFile,
-  clearSelection, reconcileSelection
-} = useDualSelection(folders, files)
-
-/* 批量操作&单项文件/文件夹操作 */
-const {
-  bulkDeleting, bulkDownloading,
-  downloadFile, deleteFile, deleteFolder,
-  deleteSelected, downloadSelected
-} = useBulkActions(folders, files, selectedFolderIds, selectedFileIds, { targetUserId: targetUserIdRef })
-
-/* 上传相关 */
-const { uploading, uploadProgress, uploadError, uploadMultipleFiles } = useFileUpload({ targetUserId: targetUserIdRef })
-
-/* 上传悬浮菜单 */
-const { showUploadMenu, uploadMenuRef, openUploadMenu, scheduleCloseUploadMenu, toggleUploadMenu } = useUploadMenu()
-const closeUploadMenu = () => { showUploadMenu.value = false }
-
-/* 新建/重命名 */
-const { createFolder, renameFolder, renameFile } = useNameEditing(
-  folders, files, breadcrumbs, currentFolderId, fetchFiles,
-  { targetUserId: targetUserIdRef }
-)
-
-/* 文件夹打包下载（使用 downloadingFolderId2） */
-const { downloadingFolderId: downloadingFolderId2, downloadFolder } = useFolderDownload({ targetUserId: targetUserIdRef })
-
-/* 拖拽/选择上传 */
-const {
-  isDragging, onDragEnter, onDragLeave,
-  fileInputRef, folderInputRef, overwriteExisting,
-  handleDrop, handleFileSelect, handleFolderSelect,
-  skipExisting
-} = useDnDUpload(currentFolderId, uploadMultipleFiles, fetchFiles, clearSelection, { targetUserId: targetUserIdRef })
-
-/* 剪贴板（剪贴/复制/粘贴） */
-const {
-  clipboard, pasting, hasClipboard, clipboardCount,
-  clipboardActionLabel, pasteBtnText,
-  clipSelection, copySelection, clipFolder, copyFolder, clipFile, copyFile, pasteClipboard
-} = useClipboard(
-  { selectedFolderIds, selectedFileIds, selectedCount, currentFolderId, fetchFiles, clearSelection },
-  { targetUserId: targetUserIdRef, overwriteExisting, skipExisting}
-)
-
-/* 小屏更多菜单状态 */
-const mobileMoreOpen = ref(false)
-
-/* 行内“更多”菜单（小屏） */
+const hasItems = computed(() => props.folders.length + props.files.length > 0)
 const rowMenuOpen = ref(false)
-const rowMenu = ref<{ type: 'file' | 'folder'; item: FileRecord | FolderRecord } | null>(null)
-const openRowMenu = (type: 'file' | 'folder', item: FileRecord | FolderRecord) => {
+const rowMenu = ref<{ type: 'file' | 'folder'; item: FileListFile | FileListFolder } | null>(null)
+
+const formatDate = (value?: string | null) => {
+  if (!value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return value
+  return date.toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit'
+  })
+}
+
+const openRowMenu = (type: 'file' | 'folder', item: FileListFile | FileListFolder) => {
   rowMenu.value = { type, item }
   rowMenuOpen.value = true
 }
+
 const closeRowMenu = () => {
   rowMenuOpen.value = false
   rowMenu.value = null
 }
 
-/* 保持选择状态与列表同步 */
-watch([folders, files], () => reconcileSelection())
+const runFileAction = (action: 'preview-file' | 'rename-file' | 'delete-file' | 'clip-file' | 'copy-file') => {
+  if (rowMenu.value?.type !== 'file') return
+  const file = rowMenu.value.item as FileListFile
+  if (action === 'preview-file') emit('preview-file', file)
+  if (action === 'rename-file') emit('rename-file', file)
+  if (action === 'delete-file') emit('delete-file', file)
+  if (action === 'clip-file') emit('clip-file', file)
+  if (action === 'copy-file') emit('copy-file', file)
+  closeRowMenu()
+}
 
-/* 导航封装 */
-const handleNavigateToFolder = (folder: FolderRecord) => { clearSelection(); navigateToFolder(folder) }
-const handleGoUp = () => { clearSelection(); goUp() }
-const handleGoToBreadcrumb = (index: number) => { clearSelection(); goToBreadcrumb(index) }
-
-/* 向父组件暴露/事件 */
-const emit = defineEmits<{ 'folder-change': [number | null] }>()
-watch(currentFolderId, (id) => emit('folder-change', id), { immediate: true })
-
-defineExpose({
-  fetchFiles,
-  currentFolderId,
-  breadcrumbs
-})
+const runFolderAction = (action: 'rename-folder' | 'delete-folder' | 'clip-folder' | 'copy-folder') => {
+  if (rowMenu.value?.type !== 'folder') return
+  const folder = rowMenu.value.item as FileListFolder
+  if (action === 'rename-folder') emit('rename-folder', folder)
+  if (action === 'delete-folder') emit('delete-folder', folder)
+  if (action === 'clip-folder') emit('clip-folder', folder)
+  if (action === 'copy-folder') emit('copy-folder', folder)
+  closeRowMenu()
+}
 </script>
 
 <style scoped>
-/* 移动端面包屑隐藏滚动条 */
-.no-scrollbar::-webkit-scrollbar { display: none; }
-.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 0.2s ease;
+}
 
-/* 过渡动画 */
-.fade-enter-active, .fade-leave-active { transition: opacity 0.2s ease; }
-.fade-enter-from, .fade-leave-to { opacity: 0; }
-
-.slide-up-enter-active, .slide-up-leave-active { transition: transform 0.22s ease, opacity 0.22s ease; }
-.slide-up-enter-from, .slide-up-leave-to { transform: translateY(8px); opacity: 0; }
-
-.fade-slide-enter-active, .fade-slide-leave-active { transition: opacity 0.15s ease, transform 0.15s ease; }
-.fade-slide-enter-from, .fade-slide-leave-to { opacity: 0; transform: translateY(-6px); }
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
+}
 </style>

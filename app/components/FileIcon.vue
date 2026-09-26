@@ -37,7 +37,7 @@ const category = computed<Category>(() => {
   if (inSet(['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'svg', 'tif', 'tiff', 'ico', 'heic', 'heif', 'avif'])) return 'image'
   if (inSet(['mp4', 'mov', 'mkv', 'avi', 'webm', 'm4v'])) return 'video'
   if (inSet(['mp3', 'wav', 'm4a', 'flac', 'ogg', 'aac', 'opus'])) return 'audio'
-  if (inSet(['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'xz', 'tgz', 'tbz'])) return 'archive'
+  if (inSet(['zip', 'rar', '7z', 'tar', 'gz', 'bz2', 'tbz', 'tbz2', 'xz', 'txz', 'zst', 'tgz', 'lz', 'lzma', 'cab', 'iso', 'arj', 'cpio', 'rpm', 'deb', 'dmg', 'msi', 'xar', 'z'])) return 'archive'
   if (inSet(['txt', 'log', 'ini', 'conf'])) return 'txt'
   if (inSet(['json'])) return 'json'
   if (inSet(['md', 'mdx'])) return 'md'
@@ -52,6 +52,13 @@ const category = computed<Category>(() => {
   return 'other'
 })
 
+const archiveLabel = computed(() => {
+  if (rawExt.value === '7z') return '7Z'
+  if (rawExt.value === 'rar') return 'RAR'
+  if (rawExt.value === 'tar') return 'TAR'
+  return 'ZIP'
+})
+
 const cfg = computed(() => {
   // 颜色使用固定 HEX，避免 Tailwind 动态类失效；文档底座使用 currentColor
   const map: Record<Category, { color: string; label: string }> = {
@@ -62,7 +69,7 @@ const cfg = computed(() => {
     image:  { color: '#F59E0B', label: 'IMG' },
     video:  { color: '#06B6D4', label: 'VID' },
     audio:  { color: '#8B5CF6', label: 'AUD' },
-    archive:{ color: '#A16207', label: 'ZIP' },
+    archive:{ color: '#A16207', label: archiveLabel.value },
     code:   { color: '#0EA5E9', label: 'CODE' },
     txt:    { color: '#9CA3AF', label: 'TXT' },
     json:   { color: '#22C55E', label: 'JSON' },
