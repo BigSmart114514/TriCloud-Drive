@@ -15,6 +15,9 @@ export interface FileRecord {
   contentType: string
   createdAt: string
   user_id: number
+  Shared?: boolean
+  IsPublic?: boolean
+  allowedUsers?: number[]
 }
 
 export interface FolderManifest {

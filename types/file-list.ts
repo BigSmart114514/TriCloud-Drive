@@ -12,4 +12,7 @@ export interface FileListFile {
   fileSize: number
   createdAt?: string | null
   contentType?: string
+  Shared?: boolean
+  IsPublic?: boolean
+  allowedUsers?: number[]
 }

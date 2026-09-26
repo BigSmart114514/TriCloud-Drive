@@ -15,4 +15,7 @@ export interface FileRecord {
   fileUrl: string
   contentType: string
   createdAt: string
+  Shared?: boolean
+  IsPublic?: boolean
+  allowedUsers?: number[]
 }

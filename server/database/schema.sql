@@ -13,6 +13,7 @@ DROP TRIGGER IF EXISTS trg_files_user_matches_folder_upd;
 DROP TRIGGER IF EXISTS trg_folders_user_matches_parent_ins;
 DROP TRIGGER IF EXISTS trg_folders_user_matches_parent_upd;
 DROP TRIGGER IF EXISTS trg_folders_no_cycles;
+DROP TRIGGER IF EXISTS trg_file_access_not_owner_ins;
 
 DROP INDEX IF EXISTS ux_folders_user_parent_name;
 DROP INDEX IF EXISTS ix_folders_user;
@@ -20,7 +21,10 @@ DROP INDEX IF EXISTS ix_folders_parent;
 DROP INDEX IF EXISTS ux_files_user_folder_filename;
 DROP INDEX IF EXISTS ix_files_user;
 DROP INDEX IF EXISTS ix_files_folder;
+DROP INDEX IF EXISTS ix_file_access_file;
+DROP INDEX IF EXISTS ix_file_access_user;
 
+DROP TABLE IF EXISTS file_access;
 DROP TABLE IF EXISTS files;
 DROP TABLE IF EXISTS folders;
 DROP TABLE IF EXISTS users;
@@ -77,6 +81,11 @@ CREATE TABLE files (
   content_type TEXT,
   created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
 
+  -- 共享：Shared=是否开启定向共享；IsPublic=是否任何人可公开访问
+  -- 定向共享的成员见 file_access（files 一对多），命名为 AllowedUsers
+  Shared       BOOLEAN NOT NULL DEFAULT 0,
+  IsPublic     BOOLEAN NOT NULL DEFAULT 0,
+
   FOREIGN KEY (user_id)   REFERENCES users (id)     ON DELETE CASCADE,
   FOREIGN KEY (folder_id) REFERENCES folders (id)   ON DELETE CASCADE
   -- 如果希望删除文件夹时保留文件，请改为：ON DELETE SET NULL
@@ -88,6 +97,23 @@ CREATE UNIQUE INDEX ux_files_user_folder_filename
 
 CREATE INDEX ix_files_user   ON files(user_id);
 CREATE INDEX ix_files_folder ON files(folder_id);
+
+-- -------- file_access（允许访问的人员）--------
+-- files 一对多：一个文件可授权给多个人员
+CREATE TABLE file_access (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  file_id    INTEGER NOT NULL,                  -- 一对多：指向 files.id
+  user_id    INTEGER NOT NULL,
+  created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+
+  FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE,
+  FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+
+  UNIQUE (file_id, user_id)                     -- 同一人对同一文件只授权一次
+);
+
+CREATE INDEX ix_file_access_file ON file_access(file_id);
+CREATE INDEX ix_file_access_user ON file_access(user_id);
 
 -- -------- Triggers: 数据一致性 --------
 -- 1) files.user_id 必须与其所属 folder 的 user_id 一致
@@ -161,6 +187,14 @@ BEGIN
     WHEN EXISTS (SELECT 1 FROM ancestors WHERE id = NEW.id)
     THEN RAISE(ABORT, 'Cycle detected in folder hierarchy')
   END;
+END;
+
+-- 4) file_access：不能把文件授权给文件所有者本人（冗余记录）
+CREATE TRIGGER trg_file_access_not_owner_ins
+BEFORE INSERT ON file_access
+WHEN NEW.user_id = (SELECT user_id FROM files WHERE id = NEW.file_id)
+BEGIN
+  SELECT RAISE(ABORT, 'file_access.user_id must differ from files.user_id');
 END;
 
 COMMIT;

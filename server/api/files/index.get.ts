@@ -1,6 +1,7 @@
 // server/api/files/index.get.ts
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
+import { placeholders } from '~~/server/utils/functions'
 import { getQuery } from 'h3'
 
 export default defineEventHandler(async (event) => {
@@ -65,7 +66,8 @@ export default defineEventHandler(async (event) => {
               id, filename, folder_id AS folderId,
               file_key AS fileKey, file_size AS fileSize,
               file_url AS fileUrl, content_type AS contentType,
-              created_at AS createdAt
+              created_at AS createdAt,
+              Shared, IsPublic
             FROM files
             WHERE user_id = ? AND folder_id IS NULL
             ORDER BY created_at DESC
@@ -78,7 +80,8 @@ export default defineEventHandler(async (event) => {
               id, filename, folder_id AS folderId,
               file_key AS fileKey, file_size AS fileSize,
               file_url AS fileUrl, content_type AS contentType,
-              created_at AS createdAt
+              created_at AS createdAt,
+              Shared, IsPublic
             FROM files
             WHERE user_id = ? AND folder_id = ?
             ORDER BY created_at DESC
@@ -86,11 +89,19 @@ export default defineEventHandler(async (event) => {
           .bind(effectiveUserId, folderId)
           .all()
 
+    const files = (filesRes.results || []) as any[]
+    const accessMap = await loadAllowedUsers(db, files.map((file) => file.id))
+
     return {
       success: true,
       currentFolderId: folderId,
       folders: foldersRes.results || [],
-      files: filesRes.results || []
+      files: files.map((file) => ({
+        ...file,
+        Shared: !!(file.Shared === true || file.Shared === 1),
+        IsPublic: !!(file.IsPublic === true || file.IsPublic === 1),
+        allowedUsers: accessMap.get(Number(file.id)) || []
+      }))
     }
   } catch (error: any) {
     console.error('Get items error:', error)
@@ -98,3 +109,28 @@ export default defineEventHandler(async (event) => {
     throw createError({ statusCode: 500, statusMessage: '获取列表失败' })
   }
 })
+
+// 一次查询取出本批文件的授权人员，避免逐文件查询
+async function loadAllowedUsers(db: any, fileIds: number[]) {
+  const map = new Map<number, number[]>()
+  if (!fileIds.length) return map
+
+  const res = await db
+    .prepare(`
+      SELECT file_id AS fileId, user_id AS userId
+      FROM file_access
+      WHERE file_id IN (${placeholders(fileIds.length)})
+      ORDER BY user_id ASC
+    `)
+    .bind(...fileIds)
+    .all()
+    .catch(() => null)
+
+  for (const row of res?.results || []) {
+    const id = Number(row.fileId)
+    const list = map.get(id) || []
+    list.push(Number(row.userId))
+    map.set(id, list)
+  }
+  return map
+}
