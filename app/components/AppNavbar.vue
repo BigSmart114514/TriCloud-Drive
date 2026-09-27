@@ -5,7 +5,15 @@
     <div :class="fluid ? 'w-full px-3 sm:px-4' : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8'">
       <div class="flex justify-between h-16">
         <div class="flex items-center min-w-0">
-          <slot name="brand" />
+          <!-- /manage 下的页面自动带「管理」徽标，不用每个页面各写一遍 -->
+          <span
+            v-if="isManageArea"
+            class="mr-2 flex items-center gap-1.5 rounded-md bg-indigo-50 p-1.5 text-indigo-700 sm:px-2 sm:py-1 sm:text-xs sm:font-medium"
+            title="管理后台"
+          >
+            <ShieldExclamationIcon class="h-3.5 w-3.5 shrink-0" />
+            <span class="hidden sm:inline">管理</span>
+          </span>
           <h1 class="truncate text-lg font-semibold text-gray-900 sm:text-xl">
             TriCloud Drive
           </h1>
@@ -56,11 +64,15 @@
 
 <script setup lang="ts">
 import { computed } from 'vue'
-import { ArrowRightOnRectangleIcon } from '@heroicons/vue/24/outline'
+import { useRoute } from 'vue-router'
+import { ArrowRightOnRectangleIcon, ShieldExclamationIcon } from '@heroicons/vue/24/outline'
 import UiSettingsMenu from '~/components/UiSettingsMenu.vue'
 
 const props = withDefaults(defineProps<{ fluid?: boolean }>(), { fluid: false })
 const fluid = computed(() => props.fluid)
+
+const route = useRoute()
+const isManageArea = computed(() => route.path === '/manage' || route.path.startsWith('/manage/'))
 
 const { user, isLoggedIn, logout } = useAuth()
 const handleLogout = async () => { await logout() }

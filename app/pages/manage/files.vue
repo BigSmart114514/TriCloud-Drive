@@ -66,15 +66,6 @@ await fetchUsers()
   <!-- 整页铺满：上至 NavBar，下至屏幕底部；内容区不产生页面级滚动 -->
   <div class="flex h-[100dvh] flex-col overflow-hidden bg-gray-50">
     <AppNavbar fluid>
-      <template #brand>
-        <span
-          class="mr-2 flex items-center gap-1.5 rounded-md bg-indigo-50 p-1.5 text-indigo-700 sm:px-2 sm:py-1 sm:text-xs sm:font-medium"
-          title="管理员 - 文件总览"
-        >
-          <ShieldExclamationIcon class="h-3.5 w-3.5 shrink-0" />
-          <span class="hidden sm:inline">管理</span>
-        </span>
-      </template>
       <template #extra>
         <NuxtLink
           to="/"

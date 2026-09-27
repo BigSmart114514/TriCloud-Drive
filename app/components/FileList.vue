@@ -64,6 +64,9 @@
             <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-folder', folder)" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
+            <button class="p-1 text-sm text-emerald-600 hover:text-emerald-500" @click.stop="emit('share-folder', folder)" title="分享" aria-label="分享">
+              <ShareIcon class="h-5 w-5" />
+            </button>
           </div>
           <div class="flex sm:hidden items-center gap-1">
             <button class="p-1 text-blue-600 hover:text-blue-500" :disabled="downloadingFolderId === folder.id" @click.stop="emit('download-folder', folder)" title="下载" aria-label="下载">
@@ -119,6 +122,9 @@
             <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-file', file)" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
+            <button class="p-1 text-sm text-emerald-600 hover:text-emerald-500" @click.stop="emit('share-file', file)" title="分享" aria-label="分享">
+              <ShareIcon class="h-5 w-5" />
+            </button>
           </div>
           <div class="flex sm:hidden items-center gap-1">
             <button class="p-1 text-blue-600 hover:text-blue-500" @click.stop="emit('download-file', file)" title="下载" aria-label="下载">
@@ -145,7 +151,11 @@
         <div class="absolute inset-0 bg-black/30" @click="closeRowMenu" />
         <div data-liquid class="ui-glass absolute inset-x-0 bottom-0 bg-white rounded-t-2xl p-3 pb-[calc(env(safe-area-inset-bottom)+12px)] shadow-xl">
           <div class="mx-auto h-1.5 w-12 rounded bg-gray-300 mb-3" />
-          <div class="grid grid-cols-4 gap-2 text-center text-xs">
+          <!-- 文件 6 项排 3×2，文件夹 5 项排一行，避免落单换行 -->
+          <div
+            class="grid gap-2 text-center text-xs"
+            :class="rowMenu?.type === 'file' ? 'grid-cols-3' : 'grid-cols-5'"
+          >
             <template v-if="rowMenu?.type === 'file'">
               <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('preview-file')">
                 <EyeIcon class="h-6 w-6 text-gray-700" />
@@ -167,6 +177,10 @@
                 <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">复制</span>
               </button>
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('share-file')">
+                <ShareIcon class="h-6 w-6 text-emerald-600" />
+                <span class="mt-1">分享</span>
+              </button>
             </template>
             <template v-else-if="rowMenu?.type === 'folder'">
               <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('rename-folder')">
@@ -184,6 +198,10 @@
               <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('copy-folder')">
                 <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">复制</span>
+              </button>
+              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('share-folder')">
+                <ShareIcon class="h-6 w-6 text-emerald-600" />
+                <span class="mt-1">分享</span>
               </button>
             </template>
           </div>
@@ -206,6 +224,7 @@ import {
   EyeIcon,
   PencilSquareIcon,
   ScissorsIcon,
+  ShareIcon,
   TrashIcon
 } from '@heroicons/vue/24/outline'
 
@@ -250,6 +269,8 @@ const emit = defineEmits<{
   'rename-file': [file: FileListFile]
   'clip-file': [file: FileListFile]
   'copy-file': [file: FileListFile]
+  'share-file': [file: FileListFile]
+  'share-folder': [folder: FileListFolder]
 }>()
 
 const hasItems = computed(() => props.folders.length + props.files.length > 0)
@@ -268,7 +289,9 @@ const closeRowMenu = () => {
   rowMenu.value = null
 }
 
-const runFileAction = (action: 'preview-file' | 'rename-file' | 'delete-file' | 'clip-file' | 'copy-file') => {
+const runFileAction = (
+  action: 'preview-file' | 'rename-file' | 'delete-file' | 'clip-file' | 'copy-file' | 'share-file'
+) => {
   if (rowMenu.value?.type !== 'file') return
   const file = rowMenu.value.item as FileListFile
   if (action === 'preview-file') emit('preview-file', file)
@@ -276,16 +299,20 @@ const runFileAction = (action: 'preview-file' | 'rename-file' | 'delete-file' | 
   if (action === 'delete-file') emit('delete-file', file)
   if (action === 'clip-file') emit('clip-file', file)
   if (action === 'copy-file') emit('copy-file', file)
+  if (action === 'share-file') emit('share-file', file)
   closeRowMenu()
 }
 
-const runFolderAction = (action: 'rename-folder' | 'delete-folder' | 'clip-folder' | 'copy-folder') => {
+const runFolderAction = (
+  action: 'rename-folder' | 'delete-folder' | 'clip-folder' | 'copy-folder' | 'share-folder'
+) => {
   if (rowMenu.value?.type !== 'folder') return
   const folder = rowMenu.value.item as FileListFolder
   if (action === 'rename-folder') emit('rename-folder', folder)
   if (action === 'delete-folder') emit('delete-folder', folder)
   if (action === 'clip-folder') emit('clip-folder', folder)
   if (action === 'copy-folder') emit('copy-folder', folder)
+  if (action === 'share-folder') emit('share-folder', folder)
   closeRowMenu()
 }
 </script>

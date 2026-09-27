@@ -218,10 +218,20 @@
         @download-file="onDownloadFile"
         @delete-file="onDeleteFile"
         @rename-file="onRenameFile"
-        @clip-file="onClipFile"
-        @copy-file="onCopyFile"
-      />
+      @clip-file="onClipFile"
+      @copy-file="onCopyFile"
+      @share-file="onShareFile"
+      @share-folder="onShareFolder"
+    />
     </div>
+
+    <ShareDialog
+      :open="shareTarget !== null"
+      :target-type="shareTarget?.type ?? 'file'"
+      :target-id="shareTarget?.id ?? null"
+      :name="shareTarget?.name ?? ''"
+      @close="shareTarget = null"
+    />
 
     <transition name="slide-up">
       <div v-show="selectedCount > 0" data-liquid class="ui-glass fixed bottom-0 inset-x-0 z-40 sm:hidden bg-white border-t px-3 py-2 pb-[calc(env(safe-area-inset-bottom)+8px)]">
@@ -281,6 +291,7 @@ import { useFolderDownload } from '~/composables/useFolderDownload'
 import { useDnDUpload } from '~/composables/useDnDUpload'
 import FileList from '~/components/FileList.vue'
 import FilePreviewer from '~/components/FilePreviewer.vue'
+import ShareDialog from '~/components/ShareDialog.vue'
 import type { FileListFile, FileListFolder } from '~~/types/file-list'
 import type { FileRecord, FolderRecord } from '~~/types/file-browser'
 import {
@@ -443,6 +454,15 @@ const onDeleteFile = (file: FileListFile) => deleteFile(asFile(file))
 const onRenameFile = (file: FileListFile) => renameFile(asFile(file))
 const onClipFile = (file: FileListFile) => clipFile(asFile(file))
 const onCopyFile = (file: FileListFile) => copyFile(asFile(file))
+
+// 分享弹窗的目标（null = 关闭）。只有属主能在弹窗里改授权，服务端会再校验一次
+const shareTarget = ref<{ type: 'file' | 'folder'; id: number; name: string } | null>(null)
+const onShareFile = (file: FileListFile) => {
+  shareTarget.value = { type: 'file', id: Number(file.id), name: String(file.filename) }
+}
+const onShareFolder = (folder: FileListFolder) => {
+  shareTarget.value = { type: 'folder', id: Number(folder.id), name: String(folder.name) }
+}
 const closePreview = () => {
   previewingFile.value = null
 }
