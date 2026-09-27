@@ -1,4 +1,5 @@
 import { Database, FolderService } from '~~/server/utils/db'
+import { DEFAULT_SHARE_MODE } from '~~/types/share'
 import { FileRecord } from '~~/types/files'
 import { GeneralResponse } from '~~/types/auth'
 import { skipAndOverwriteError, ServerError } from '~~/types/error'
@@ -75,9 +76,9 @@ export async function save(db: Database, file: FileRecord, overwrite: boolean | 
 
         const sql = `
             INSERT INTO files
-            (user_id, folder_id, filename, file_key, file_size, file_url, content_type, created_at)
+            (user_id, folder_id, filename, file_key, file_size, file_url, content_type, created_at, Shared)
             VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?)
+            (?, ?, ?, ?, ?, ?, ?, ?, ?)
             `
 
         const params = [
@@ -89,16 +90,18 @@ export async function save(db: Database, file: FileRecord, overwrite: boolean | 
             file.fileUrl,
             file.contentType || null,
             file.createdAt,
+            DEFAULT_SHARE_MODE,
         ]
         await db.prepare(sql).bind(...params).run()
         return { success: true }
     }
     else if (overwrite) {
+        // Shared 只在首次插入时给默认值；命中已有行的分支不会改动它
         const sql = `
       INSERT INTO files (
-      user_id, folder_id, filename, file_key, file_size, file_url, content_type, created_at
+      user_id, folder_id, filename, file_key, file_size, file_url, content_type, created_at, Shared
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(user_id, folder_id, filename)
       DO UPDATE SET
       file_key     = excluded.file_key,
@@ -116,14 +119,15 @@ export async function save(db: Database, file: FileRecord, overwrite: boolean | 
             file.fileUrl,
             file.contentType || null,
             file.createdAt,
+            DEFAULT_SHARE_MODE,
         ]
         await db.prepare(sql).bind(...params).run() // 这里改为 run()
         return { success: true }
     } else if (skipIfExist) {
         const stmt = db.prepare(`
         INSERT OR IGNORE INTO files (
-            user_id, folder_id, filename, file_key, file_size, file_url, content_type, created_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            user_id, folder_id, filename, file_key, file_size, file_url, content_type, created_at, Shared
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         `)
         const params = [
             Number(userId),
@@ -134,6 +138,7 @@ export async function save(db: Database, file: FileRecord, overwrite: boolean | 
             file.fileUrl,
             file.contentType || null,
             file.createdAt,
+            DEFAULT_SHARE_MODE,
         ]
         const result = await stmt.bind(...params).run()
         if (Number(result.meta.changes) === 1)  // 0 = 已存在, 1 = 新增

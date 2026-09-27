@@ -123,19 +123,16 @@ export default defineNitroPlugin(async () => {
     if (!(await tableExists(db, 'files'))) return
     const mysql = isMysqlDb()
 
-    // 1) files / folders 的共享标记
-    for (const [table, column] of [
-      ['files', 'Shared'],
-      ['files', 'IsPublic'],
-      ['folders', 'Shared'],
-      ['folders', 'IsPublic']
-    ]) {
-      if (await columnExists(db, table, column)) continue
-      await db
-        .prepare(`ALTER TABLE ${table} ADD COLUMN ${column} BOOLEAN NOT NULL DEFAULT 0`)
-        .bind()
-        .run()
-      console.log(`[db-migrate] ${table}.${column} added`)
+    // 1) 共享标记
+    for (const table of ['files', 'folders']) {
+      for (const column of ['Shared', 'IsPublic']) {
+        if (await columnExists(db, table, column)) continue
+        await db
+          .prepare(`ALTER TABLE ${table} ADD COLUMN ${column} BOOLEAN NOT NULL DEFAULT 0`)
+          .bind()
+          .run()
+        console.log(`[db-migrate] ${table}.${column} added`)
+      }
     }
 
     // 2) 授权表
@@ -176,6 +173,37 @@ export default defineNitroPlugin(async () => {
         if (await triggerExists(db, trigger.name)) continue
         await db.prepare(trigger.sql).bind().run()
         console.log(`[db-migrate] ${trigger.name} created`)
+      }
+    }
+
+    // 4) 共享模式三态化：BOOLEAN 存的就是整数，列不用重建，只回填数据。
+    //    旧语义 Shared=1 ⟺ 有授权行。据此搬运可完整保留当前访问结果：
+    //      有授权行 → 1(分享，仍是边界)；无授权行 → 2(继承，非边界)
+    //    旧语义下 Shared=0 本来就是「不是边界，往上找」，映射成继承是一致的。
+    //    末尾的 Shared <> CASE 让已经是目标值的行不再被写入，重复启动 0 改动。
+    for (const [table, accessTable, column] of [
+      ['files', 'file_access', 'file_id'],
+      ['folders', 'folder_access', 'folder_id']
+    ]) {
+      if (!(await tableExists(db, accessTable))) continue
+      if (await columnExists(db, table, 'Shared')) {
+        const backfilled = await db
+          .prepare(
+            `UPDATE ${table}
+             SET Shared = CASE
+               WHEN EXISTS (SELECT 1 FROM ${accessTable} a WHERE a.${column} = ${table}.id) THEN 1
+               ELSE 2
+             END
+             WHERE Shared IN (0, 1)
+               AND Shared <> CASE
+                 WHEN EXISTS (SELECT 1 FROM ${accessTable} a WHERE a.${column} = ${table}.id) THEN 1
+                 ELSE 2
+               END`
+          )
+          .bind()
+          .run()
+        const n = Number(backfilled?.meta?.changes ?? 0)
+        if (n) console.log(`[db-migrate] ${table}.Shared 三态化，回填 ${n} 行`)
       }
     }
   } catch (error: any) {

@@ -2,8 +2,8 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
 import { FileService, FolderService } from '~~/server/utils/db'
-import { assertShareTargetType, assertTargetId, resolveShareTarget } from '~~/server/utils/share'
-import { PERMISSION_LABELS } from '~~/types/share'
+import { assertShareTargetType, assertTargetId, getShareState, resolveShareTarget } from '~~/server/utils/share'
+import { isShareBoundary, PERMISSION_LABELS, SHARE_MODE_LABELS } from '~~/types/share'
 
 export default defineEventHandler(async (event) => {
   try {
@@ -39,19 +39,18 @@ export default defineEventHandler(async (event) => {
       ])
     )
 
-    // 目标自身的共享标记，方便前端直接显示「已共享 / 公开」
-    const flags = await db
-      .prepare(`SELECT Shared, IsPublic FROM ${target.table} WHERE id = ?`)
-      .bind(targetId)
-      .first()
+    // 目标自身的共享状态，方便前端直接渲染三态选择器
+    const state = await getShareState(db, target)
 
     return {
       success: true,
       targetType: type,
       targetId,
       ownerId: target.ownerId,
-      Shared: Number(flags?.Shared ?? 0) === 1,
-      IsPublic: Number(flags?.IsPublic ?? 0) === 1,
+      mode: state.mode,
+      modeLabel: SHARE_MODE_LABELS[state.mode] ?? '',
+      isBoundary: isShareBoundary(state.mode),
+      IsPublic: state.isPublic,
       grants: grants.map((g) => ({
         ...g,
         label: PERMISSION_LABELS[g.permission] ?? String(g.permission),

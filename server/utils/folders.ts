@@ -1,6 +1,7 @@
 // server/utils/folders.ts
 import { createError } from 'h3'
 import { Database, FolderService } from '~~/server/utils/db'
+import { DEFAULT_SHARE_MODE } from '~~/types/share'
 /*
 type DBLike = {
   prepare: (sql: string) => {
@@ -76,8 +77,8 @@ export async function createFolder(
     const { name: uniqueName } = await resolveUniqueFolderName(db, userId, parentId, nameRaw)
     try {
       const ins: any = await db
-        .prepare('INSERT INTO folders (user_id, parent_id, name) VALUES (?, ?, ?)')
-        .bind(userId, parentId, uniqueName)
+        .prepare('INSERT INTO folders (user_id, parent_id, name, Shared) VALUES (?, ?, ?, ?)')
+        .bind(userId, parentId, uniqueName, DEFAULT_SHARE_MODE)
         .run()
 
       const newId = getLastInsertId(ins?.meta)
@@ -160,8 +161,8 @@ export async function ensurePaths(
 
         if (!row) {
           const ins: any = await db
-            .prepare('INSERT INTO folders (user_id, parent_id, name) VALUES (?, ?, ?)')
-            .bind(userId, currentParent, seg)
+            .prepare('INSERT INTO folders (user_id, parent_id, name, Shared) VALUES (?, ?, ?, ?)')
+            .bind(userId, currentParent, seg, DEFAULT_SHARE_MODE)
             .run()
 
           const newId = getLastInsertId(ins?.meta)

@@ -3,6 +3,7 @@ import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { userExpiredError, userNotFindError, dbConnectionError, upload403Error } from '~~/types/error'
+import { DEFAULT_SHARE_MODE } from '~~/types/share'
 
 export default defineEventHandler(async (event) => {
   function parseSqlDateTime(input: any): Date | null {
@@ -141,8 +142,8 @@ export default defineEventHandler(async (event) => {
       for (let attempt = 0; attempt < maxRetry; attempt++) {
         try {
           file = await db.prepare(`
-            INSERT INTO files (user_id, folder_id, filename, file_key, file_size, file_url, content_type)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO files (user_id, folder_id, filename, file_key, file_size, file_url, content_type, Shared)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             RETURNING *
           `).bind(
             userId,
@@ -151,7 +152,8 @@ export default defineEventHandler(async (event) => {
             fileKey,
             size,
             fileUrl,
-            contentType || 'application/octet-stream'
+            contentType || 'application/octet-stream',
+            DEFAULT_SHARE_MODE
           ).first()
           break
         } catch (e: any) {

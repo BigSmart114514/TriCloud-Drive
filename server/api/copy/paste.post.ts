@@ -8,6 +8,7 @@ import { ensurePaths } from '~~/server/utils/folders'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { uniqPositiveInts } from '~~/server/utils/functions'
 import { skipAndOverwriteError } from '~~/types/error'
+import { DEFAULT_SHARE_MODE } from '~~/types/share'
 
 function sanitizeForKey(name: string): string {
   return name.replace(/[\\?%*:|"<>]/g, '_').replace(/[\s]+/g, ' ')
@@ -313,8 +314,8 @@ export default defineEventHandler(async (event) => {
       // 成功后写入文件记录
       const contentType = src.contentType || 'application/octet-stream'
       const ins = await db
-        .prepare('INSERT INTO files (user_id, folder_id, filename, file_key, file_size, file_url, content_type) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .bind(userId, destFolderId, finalFilename, destKey, src.fileSize, destUrl, contentType)
+        .prepare('INSERT INTO files (user_id, folder_id, filename, file_key, file_size, file_url, content_type, Shared) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(userId, destFolderId, finalFilename, destKey, src.fileSize, destUrl, contentType, DEFAULT_SHARE_MODE)
         .run()
       copiedFiles++
       successCopyBytes += src.fileSize

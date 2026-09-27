@@ -1,7 +1,15 @@
 import { placeholders, uniqPositiveInts } from './functions'
 import { fileNotFoundError, folderNotFindError } from '~~/types/error'
-import { hasPermission, normalizePermission, PERM_READ } from '~~/types/share'
-import type { AccessGrant } from '~~/types/share'
+import {
+  hasPermission,
+  normalizePermission,
+  normalizeShareMode,
+  PERM_READ,
+  SHARE_INHERIT,
+  SHARE_NONE,
+  SHARE_SHARED
+} from '~~/types/share'
+import type { AccessGrant, ShareMode } from '~~/types/share'
 
 export interface User {
   id: number
@@ -99,6 +107,9 @@ export interface OwnedFolder {
   parentId: number | null
   createdAt: string
   updatedAt: string | null
+  /** 共享三态：0 不分享 / 1 分享 / 2 继承 */
+  Shared: number
+  IsPublic: boolean
 }
 
 export interface OwnedFile {
@@ -111,9 +122,9 @@ export interface OwnedFile {
   fileUrl: string
   contentType: string | null
   createdAt: string
-  /** 是否存在直接授权（不变量标记，不参与权限判定） */
-  Shared: boolean
-  /** 免登录可读；与祖先授权取并集 */
+  /** 共享三态：0 不分享 / 1 分享 / 2 继承 */
+  Shared: number
+  /** 等价于「给所有人(含未登录) READ」的快捷写法 */
   IsPublic: boolean
   /** 该文件的直接授权（不含从父文件夹继承的） */
   grants: AccessGrant[]
@@ -128,17 +139,75 @@ export interface ManifestFile {
 }
 
 /**
- * 某个「边界节点」对某个用户的有效权限。
- * boundary=false 表示向上找不到任何被标记的节点（未开启共享）。
+ * 某个节点对某个用户的有效权限。
+ * mode 为该节点的共享三态（0 不分享 / 1 分享 / 2 继承）。
+ * boundary=false 表示继承态，需要继续向上查找。
  * mask 为归一化后的位掩码，0 = 无权访问。
  */
 export interface ResolvedAccess {
   boundary: boolean
+  mode: ShareMode
   isPublic: boolean
   mask: number
 }
 
-export const NO_ACCESS: ResolvedAccess = { boundary: false, isPublic: false, mask: 0 }
+export const NO_ACCESS: ResolvedAccess = { boundary: false, mode: SHARE_INHERIT, isPublic: false, mask: 0 }
+
+/**
+ * 边界祖先自身的决策：
+ *   不分享 → 拒绝（到此为止）
+ *   分享   → 名单 + IsPublic 给所有人 READ
+ */
+function decideAncestor(
+  mode: ShareMode,
+  isPublic: boolean,
+  row: { permission?: any } | null | undefined
+): ResolvedAccess {
+  if (mode === SHARE_INHERIT) return NO_ACCESS
+  if (mode === SHARE_NONE) return { boundary: true, mode, isPublic: false, mask: 0 }
+  const own = row && row.permission !== null && row.permission !== undefined
+    ? normalizePermission(row.permission)
+    : 0
+  return {
+    boundary: true,
+    mode,
+    isPublic,
+    mask: normalizePermission(own | (isPublic ? PERM_READ : 0))
+  }
+}
+
+/**
+ * 把「起始节点自身」与「最近的边界祖先」合并成最终权限。
+ *
+ * 起始节点的三态决定要不要看祖先：
+ *   不分享 → 直接拒绝，祖先一律不看
+ *   分享   → 用自身的名单与公开，祖先一律不看
+ *   继承   → 自身名单与公开，继续叠加祖先的决策
+ *
+ * 起始节点自己的名单和公开，在继承态下同样生效 —— 这正是「只给 B 加一个人
+ * 而不想切断上层继承」所需要的。
+ */
+function combineWithAncestor(
+  self: { mode: ShareMode; isPublic: boolean; permission?: any },
+  ancestor: ResolvedAccess
+): ResolvedAccess {
+  const own =
+    self.permission !== null && self.permission !== undefined ? normalizePermission(self.permission) : 0
+  const direct = normalizePermission(own | (self.isPublic ? PERM_READ : 0))
+
+  if (self.mode === SHARE_NONE) {
+    return { boundary: true, mode: SHARE_NONE, isPublic: false, mask: 0 }
+  }
+  if (self.mode === SHARE_SHARED) {
+    return { boundary: true, mode: SHARE_SHARED, isPublic: self.isPublic, mask: direct }
+  }
+  return {
+    boundary: ancestor.boundary,
+    mode: SHARE_INHERIT,
+    isPublic: self.isPublic || ancestor.isPublic,
+    mask: normalizePermission(direct | ancestor.mask)
+  }
+}
 
 function toBool(value: any): boolean {
   return value === true || value === 1 || value === '1'
@@ -151,7 +220,9 @@ function toOwnedFolder(row: any): OwnedFolder {
     name: row.name,
     parentId: row.parentId === null || row.parentId === undefined ? null : Number(row.parentId),
     createdAt: row.createdAt ?? row.created_at,
-    updatedAt: row.updatedAt ?? row.updated_at ?? null
+    updatedAt: row.updatedAt ?? row.updated_at ?? null,
+    Shared: normalizeShareMode(row.Shared),
+    IsPublic: toBool(row.IsPublic)
   }
 }
 
@@ -169,32 +240,19 @@ function toOwnedFile(row: any): OwnedFile {
     fileUrl: row.fileUrl ?? row.file_url,
     contentType: row.contentType ?? row.content_type ?? null,
     createdAt: row.createdAt ?? row.created_at,
-    Shared: toBool(row.Shared),
+    Shared: normalizeShareMode(row.Shared),
     IsPublic: toBool(row.IsPublic),
     grants: []
   }
 }
 
-const FOLDER_COLUMNS = 'id, user_id AS userId, name, parent_id AS parentId, created_at AS createdAt, updated_at AS updatedAt'
+const FOLDER_COLUMNS =
+  'id, user_id AS userId, name, parent_id AS parentId, created_at AS createdAt, updated_at AS updatedAt, Shared, IsPublic'
 
 /**
  * 文件夹归属校验：所有读写都必须经过这里，SQL 里始终带 user_id
  * find* 返回 null，assert* 直接抛 404
  */
-/**
- * 边界决策：只看边界节点一个，结果不做跨层合并。
- *  - 边界节点对该用户有授权行 → 用该行
- *  - 边界节点是公开的         → 免登录只读
- *  - 否则                     → 拒绝（命中即停，不再上溯）
- */
-function decideAccess(isPublic: boolean, row: { permission?: any } | null | undefined): ResolvedAccess {
-  if (row && row.permission !== null && row.permission !== undefined) {
-    return { boundary: true, isPublic, mask: normalizePermission(row.permission) }
-  }
-  if (isPublic) return { boundary: true, isPublic: true, mask: PERM_READ }
-  return { boundary: true, isPublic: false, mask: 0 }
-}
-
 export class FolderService {
   private db: Database
 
@@ -350,9 +408,11 @@ export class FolderService {
   }
 
   /**
-   * 解析该目录对某用户的有效权限：从目录向上找最近的边界节点（Shared=1 或 IsPublic=1）。
-   * LEFT JOIN 用来区分「没有边界祖先」与「有边界但没授权我」——两者都会得到 NULL 行。
-   * 列目录时整个请求只需调一次本方法，之后在内存里过滤，勿逐文件调用。
+   * 解析该目录对某用户的有效权限。
+   *
+   * 一次查询同时取回两样东西：目录**自身**，以及向上最近的**边界祖先**
+   * （Shared IN (0,1)；继承态会被跳过）。两者都要读——继承态下目录自己的
+   * 名单和公开标记同样生效。列目录时整个请求只调一次，之后在内存里过滤。
    */
   async resolveAccess(userId: number, folderId: number | null): Promise<ResolvedAccess> {
     if (folderId === null || folderId === undefined) return NO_ACCESS
@@ -366,20 +426,42 @@ export class FolderService {
           FROM folders f
           JOIN up ON f.id = up.parent_id
         ),
-        nearest AS (
-          SELECT id, pub FROM up WHERE shared = 1 OR pub = 1 ORDER BY depth ASC LIMIT 1
+        picked AS (
+          SELECT * FROM (
+            SELECT 0 AS pri, id, shared, pub FROM up WHERE depth = 0
+            UNION ALL
+            SELECT 1 AS pri, id, shared, pub FROM (
+              SELECT id, shared, pub FROM up WHERE shared IN (0, 1) AND depth > 0
+              ORDER BY depth ASC LIMIT 1
+            )
+          )
         )
-        SELECT nearest.id AS folderId, nearest.pub AS isPublic, fa.permission
-        FROM nearest
-        LEFT JOIN folder_access fa ON fa.folder_id = nearest.id AND fa.user_id = ?
+        SELECT p.pri, p.shared, p.pub, fa.permission
+        FROM picked p
+        LEFT JOIN folder_access fa ON fa.folder_id = p.id AND fa.user_id = ?
+        ORDER BY p.pri
       `)
       .bind(folderId, userId)
       .all()
       .catch(() => ({ results: [] }))
 
-    const row = res?.results?.[0]
-    if (!row || row.folderId === null || row.folderId === undefined) return NO_ACCESS
-    return decideAccess(toBool(row.isPublic), row)
+    const rows = res?.results || []
+    const self = rows.find((r: any) => Number(r.pri) === 0)
+    if (!self) return NO_ACCESS
+    const anc = rows.find((r: any) => Number(r.pri) === 1)
+
+    const ancestor = anc
+      ? decideAncestor(normalizeShareMode(anc.shared), toBool(anc.pub), anc)
+      : NO_ACCESS
+
+    return combineWithAncestor(
+      {
+        mode: normalizeShareMode(self.shared),
+        isPublic: toBool(self.pub),
+        permission: self.permission
+      },
+      ancestor
+    )
   }
 
   /** 该目录被授权给哪些人（展示用，位掩码已归一化） */
@@ -462,24 +544,15 @@ export class FileService {
   }
 
   /**
-   * 解析某用户对某文件的有效权限 = 文件自身授权 ∪ 祖先继承。
-   *
-   * 「命中即停」只作用于文件夹链：某个被标记的祖先没授权此人，就地拒绝、不再上溯。
-   * 但文件自身的授权是「加法」而非「边界」——否则把单个文件分享给外人，
-   * 会连带让该目录的其他共享成员也看不见它。
-   * 祖先链由 folderService 一次解析完，本方法不额外查询。
+   * 解析某用户对某文件的有效权限。文件本身也是一个节点，同样有三态；
+   * 继承态下把自身名单与祖先决策叠加。祖先链由 folderService 一次解析完。
    */
   private resolveFileAccess(userId: number, file: OwnedFile, inherited: ResolvedAccess): ResolvedAccess {
     const own = file.grants.find((g) => g.userId === userId)
-    const ownMask = own ? own.permission : 0
-    const publicMask = file.IsPublic ? PERM_READ : 0
-    const direct = ownMask | publicMask
-    const mask = direct | inherited.mask
-    return {
-      boundary: inherited.boundary || direct !== 0,
-      isPublic: inherited.isPublic || file.IsPublic,
-      mask: normalizePermission(mask)
-    }
+    return combineWithAncestor(
+      { mode: normalizeShareMode(file.Shared), isPublic: file.IsPublic, permission: own?.permission },
+      inherited
+    )
   }
 
   /** 单文件完整解析（会走一次上行 CTE），用于 download / rename / delete 这类操作 */

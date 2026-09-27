@@ -75,7 +75,7 @@ npm run dev
 
 ### 1、从github workflows下载编译过的文件。
 
-https://github.com/Dehou23333-awa/TriCloud-Drive/actions
+https://github.com/BigSmart114514/TriCloud-Drive/actions
 
 目前支持ubuntu24和windows。点击想要的版本后在主页的artifacts可以看到编译好的文件（没有就是过期了）。
 

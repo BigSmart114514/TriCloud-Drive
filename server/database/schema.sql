@@ -61,17 +61,18 @@ CREATE TABLE folders (
   created_at  TEXT DEFAULT CURRENT_TIMESTAMP,
   updated_at  TEXT DEFAULT CURRENT_TIMESTAMP,
 
-  -- 共享：Shared=是否为共享边界（向上查找在此终止）；IsPublic=该目录免登录可读
-  -- 不变量：Shared=1 当且仅当 folder_access 中至少有一行
-  -- 注意：边界是「命中即停」，所以公开的子目录会截断祖先的授权（只留只读）
-  Shared      BOOLEAN NOT NULL DEFAULT 0,
+  -- 共享三态：0=不分享(拒绝型边界) 1=分享(边界，名单内放行) 2=继承(非边界，继续上溯)
+  -- 注意：Shared 只管「要不要切断继承」，授权名单在 folder_access 里，二者互不干涉
+  -- IsPublic 只是「给所有人 READ」的快捷写法，等价于一条 everyone 的授权
+  Shared      INTEGER NOT NULL DEFAULT 2,
   IsPublic    BOOLEAN NOT NULL DEFAULT 0,
 
   FOREIGN KEY (user_id)   REFERENCES users(id)     ON DELETE CASCADE,
   FOREIGN KEY (parent_id) REFERENCES folders(id)   ON DELETE CASCADE,
 
   CHECK (name <> ''),
-  CHECK (parent_id IS NULL OR parent_id <> id)     -- 禁止自己作为自己的父级
+  CHECK (parent_id IS NULL OR parent_id <> id),    -- 禁止自己作为自己的父级
+  CHECK (Shared IN (0, 1, 2))
 );
 
 -- 同一用户 + 同一父级下，文件夹名唯一（COALESCE 处理 NULL 父级）
@@ -93,15 +94,17 @@ CREATE TABLE files (
   content_type TEXT,
   created_at   TEXT DEFAULT CURRENT_TIMESTAMP,
 
-  -- 共享：Shared=是否存在直接授权（仅用于不变量与 UI 标记，不作为边界）
-  --       IsPublic=是否免登录可读（只增不减，与祖先授权取并集）
-  -- 不变量：Shared=1 当且仅当 file_access 中至少有一行
-  Shared       BOOLEAN NOT NULL DEFAULT 0,
+  -- 共享三态：0=不分享(拒绝型边界) 1=分享(边界，名单内放行) 2=继承(非边界，继续上溯)
+  -- Shared 只管要不要切断继承；本文件的直接授权在 file_access 里，与祖先授权取并集
+  -- IsPublic 等价于「给所有人(含未登录) READ」
+  Shared       INTEGER NOT NULL DEFAULT 2,
   IsPublic     BOOLEAN NOT NULL DEFAULT 0,
 
   FOREIGN KEY (user_id)   REFERENCES users (id)     ON DELETE CASCADE,
   FOREIGN KEY (folder_id) REFERENCES folders (id)   ON DELETE CASCADE
   -- 如果希望删除文件夹时保留文件，请改为：ON DELETE SET NULL
+
+  CHECK (Shared IN (0, 1, 2))
 );
 
 -- 同一用户 + 同一文件夹下，文件名唯一

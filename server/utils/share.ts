@@ -1,6 +1,7 @@
 import type { Database } from '~~/server/utils/db'
 import { placeholders, uniqPositiveInts } from '~~/server/utils/functions'
-import { normalizePermission, PERM_ALL } from '~~/types/share'
+import { normalizePermission, normalizeShareMode, PERM_ALL, SHARE_NONE, SHARE_SHARED } from '~~/types/share'
+import type { ShareMode } from '~~/types/share'
 
 export type ShareTargetType = 'file' | 'folder'
 
@@ -83,7 +84,13 @@ function targetColumn(target: ShareTarget) {
   return target.type === 'file' ? 'file_id' : 'folder_id'
 }
 
-/** 授权：已存在则更新权限。先 UPDATE 再 INSERT，避免依赖各方言的 upsert 语法。 */
+/**
+ * 授权：已存在则更新权限。先 UPDATE 再 INSERT，避免依赖各方言的 upsert 语法。
+ *
+ * 注意：这里**不会**去动 Shared —— 授权名单和「要不要切断继承」是独立的两件事。
+ * 早期版本在这里自动把 Shared 置 1，结果属主只是想定向加一个人，
+ * 却把这个节点变成了边界，把上层已共享的其他人全挡在门外。
+ */
 export async function grantAccess(
   db: Database,
   target: ShareTarget,
@@ -105,7 +112,6 @@ export async function grantAccess(
         .run()
     }
   }
-  await syncSharedFlag(db, target)
   return userIds.length
 }
 
@@ -123,27 +129,62 @@ export async function revokeAccess(
       .prepare(`DELETE FROM ${table} WHERE ${column} = ? AND user_id = ?`)
       .bind(target.id, userId)
       .run()
-    removed += Number((res as any)?.meta?.changes ?? 0)
+    removed += Number((res?.meta?.changes ?? 0) ?? (res as any)?.meta?.changes ?? 0)
   }
-  await syncSharedFlag(db, target)
   return removed
 }
 
-/**
- * 维护不变量：Shared = 1 当且仅当还有授权行。
- * 少了这一步，向上查找的边界就会停在错误的节点上。
- */
-export async function syncSharedFlag(db: Database, target: ShareTarget): Promise<boolean> {
-  const table = accessTable(target)
-  const column = targetColumn(target)
-  const res = await db
-    .prepare(`SELECT COUNT(*) AS total FROM ${table} WHERE ${column} = ?`)
+/** 设置共享三态。不分享时顺带清掉公开标记，避免「严格私密却对外可读」的自相矛盾。 */
+export async function setShareMode(
+  db: Database,
+  target: ShareTarget,
+  mode: ShareMode
+): Promise<ShareMode> {
+  const m = normalizeShareMode(mode)
+  if (m === SHARE_NONE) {
+    await db
+      .prepare(`UPDATE ${target.table} SET Shared = ?, IsPublic = 0 WHERE id = ?`)
+      .bind(m, target.id)
+      .run()
+  } else {
+    await db
+      .prepare(`UPDATE ${target.table} SET Shared = ? WHERE id = ?`)
+      .bind(m, target.id)
+      .run()
+  }
+  return m
+}
+
+/** 设置公开（等价于给所有人 READ），属主专属 */
+export async function setPublic(
+  db: Database,
+  target: ShareTarget,
+  isPublic: boolean
+): Promise<boolean> {
+  const next = isPublic ? 1 : 0
+  if (next) {
+    // 公开是「分享」的一种，继承态下也允许，权限仍只到 READ
+    await db
+      .prepare(`UPDATE ${target.table} SET IsPublic = 1, Shared = CASE WHEN Shared = ? THEN ? ELSE Shared END WHERE id = ?`)
+      .bind(SHARE_NONE, SHARE_SHARED, target.id)
+      .run()
+  } else {
+    await db
+      .prepare(`UPDATE ${target.table} SET IsPublic = 0 WHERE id = ?`)
+      .bind(target.id)
+      .run()
+  }
+  return next === 1
+}
+
+/** 该目标当前的共享状态 */
+export async function getShareState(db: Database, target: ShareTarget) {
+  const row = await db
+    .prepare(`SELECT Shared, IsPublic FROM ${target.table} WHERE id = ?`)
     .bind(target.id)
     .first()
-  const total = Number(res?.total ?? 0)
-  await db
-    .prepare(`UPDATE ${target.table} SET Shared = ? WHERE id = ?`)
-    .bind(total > 0 ? 1 : 0, target.id)
-    .run()
-  return total > 0
+  return {
+    mode: normalizeShareMode(row?.Shared),
+    isPublic: Number(row?.IsPublic ?? 0) === 1
+  }
 }
