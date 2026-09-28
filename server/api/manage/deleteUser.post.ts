@@ -2,14 +2,16 @@
 import { defineEventHandler, readBody, createError, getMethod } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
-import { requireAuth } from '~~/server/utils/auth-middleware'
+import { requireAdmin } from '~~/server/utils/auth-middleware'
 
 function toBool(v: any) {
   return v === true || v === 1 || v === '1'
 }
 
 export default defineEventHandler(async (event) => {
-  const auth = await requireAuth(event)
+  // 管理员门控：原先这里自己查库判 IsAdmin/IsSuperAdmin，
+  // 与 requireAdmin 完全重复，收敛到一处避免两套逻辑各自漂移
+  const me = await requireAdmin(event)
 
   if (getMethod(event) !== 'POST') {
     throw createError({ statusCode: 405, statusMessage: 'Method Not Allowed' })
@@ -22,23 +24,6 @@ export default defineEventHandler(async (event) => {
   }
 
   const db = getDb(event)
-
-  // 获取当前登录用户并校验权限
-  const current: any = await db
-    .prepare('SELECT id, IsAdmin, IsSuperAdmin FROM users WHERE id = ?')
-    .bind(auth.userId)
-    .first()
-
-  if (!current) {
-    throw createError({ statusCode: 401, statusMessage: '未登录或用户不存在' })
-  }
-
-  const isAdmin = toBool(current.IsAdmin)
-  const isSuperAdmin = toBool(current.IsSuperAdmin)
-
-  if (!isAdmin && !isSuperAdmin) {
-    throw createError({ statusCode: 403, statusMessage: '无权限' })
-  }
 
   // 查询目标用户
   const target: any = await db
@@ -56,7 +41,7 @@ export default defineEventHandler(async (event) => {
   // 权限规则：
   // - 超管可以删除任何用户，但不能删除系统最后一个超管
   // - 管理员只能删除普通用户（不能删管理员或超管）
-  if (!isSuperAdmin) {
+  if (!me.isSuperAdmin) {
     if (targetIsAdmin || targetIsSuperAdmin) {
       throw createError({ statusCode: 403, statusMessage: '普通管理员不能删除管理员或超级管理员' })
     }
@@ -64,8 +49,11 @@ export default defineEventHandler(async (event) => {
 
   // 若要删除的是超管，确保不是最后一个超管
   if (targetIsSuperAdmin) {
+    // 适配器的 first()/all()/run() 都挂在 prepare().bind() 的返回值上，
+    // 少写 .bind() 会得到 "db.prepare(...).first is not a function"
     const row: any = await db
       .prepare('SELECT COUNT(1) AS cnt FROM users WHERE IsSuperAdmin = 1')
+      .bind()
       .first()
     const cnt = Number(row?.cnt ?? 0)
     if (cnt <= 1) {

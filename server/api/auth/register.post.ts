@@ -1,14 +1,22 @@
 import { UserService } from '~~/server/utils/db'
 import { hashPassword, validateEmail, validatePassword, validateUsername } from '~~/server/utils/auth'
 import { getDb } from '~~/server/utils/db-adapter'
+import { optionalAuth } from '~~/server/utils/auth-middleware'
 import { common403Error, common405Error, dbConnectionError, common500Error } from '~~/types/error'
 export default defineEventHandler(async (event) => {
   if (getMethod(event) !== 'POST') {
     throw common405Error
   }
   const config = useRuntimeConfig()
-  if (config.allowRegister !== true) {
-    throw common403Error
+  // allowRegister 定义在 runtimeConfig.public 下，取值必须带 public，
+  // 对应环境变量是 NUXT_PUBLIC_ALLOW_REGISTER。原先写成 config.allowRegister
+  // 恒为 undefined，等于注册接口对所有人永久关闭（含管理员自己）。
+  if (config.public.allowRegister !== true) {
+    // 注册开关关着时给管理员开口子：否则开关一关，
+    // 连唯一有权限再开账号的人都没法通过这个接口建人
+    // withUser 必须为 true，否则拿不到 isAdmin / isSuperAdmin
+    const me = await optionalAuth(event, { withUser: true })
+    if (!me?.isAdmin && !me?.isSuperAdmin) throw common403Error
   }
 
   try {

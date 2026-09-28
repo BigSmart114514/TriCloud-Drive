@@ -1,6 +1,7 @@
 // server/api/manage/listUsers.get.ts
 import { defineEventHandler, getQuery } from 'h3';
 import { getDb } from '~~/server/utils/db-adapter';
+import { requireAdmin } from '~~/server/utils/auth-middleware';
 
 // 定义用户接口
 interface User {
@@ -25,6 +26,9 @@ interface ApiResponse {
 
 export default defineEventHandler(async (event) => {
   try {
+    // 管理员门控：这个接口会吐出全部用户的邮箱、配额和管理员标记
+    await requireAdmin(event);
+
     // 获取数据库实例
     const db = getDb(event);
     
@@ -75,7 +79,10 @@ export default defineEventHandler(async (event) => {
     };
     
     return response;
-  } catch (error) {
+  } catch (error: any) {
+    // 已经是 createError 的（401/403/400）原样抛出，
+    // 否则未登录/非管理员会在这里被改写成 500，看不出是权限问题
+    if (error?.statusCode) throw error;
     console.error('Error fetching users:', error);
     throw createError({
       statusCode: 500,

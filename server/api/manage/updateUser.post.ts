@@ -1,11 +1,16 @@
 // server/api/manage/updateUser.post.ts
 import { getMethod, readBody } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
+import { requireAdmin } from '~~/server/utils/auth-middleware'
 
 export default defineEventHandler(async (event) => {
   if (getMethod(event) !== 'POST') {
     throw createError({ statusCode: 405, statusMessage: 'Method not allowed' })
   }
+
+  // 管理员门控：这个接口能改 IsSuperAdmin / 配额 / 有效期，
+  // 漏了校验等于任何登录用户都能给自己提权，必须在读 body 之前就拦住
+  await requireAdmin(event)
 
   try {
     const body = await readBody(event)

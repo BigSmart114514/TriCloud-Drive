@@ -93,10 +93,13 @@ export async function requireAdmin(event: any): Promise<AuthenticatedUser> {
 
 /**
  * 可选认证中间件 - 如果有 token 则验证，没有则返回 null
+ *
+ * opts.withUser 必须显式传：requireAuth 不带 withUser 时只回 { userId }，
+ * 不含 isAdmin / isSuperAdmin。判断角色前忘了透传，条件会恒为假。
  */
-export async function optionalAuth(event: any): Promise<AuthenticatedUser | null> {
+export async function optionalAuth(event: any, opts?: { withUser?: boolean }): Promise<AuthenticatedUser | null> {
   try {
-    return await requireAuth(event)
+    return await requireAuth(event, opts)
   } catch {
     return null
   }

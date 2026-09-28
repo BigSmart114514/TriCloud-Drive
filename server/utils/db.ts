@@ -138,6 +138,22 @@ export interface ManifestFile {
   relDir: string
 }
 
+/** 被标记为分享的文件夹；relDir 是它**所在**的目录，根层为空串 */
+export interface SharedFolder {
+  id: number
+  name: string
+  parentId: number | null
+  createdAt: string | null
+  Shared: ShareMode
+  IsPublic: boolean
+  relDir: string
+}
+
+/** 被标记为分享的文件；relDir 是它所在目录的路径，根层为空串 */
+export interface SharedFile extends OwnedFile {
+  relDir: string
+}
+
 /**
  * 某个节点对某个用户的有效权限。
  * mode 为该节点的共享三态（0 不分享 / 1 分享 / 2 继承）。
@@ -606,6 +622,86 @@ export class FileService {
     const args = folderId === null ? [ownerId] : [ownerId, folderId]
     const res = await this.db.prepare(sql).bind(...args).all()
     return this.attachAccess((res?.results || []).map((row: any) => this.toOwned(row)))
+  }
+
+  /**
+   * 列出某属主**行自身带共享标记**的文件夹与文件，不限深度。
+   *
+   * 判定只看行自己的两个字段：`Shared = 1`（分享）或 `IsPublic = 1`（公开）。
+   * 继承态（`Shared = 2`）本身不命中 —— 它只是「继续向上找」的标记。
+   * 所以「某个被分享文件夹下的子目录」只要自己也被显式标记过，就会出现在
+   * 结果里；没被标记的纯继承子项不会出现，这与「明确分享出去的」语义一致。
+   *
+   * 路径在内存里拼，而不是用递归 CTE 上溯：先一次取回该用户全部文件夹建
+   * 索引，再让每个命中项沿 parent_id 走到根层。这样命中项再多也只有 3 次
+   * 查询，且天然处理 folder_id 为 NULL（根层）的情况。walks 用 seen 兜底，
+   * 防止库里被手工改出环时死循环。
+   */
+  async listSharedByOwner(ownerId: number): Promise<{ folders: SharedFolder[]; files: SharedFile[] }> {
+    const all = await this.db
+      .prepare('SELECT id, name, parent_id FROM folders WHERE user_id = ?')
+      .bind(ownerId)
+      .all()
+    const index = new Map<number, { name: string; parentId: number | null }>()
+    for (const row of all?.results || []) {
+      const parentId = row.parent_id === null || row.parent_id === undefined ? null : Number(row.parentId)
+      index.set(Number(row.id), { name: String(row.name), parentId })
+    }
+
+    const relDirOf = (startId: number | null): string => {
+      if (startId === null) return ''
+      const parts: string[] = []
+      const seen = new Set<number>()
+      let cursor: number | null = startId
+      while (cursor !== null && index.has(cursor) && !seen.has(cursor)) {
+        seen.add(cursor)
+        const node: { name: string; parentId: number | null } = index.get(cursor)!
+        parts.push(node.name)
+        cursor = node.parentId
+      }
+      return parts.reverse().join('/')
+    }
+
+    // 顺序执行而不是 Promise.all：同一个 sqlite3 handle 上并发跑语句时，
+    // 本机的 node-sqlite3 原生绑定崩过（Work_AfterPrepare 抛 napi 异常，
+    // 整个 dev 进程 FATAL）。串行只多一点延迟，稳妥。
+    const folderRows = await this.db
+      .prepare(`
+        SELECT id, name, parent_id AS parentId, created_at AS createdAt, Shared, IsPublic
+        FROM folders
+        WHERE user_id = ? AND (Shared = 1 OR IsPublic = 1)
+        ORDER BY name COLLATE NOCASE ASC
+      `)
+      .bind(ownerId)
+      .all()
+
+    const fileRows = await this.db
+      .prepare(`
+        SELECT * FROM files
+        WHERE user_id = ? AND (Shared = 1 OR IsPublic = 1)
+        ORDER BY created_at DESC
+      `)
+      .bind(ownerId)
+      .all()
+
+    const folders: SharedFolder[] = (folderRows?.results || []).map((row: any) => ({
+      id: Number(row.id),
+      name: String(row.name),
+      parentId: row.parentId === null || row.parentId === undefined ? null : Number(row.parentId),
+      createdAt: row.createdAt ?? null,
+      Shared: normalizeShareMode(row.Shared),
+      IsPublic: toBool(row.IsPublic),
+      relDir: relDirOf(row.parentId === null || row.parentId === undefined ? null : Number(row.parentId))
+    }))
+
+    const files = (await this.attachAccess(
+      (fileRows?.results || []).map((row: any) => {
+        const owned = this.toOwned(row)
+        return { ...owned, relDir: relDirOf(owned.folderId) }
+      })
+    )) as SharedFile[]
+
+    return { folders, files }
   }
 
   /** 该文件被直接授权给哪些人（不含从父文件夹继承的） */

@@ -192,6 +192,11 @@
       :class="fill ? 'mx-4 mt-3 shrink-0 rounded-md bg-red-50 p-3 text-sm text-red-700' : 'mt-2 mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700'"
     >{{ uploadError }}</div>
 
+    <div
+      v-if="listError"
+      :class="fill ? 'mx-4 mt-3 shrink-0 rounded-md bg-red-50 p-3 text-sm text-red-700' : 'mt-2 mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700'"
+    >{{ listError }}</div>
+
     <!-- fill 模式下由本层承载滚动，页面本身不再被列表撑高 -->
     <div :class="fill ? 'min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-24 lg:pb-4' : ''">
       <FileList
@@ -325,6 +330,7 @@ const {
   folders,
   files,
   loading,
+  error: listError,
   hasItems,
   currentFolderId,
   breadcrumbs,

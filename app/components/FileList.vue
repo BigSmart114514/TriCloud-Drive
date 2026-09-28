@@ -33,6 +33,7 @@
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="emit('navigate-folder', folder)">
             <p class="text-sm sm:text-base font-medium text-gray-900 truncate">{{ folder.name }}</p>
+            <p v-if="folder.relDir" class="text-xs text-gray-400 truncate" :title="folder.relDir">{{ folder.relDir }}</p>
             <p v-if="formatDate(folder.createdAt)" class="text-xs sm:text-sm text-gray-500 truncate">{{ formatDate(folder.createdAt) }}</p>
           </div>
         </div>
@@ -99,6 +100,7 @@
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="emit('preview-file', file)">
             <p class="text-sm sm:text-base font-medium text-gray-900 truncate">{{ file.filename }}</p>
+            <p v-if="file.relDir" class="text-xs text-gray-400 truncate" :title="file.relDir">{{ file.relDir }}</p>
             <p class="text-xs sm:text-sm text-gray-500 truncate">
               {{ formatFileSize(file.fileSize) }}<span v-if="formatDate(file.createdAt)"> • {{ formatDate(file.createdAt) }}</span>
             </p>

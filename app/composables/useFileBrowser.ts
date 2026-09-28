@@ -13,15 +13,28 @@ export function useFileBrowser(options?: { targetUserId?: Ref<number | null | un
   ])
   const hasItems = computed(() => folders.value.length + files.value.length > 0)
 
+  // 列表拉取失败时的提示文案。onMounted 直接调 fetchFiles，
+  // 这里不兜住异常的话，401/500 会变成未捕获的 promise rejection，
+  // 报成 "Unhandled error during execution of mounted hook"，看不出真实原因。
+  const error = ref('')
+
   const fetchFiles = async () => {
     try {
       loading.value = true
+      error.value = ''
       const res = await FilesService.list(currentFolderId.value, tRef?.value ?? null)
       if (res.success) {
         folders.value = res.folders || []
         files.value = res.files || []
         currentFolderId.value = res.currentFolderId ?? null
       }
+    } catch (e: any) {
+      folders.value = []
+      files.value = []
+      error.value =
+        e?.statusCode === 401 || e?.status === 401
+          ? '登录已失效，请重新登录'
+          : e?.data?.statusMessage || e?.statusMessage || '加载文件列表失败'
     } finally {
       loading.value = false
     }
@@ -57,7 +70,7 @@ export function useFileBrowser(options?: { targetUserId?: Ref<number | null | un
   })
 
   return {
-    folders, files, loading, hasItems,
+    folders, files, loading, error, hasItems,
     currentFolderId, breadcrumbs,
     fetchFiles, navigateToFolder, goUp, goToBreadcrumb
   }
