@@ -1,12 +1,14 @@
 import { UserService } from '~~/server/utils/db'
 import { hashPassword, validateEmail, validatePassword, validateUsername } from '~~/server/utils/auth'
 import { getDb } from '~~/server/utils/db-adapter'
+import { common403Error, common405Error, dbConnectionError, common500Error } from '~~/types/error'
 export default defineEventHandler(async (event) => {
   if (getMethod(event) !== 'POST') {
-    throw createError({
-      statusCode: 405,
-      statusMessage: 'Method not allowed'
-    })
+    throw common405Error
+  }
+  const config = useRuntimeConfig()
+  if (config.allowRegister !== true) {
+    throw common403Error
   }
 
   try {
@@ -44,10 +46,7 @@ export default defineEventHandler(async (event) => {
     //const db = event.context.cloudflare?.env?.DB
     const db = getDb(event)
     if (!db) {
-      throw createError({
-        statusCode: 500,
-        statusMessage: '数据库连接失败'
-      })
+      throw dbConnectionError
     }
 
     const userService = new UserService(db)
@@ -88,9 +87,6 @@ export default defineEventHandler(async (event) => {
     }
     
     console.error('Registration error:', error)
-    throw createError({
-      statusCode: 500,
-      statusMessage: '服务器内部错误'
-    })
+    throw common500Error
   }
 })
