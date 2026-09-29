@@ -43,7 +43,6 @@
               <ShieldExclamationIcon class="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
               <p class="text-xs leading-relaxed text-amber-800">
                 管理员模式：你正在修改<template v-if="ownerLabel"><span class="font-medium">{{ ownerLabel }}</span> 的</template>分享设置。
-                改动会立即对被分享的人生效。
               </p>
             </div>
 

@@ -45,7 +45,9 @@
     </div>
 
     <!-- 列表 -->
-    <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-4">
+    <!-- pt-1 别删：选中态用的是 ring（box-shadow，不占布局），而这里 overflow-y-auto
+         会按 padding box 裁切。没有 pt 的话第一行的 ring 顶部会贴到裁切线上被削掉 1px。 -->
+    <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-4 pt-1">
       <p v-if="!loading && users.length === 0" class="px-3 py-10 text-center text-sm text-gray-400">
         没有匹配的用户
       </p>
