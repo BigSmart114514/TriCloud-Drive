@@ -54,9 +54,17 @@
         <li v-for="u in users" :key="u.id">
           <button
             type="button"
-            class="group flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-gray-100"
-            :class="u.id === selectedId ? 'bg-indigo-50 ring-1 ring-indigo-200' : ''"
+            class="group flex w-full items-center gap-3 rounded-lg px-2.5 py-2 text-left transition-colors"
+            :class="[
+              !canSelect(u)
+                ? 'cursor-not-allowed opacity-50'
+                : 'hover:bg-gray-100',
+              u.id === selectedId ? 'bg-indigo-50 ring-1 ring-indigo-200' : ''
+            ]"
             :aria-current="u.id === selectedId ? 'true' : undefined"
+            :aria-disabled="!canSelect(u) ? 'true' : undefined"
+            :disabled="!canSelect(u)"
+            :title="canSelect(u) ? undefined : '你的权限无法访问该用户的文件'"
             @click="emit('select', u)"
           >
             <span
@@ -123,6 +131,12 @@ const props = defineProps<{
   selectedId: number | null
   loading?: boolean
   modelValue?: string
+  /**
+   * 这一行能不能被选中。返回 false 的行**照常显示**但置灰不可点 ——
+   * 隐藏会让人以为「这人怎么不见了」，显示+禁用能直接看出存在但没权限。
+   * 服务端仍会独立拦截，这里只是不给点。
+   */
+  selectable?: (user: UserSummary) => boolean
 }>()
 
 const emit = defineEmits<{
@@ -133,6 +147,8 @@ const emit = defineEmits<{
 }>()
 
 const keyword = ref(props.modelValue ?? '')
+
+const canSelect = (u: UserSummary) => (props.selectable ? props.selectable(u) : true)
 
 // 输入同步给父级（父级做去抖查询），父级回填时也要同步回来
 watch(keyword, (v) => emit('update:modelValue', v))

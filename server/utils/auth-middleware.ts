@@ -164,5 +164,28 @@ export async function getMeAndTarget(event: any): Promise<MeAndTarget> {
     throw createError({ statusCode: 400, statusMessage: '非法的 targetUserId' })
   }
 
+  // 非超管不得进入超管的数据范围。
+  //
+  // 放在这里而不是逐个 handler，是因为 getMeAndTarget 是全部 useAdmin 端点的
+  // 唯一入口（files / folders / share / copy-paste / upload / download /
+  // change-password 共 18 处），一处拦住就不会漏。
+  //
+  // 之前没有任何角色区分：普通管理员用 targetUserId 就能进超管的文件。
+  // deleteUser 早就写了「普通管理员不能删除管理员或超管」，这里补的是同一条规则的
+  // 数据侧 —— 不然就变成「不能删超管，却能翻他文件、能改他分享」。
+  //
+  // 只在「管理视图 + 自己不是超管」时多查这一次；超管和普通浏览都是零额外查询。
+  if (adminMode && !me.isSuperAdmin) {
+    const db = getDb(event)
+    if (!db) throw createError({ statusCode: 500, statusMessage: '数据库连接失败' })
+    const row = await db
+      .prepare('SELECT IsSuperAdmin FROM users WHERE id = ?')
+      .bind(targetUserId)
+      .first() as any
+    if (row && (row.IsSuperAdmin === true || row.IsSuperAdmin === 1)) {
+      throw createError({ statusCode: 403, statusMessage: '普通管理员不能访问超级管理员的数据' })
+    }
+  }
+
   return { me, targetUserId, adminMode, authUserId: adminMode ? targetUserId : me.userId }
 }

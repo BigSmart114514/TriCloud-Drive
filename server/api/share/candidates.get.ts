@@ -12,7 +12,7 @@ import { getQuery } from 'h3'
  */
 export default defineEventHandler(async (event) => {
   try {
-    const { me } = await getMeAndTarget(event)
+    const { me, adminMode, targetUserId } = await getMeAndTarget(event)
     const meId = Number(me.userId)
     const db = getDb(event)
     if (!db) throw dbConnectionError
@@ -25,6 +25,11 @@ export default defineEventHandler(async (event) => {
 
     // 排除自己，以及已经在名单里的人（可由调用方传 exclude=1,2,3）
     const excluded = new Set<number>([meId])
+    // 管理视角下「自己」是**属主**：我在替 test 改分享，能搜到 test 的话
+    // 管理员会把他加进名单，保存时才撞 assertGrantees 的 400
+    // 「不能授权给属主本人」—— 让不可选的东西根本搜不出来。
+    // （getMeAndTarget 已经保证非超管进不了超管的数据，这里只管属主这一层）
+    if (adminMode) excluded.add(Number(targetUserId))
     if (q?.exclude) {
       for (const part of String(q.exclude).split(',')) {
         const n = Number(part)

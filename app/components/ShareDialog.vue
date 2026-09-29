@@ -35,6 +35,18 @@
           </div>
 
           <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+            <!-- 管理员模式：这是替别人改，标题栏那行「属主 xxx」容易被忽略 -->
+            <div
+              v-if="useAdmin"
+              class="mb-3 flex items-start gap-2 rounded-lg border-l-4 border-amber-400 bg-amber-50 px-3 py-2"
+            >
+              <ShieldExclamationIcon class="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <p class="text-xs leading-relaxed text-amber-800">
+                管理员模式：你正在修改<template v-if="ownerLabel"><span class="font-medium">{{ ownerLabel }}</span> 的</template>分享设置。
+                改动会立即对被分享的人生效。
+              </p>
+            </div>
+
             <!-- 分享方式：三态 -->
             <fieldset>
               <div class="grid grid-cols-3 gap-2">
@@ -185,10 +197,11 @@ import {
   GlobeAltIcon,
   MagnifyingGlassIcon,
   ShareIcon,
+  ShieldExclamationIcon,
   XMarkIcon
 } from '@heroicons/vue/24/outline'
 import { ShareService } from '~/services/share.service'
-import type { ShareCandidate, ShareGrant } from '~/services/share.service'
+import type { ShareCandidate, ShareGrant, ShareTargetType } from '~/services/share.service'
 import { notify, notifyError } from '~/utils/notify'
 import {
   PERM_ALL,
@@ -205,11 +218,23 @@ const props = defineProps<{
   targetId: number | null
   name?: string
   ownerLabel?: string
+  /** /manage/files 里管理员在替别人改分享。透传给服务端换 authUserId */
+  useAdmin?: boolean
+  /** 管理视角下被浏览的用户（分享设置的真正属主） */
+  targetUserId?: number | null
 }>()
 
 const emit = defineEmits<{ close: []; changed: [] }>()
 
 const isFolder = computed(() => props.targetType === 'folder')
+
+/** 分享目标的完整作用域：管理视角要把 useAdmin / targetUserId 一起发过去 */
+const scope = computed<ShareTargetType>(() => ({
+  targetType: props.targetType,
+  targetId: props.targetId!,
+  useAdmin: props.useAdmin,
+  targetUserId: props.targetUserId
+}))
 
 const MODE_OPTIONS = [
   { value: SHARE_NONE, label: '不分享' },
@@ -256,7 +281,7 @@ async function load() {
   if (!props.targetId) return
   loading.value = true
   try {
-    const res = await ShareService.list({ targetType: props.targetType, targetId: props.targetId })
+    const res = await ShareService.list(scope.value)
     mode.value = res.mode
     isPublic.value = res.IsPublic
     grants.value = res.grants ?? []
@@ -295,7 +320,7 @@ async function applyMode(value: number) {
   const prev = mode.value
   mode.value = value
   const res = await run(
-    () => ShareService.setState({ targetType: props.targetType, targetId: props.targetId! }, { mode: value as any }),
+    () => ShareService.setState(scope.value, { mode: value as any }),
     '设置分享方式失败'
   )
   if (res) {
@@ -311,7 +336,7 @@ async function applyPublic(next: boolean) {
   const prev = isPublic.value
   isPublic.value = next
   const res = await run(
-    () => ShareService.setState({ targetType: props.targetType, targetId: props.targetId! }, { isPublic: next }),
+    () => ShareService.setState(scope.value, { isPublic: next }),
     '设置公开失败'
   )
   if (res) {
@@ -334,7 +359,7 @@ async function submitGrants(next: ShareGrant[], okMessage: string) {
   grants.value = next
   const res = await run(
     () => ShareService.setState(
-      { targetType: props.targetType, targetId: props.targetId! },
+      scope.value,
       { grants: next.map((g) => ({ userId: g.userId, permission: g.permission })) }
     ),
     '保存授权名单失败'
@@ -380,7 +405,10 @@ function searchCandidates() {
   searching.value = true
   searchTimer = setTimeout(async () => {
     try {
+      // 属主本人不能进授权名单（服务端 assertGrantees 会 400）。
+      // 管理视角下属主是 targetUserId，不是「我」，所以要单独塞进去。
       const exclude = grants.value.map((g) => g.userId)
+      if (props.useAdmin && props.targetUserId != null) exclude.push(props.targetUserId)
       const res = await ShareService.candidates(q, exclude)
       candidates.value = res.candidates ?? []
     } catch {

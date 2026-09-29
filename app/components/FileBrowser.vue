@@ -239,7 +239,11 @@
       :target-type="shareTarget?.type ?? 'file'"
       :target-id="shareTarget?.id ?? null"
       :name="shareTarget?.name ?? ''"
+      :owner-label="props.useAdmin ? props.targetUserLabel : undefined"
+      :use-admin="!!props.useAdmin"
+      :target-user-id="targetUserIdRef"
       @close="shareTarget = null"
+      @changed="fetchFiles"
     />
 
     <transition name="slide-up">
@@ -337,6 +341,11 @@ const props = withDefaults(
      * 传了但自己不是管理员，服务端一律 403（不静默降级）。
      */
     useAdmin?: boolean
+    /**
+     * 管理视角下被浏览用户的显示名（用户名/邮箱），只用于分享弹窗里的
+     * 「属主 xxx」和横幅。首页侧栏选人浏览不传。
+     */
+    targetUserLabel?: string
     title?: string
     /** 铺满父容器高度并让列表内部滚动（配合 SidePanelLayout 的全屏页） */
     fill?: boolean
@@ -535,16 +544,17 @@ const onClipFile = (file: FileListFile) => clipFile(asFile(file))
 const onCopyFile = (file: FileListFile) => copyFile(asFile(file))
 
 // 分享按钮的行为（FileList 消费）：
-//   manage  —— 我是属主，点开 ShareDialog 改授权
+//   manage  —— 我是属主（或管理视角下我以属主身份操作），点开 ShareDialog 改授权
 //   inspect —— 是别人的内容，弹层显示「我所有的权限」（inspact 时不冒泡到这里）
 //   none    —— 不给按钮
 //
-// /manage/files 是纯管理视角：管理员以属主身份操作，「我的权限」对他没有意义，
-// 所以那里一律 none。
+// /manage/files 里管理员以被浏览者的身份操作（服务端 authUserId = targetUserId），
+// 所以是 manage 而不是 none：他改的确实是「这个人」的分享设置。
+// 「我的权限」对他没意义，所以这里不会出现 inspect。
 const { user: authUser } = useAuth()
 const shareTarget = ref<{ type: 'file' | 'folder'; id: number; name: string } | null>(null)
 const shareAction = (item: FileListFile | FileListFolder): 'manage' | 'inspect' | 'none' => {
-  if (props.useAdmin) return 'none'
+  if (props.useAdmin) return 'manage'
   const myId = authUser.value?.id
   const ownerId = item.ownerId
   // 拿不到属主信息时保守为不给入口，避免出现「点开必报错」的按钮

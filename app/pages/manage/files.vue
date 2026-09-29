@@ -4,6 +4,7 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useAuth } from '~/composables/useAuth'
 import FileBrowser from '~/components/FileBrowser.vue'
 import ManageUserList, { type UserSummary } from '~/components/ManageUserList.vue'
+import { notifyError } from '~/utils/notify'
 import { FolderOpenIcon, Bars3Icon, HomeIcon, ShieldExclamationIcon } from '@heroicons/vue/24/outline'
 
 useHead({ title: '文件总览' })
@@ -11,7 +12,7 @@ useHead({ title: '文件总览' })
 // 标题用下面的 useHead。definePageMeta({ title }) 在 Nuxt 4 已经不写 <title> 了，别留着误导
 definePageMeta({ layout: false })
 
-const { isAdmin, fetchUser } = useAuth()
+const { user: authUser, isAdmin, fetchUser } = useAuth()
 await fetchUser()
 
 // 非管理员直接跳回首页。真正的拦截在 auth.global.ts（SSR 阶段就拦），
@@ -46,7 +47,30 @@ async function fetchUsers() {
   }
 }
 
+/**
+ * 服务端 getMeAndTarget 已经拦了「非超管不得进入超管数据」（403）。
+ * 这里只是把不可选的人**显示出来但点不动**，而不是选中后弹一个 403 ——
+ * 沿用 manage/user.vue 里 disableDeleteFor 的做法：看得见，但操作不给。
+ *
+ * 判定必须和服务端同规则，只禁**超管**（getMeAndTarget 里就是这一条）：
+ * 千万别用 useAuth 的 isAdmin 来「有权限就全放行」—— 那个是
+ * IsAdmin || IsSuperAdmin，普通管理员也是 true，那样等于这里什么都不拦。
+ * 要的是「我是不是超管」，所以自己算 isSuper。
+ */
+const isSuper = computed(() => !!authUser.value?.IsSuperAdmin)
+
+function isSelectable(u: UserSummary) {
+  if (isSuper.value) return true
+  // 自己的文件永远能看（服务端 guard 只查目标是不是超管，自己不是）
+  if (u.id === authUser.value?.id) return true
+  return !u.IsSuperAdmin
+}
+
 function selectUser(u: UserSummary) {
+  if (!isSelectable(u)) {
+    notifyError(u.IsSuperAdmin ? '普通管理员不能访问超级管理员的文件' : '普通管理员不能访问管理员的文件')
+    return
+  }
   selectedUserId.value = u.id
   drawerOpen.value = false
 }
@@ -87,6 +111,7 @@ await fetchUsers()
             :users="users"
             :selected-id="selectedUserId"
             :loading="loadingUsers"
+            :selectable="isSelectable"
             @select="selectUser"
             @search="fetchUsers"
             @refresh="fetchUsers"
@@ -149,6 +174,7 @@ await fetchUsers()
             fill
             :target-user-id="selectedUser.id"
             :use-admin="true"
+            :target-user-label="selectedUser.username || selectedUser.email || ''"
             :title="`用户：${selectedUser.username || selectedUser.email}（ID: ${selectedUser.id}）`"
           />
         </div>

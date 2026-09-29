@@ -190,7 +190,7 @@
                       type="datetime-local"
                       v-model="u.expire_at"
                       @blur="normalizeExpireAt(u)"
-                      :disabled="updatingId === u.id"
+                      :disabled="updatingId === u.id || disableEditFor(u)"
                       class="w-56 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                       step="1"
                       title="选择日期时间；清空表示不过期"
@@ -201,7 +201,7 @@
                       <input
                         type="checkbox"
                         v-model="u.IsAdmin"
-                        :disabled="updatingId === u.id"
+                        :disabled="updatingId === u.id || disableEditFor(u)"
                         class="h-4 w-4 text-indigo-600 border-gray-300 rounded"
                       />
                     </div>
@@ -211,7 +211,8 @@
                       <input
                         type="checkbox"
                         v-model="u.IsSuperAdmin"
-                        :disabled="updatingId === u.id"
+                        :disabled="updatingId === u.id || disableEditFor(u) || !isSuper"
+                        :title="isSuper ? undefined : '只有超级管理员可以授予或取消超级管理员'"
                         class="h-4 w-4 text-indigo-600 border-gray-300 rounded"
                       />
                     </div>
@@ -223,7 +224,7 @@
                       type="text"
                       v-model="u.maxStorage"
                       @blur="normalizeSizeField(u, 'maxStorage')"
-                      :disabled="updatingId === u.id"
+                      :disabled="updatingId === u.id || disableEditFor(u)"
                       class="w-40 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                       placeholder="如 10 GB"
                       inputmode="decimal"
@@ -238,7 +239,7 @@
                       type="text"
                       v-model="u.usedStorage"
                       @blur="normalizeSizeField(u, 'usedStorage')"
-                      :disabled="updatingId === u.id"
+                      :disabled="updatingId === u.id || disableEditFor(u)"
                       class="w-40 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                       placeholder="如 512 MB"
                       inputmode="decimal"
@@ -253,7 +254,7 @@
                       type="text"
                       v-model="u.maxDownload"
                       @blur="normalizeSizeField(u, 'maxDownload')"
-                      :disabled="updatingId === u.id"
+                      :disabled="updatingId === u.id || disableEditFor(u)"
                       class="w-40 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                       placeholder="如 100 GB"
                       inputmode="decimal"
@@ -268,7 +269,7 @@
                       type="text"
                       v-model="u.usedDownload"
                       @blur="normalizeSizeField(u, 'usedDownload')"
-                      :disabled="updatingId === u.id"
+                      :disabled="updatingId === u.id || disableEditFor(u)"
                       class="w-40 rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm"
                       placeholder="如 1.5 GB"
                       inputmode="decimal"
@@ -288,7 +289,7 @@
 
                     <button
                       @click="saveUser(u)"
-                      :disabled="updatingId === u.id"
+                      :disabled="updatingId === u.id || disableEditFor(u)"
                       class="bg-white hover:bg-gray-50 text-gray-700 px-3 py-1.5 rounded-md text-sm border"
                     >
                       {{ updatingId === u.id ? '保存中...' : '保存' }}
@@ -316,7 +317,7 @@
 <script setup lang="ts">
 
 import { formatDateTime } from '~/utils/time'
-import { notify } from '~/utils/notify'
+import { notify, notifyError } from '~/utils/notify'
 import { HomeIcon } from '@heroicons/vue/24/outline'
 
 useHead({ title: '用户管理' })
@@ -416,6 +417,22 @@ const isAdminOnly = computed(() => !!user.value?.IsAdmin && !isSuper.value)
 const disableDeleteFor = (u: DbUser) => {
   if (u.id === user.value?.id) return true
   if (isAdminOnly.value && (u.IsAdmin || u.IsSuperAdmin)) return true
+  return false
+}
+
+/**
+ * 「能不能改这一行」。与 disableDeleteFor 同一套角色规则，因为服务端
+ * updateUser.post.ts 和 deleteUser.post.ts 现在是同一个模型：
+ *   超管       → 任何人
+ *   普通管理员 → 只能改普通用户，且不能把谁设为超管
+ *
+ * 连带效果：普通管理员**改不了自己那一行**（自己就是 IsAdmin=1），
+ * 自己的配额/到期时间变只读。配额本质是超管授予的资源，自己改等于自批。
+ *
+ * 这里只是置灰，真正的拦截在服务端 —— 置灰是为了不让人点了才吃 403。
+ */
+const disableEditFor = (u: DbUser) => {
+  if (!isSuper.value && (u.IsAdmin || u.IsSuperAdmin)) return true
   return false
 }
 
@@ -559,6 +576,10 @@ const handleAddUser = async () => {
 /* -------- 保存用户：解析输入为字节数后提交 -------- */
 
 const saveUser = async (u: DbUser) => {
+  if (disableEditFor(u)) {
+    notifyError('普通管理员不能修改管理员或超级管理员')
+    return
+  }
   try {
     updatingId.value = u.id
 
