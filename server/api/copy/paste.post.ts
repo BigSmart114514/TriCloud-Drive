@@ -9,7 +9,7 @@ import { ensurePaths } from '~~/server/utils/folders'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { uniqPositiveInts } from '~~/server/utils/functions'
 import { skipAndOverwriteError } from '~~/types/error'
-import { DEFAULT_SHARE_MODE, PERM_READ, PERM_WRITE } from '~~/types/share'
+import { DEFAULT_SHARE_MODE, hasPermission, PERM_WRITE } from '~~/types/share'
 
 function sanitizeForKey(name: string): string {
   return name.replace(/[\\?%*:|"<>]/g, '_').replace(/[\s]+/g, ' ')
@@ -46,19 +46,21 @@ export default defineEventHandler(async (event) => {
   const fileService = new FileService(db)
   const folderService = new FolderService(db)
 
-  // 复制源：对我可读即可（属主放行 / 分享给了 READ）
+  // 复制源：要求 **WRITE**，不只是读得到。
+  // 规则是「能原地改的才允许拷走」：只读授权的内容不会被搬进自己的空间，
+  // 否则属主事后撤掉授权也追不回来。子树内的子目录/文件同规则（见 collectSubtree）。
   let movedFolders: OwnedFolder[]
   let movedFileRows: OwnedFile[]
   try {
-    movedFolders = await folderService.findAccessibleMany(authId, folderIds, PERM_READ)
-    movedFileRows = await fileService.findAccessibleMany(authId, fileIds, PERM_READ)
+    movedFolders = await folderService.findAccessibleMany(authId, folderIds, PERM_WRITE)
+    movedFileRows = await fileService.findAccessibleMany(authId, fileIds, PERM_WRITE)
   } catch (e: any) {
     return { success: false, message: e?.statusMessage || '部分内容不存在或无权限' }
   }
 
   // 目标目录：要 write。原来只有 findOwnedById(userId)，
   // 普通用户传 targetUserId 就能往别人树里粘贴。
-  let destOwnerId: number | null = null
+  let destOwnerId: number | null
   if (targetFolderId !== null) {
     try {
       const dest = await folderService.findAccessibleById(authId, targetFolderId, PERM_WRITE)
@@ -66,6 +68,17 @@ export default defineEventHandler(async (event) => {
     } catch (e: any) {
       return { success: false, message: e?.statusMessage || '目标文件夹不存在或无权限' }
     }
+  } else {
+    /**
+     * 根层 = **请求者自己的**根（authUserId：useAdmin 时是 targetUserId，
+     * 否则是我自己）。
+     *
+     * 原来这里 destOwnerId 留空，userId 落到「源的属主」头上，等于
+     * 「不校验目标」：把别人分享给我的文件粘到根目录，会在对方根目录里
+     * 插一条记录、额度也扣对方账上。现在根层归属明确是我自己，
+     * 跨用户复制就是「复制到我的文件」，语义也对上了。
+     */
+    destOwnerId = authId
   }
 
   /**
@@ -73,7 +86,7 @@ export default defineEventHandler(async (event) => {
    * 副本永远落在**目标目录的属主**树里（不是源的属主）—— 复制到别人树里
    * 时副本归对方，这是分享语义下唯一自洽的解释。
    */
-  const userId = destOwnerId ?? (movedFolders[0]?.userId ?? movedFileRows[0]?.userId ?? authId)
+  const userId = destOwnerId
 
   // 拉取待复制的单个文件列表（包含复制所需字段）
   type SrcFile = {
@@ -103,50 +116,73 @@ export default defineEventHandler(async (event) => {
   const filesFromFolders: SrcFile[] = []
   const filesFromFoldersSet = new Set<number>()
 
-  // 工具：广度优先收集子树
-  async function collectSubtree(rootId: number, rootName: string) {
+  /**
+   * 广度优先收集一棵子树：子目录 + 里面的文件，并生成相对路径。
+   *
+   * `sourceOwnerId` 必须是**源树的属主**，不是目标属主。两个枚举方法
+   * （listChildrenByParentIds / listByFolders）都是 `WHERE user_id = ?` 硬限定，
+   * 拿目标属主去查别人的树，恒返回空 —— 于是「文件夹复制过来了、子项全没了」。
+   *
+   * 收录条件是 **PERM_WRITE**，不是 READ：能原地改的才允许拷走。只读授权的内容
+   * 不会被搬进自己的空间，否则属主撤掉授权也追不回来了。顺带也保证不会把
+   * 别人树里不可见的子树（SHARE_NONE / 私人文件）一并带出去。
+   */
+  async function collectSubtree(rootId: number, rootName: string, sourceOwnerId: number) {
     relPathByFolderId.set(rootId, rootName)
     pathsToEnsure.add(rootName)
 
     const subtree = new Set<number>([rootId])
     let frontier: number[] = [rootId]
     while (frontier.length > 0) {
-      const children = await folderService.listChildrenByParentIds(userId, frontier)
+      const children = await folderService.listChildrenByParentIds(sourceOwnerId, frontier)
       const next: number[] = []
       for (const c of children) {
-        if (!subtree.has(c.id)) {
-          subtree.add(c.id)
-          const parentPath = relPathByFolderId.get(c.parentId ?? -1) || ''
-          const myPath = parentPath ? `${parentPath}/${c.name}` : c.name
-          relPathByFolderId.set(c.id, myPath)
-          pathsToEnsure.add(myPath)
-          next.push(c.id)
-        }
+        if (subtree.has(c.id)) continue
+        const access = await folderService.resolveAccess(authId, c.id)
+        if (!hasPermission(access.mask, PERM_WRITE)) continue
+        subtree.add(c.id)
+        const parentPath = relPathByFolderId.get(c.parentId ?? -1) || ''
+        const myPath = parentPath ? `${parentPath}/${c.name}` : c.name
+        relPathByFolderId.set(c.id, myPath)
+        pathsToEnsure.add(myPath)
+        next.push(c.id)
       }
       frontier = next
     }
 
-    // 收集该子树中的所有文件（带 key/size/type）
+    // 收集该子树中的所有文件（带 key/size/type）。按所在目录分组，
+    // 每组只解析一次目录掩码，避免每个文件跑一次上行 CTE。
     const ids = Array.from(subtree)
     for (let i = 0; i < ids.length; i += CHUNK) {
       const batch = ids.slice(i, i + CHUNK)
-      const list: SrcFile[] = (await fileService.listByFolders(userId, batch)).map((r) => ({
-        id: r.id,
-        filename: r.filename,
-        folderId: r.folderId,
-        fileKey: r.fileKey,
-        fileSize: r.fileSize,
-        contentType: r.contentType
-      }))
+      const list = await fileService.listByFoldersWithGrants(sourceOwnerId, batch)
+      const byFolder = new Map<number, OwnedFile[]>()
       for (const f of list) {
-        filesFromFolders.push(f)
-        filesFromFoldersSet.add(f.id)
+        const key = f.folderId ?? -1
+        if (!byFolder.has(key)) byFolder.set(key, [])
+        byFolder.get(key)!.push(f)
+      }
+      for (const [folderId, group] of byFolder) {
+        const dirAccess = await folderService.resolveAccess(authId, folderId)
+        const writable = await fileService.filterAccessible(authId, group, dirAccess, PERM_WRITE)
+        for (const f of writable) {
+          filesFromFolders.push({
+            id: f.id,
+            filename: f.filename,
+            folderId: f.folderId,
+            fileKey: f.fileKey,
+            fileSize: f.fileSize,
+            contentType: f.contentType
+          })
+          filesFromFoldersSet.add(f.id)
+        }
       }
     }
   }
 
   for (const f of movedFolders) {
-    await collectSubtree(f.id, f.name)
+    // f.userId = 源目录的属主。剪贴板里混了多个属主的条目也各走各的。
+    await collectSubtree(f.id, f.name, f.userId)
   }
 
   // 在目标位置创建/复用需要的目录（含空目录）

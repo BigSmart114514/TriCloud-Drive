@@ -28,11 +28,23 @@ export function useClipboard(
     fetchFiles,
     clearSelection
   }: Params,
-  options?: { targetUserId?: Ref<number | null | undefined>, overwriteExisting?: Ref<boolean | null | undefined>, skipExisting?: Ref<boolean | null | undefined>}
+  options?: {
+    targetUserId?: Ref<number | null | undefined>
+    overwriteExisting?: Ref<boolean | null | undefined>
+    skipExisting?: Ref<boolean | null | undefined>
+    useAdmin?: Ref<boolean | null | undefined>
+  }
 ) {
   const tRef = options?.targetUserId
+  const useAdmin = options?.useAdmin
 
-  const clipboard = ref<ClipboardPayload | null>(null)
+  /**
+   * 剪贴板必须跨组件存活。
+   *
+   * 首页侧栏切换选中的人时 FileBrowser 是按 :key 重建的（index.vue），
+   * 用局部 ref 的话剪贴一下、切个人，内容就没了。所以走 useState。
+   */
+  const clipboard = useState<ClipboardPayload | null>('clipboard', () => null)
   const pasting = ref(false)
 
   const hasClipboard = computed(() => {
@@ -52,37 +64,28 @@ export function useClipboard(
     return '粘贴'
   })
 
-  const clipSelection = () => {
-    if (selectedCount.value === 0) return
+  const setClipboard = (mode: 'cut' | 'copy', folderIds: number[], fileIds: number[]) => {
     clipboard.value = {
-      mode: 'cut',
-      folderIds: Array.from(selectedFolderIds.value),
-      fileIds: Array.from(selectedFileIds.value),
-      fromFolderId: currentFolderId.value ?? null
-    }
-  }
-  const copySelection = () => {
-    if (selectedCount.value === 0) return
-    clipboard.value = {
-      mode: 'copy',
-      folderIds: Array.from(selectedFolderIds.value),
-      fileIds: Array.from(selectedFileIds.value),
+      mode,
+      folderIds,
+      fileIds,
       fromFolderId: currentFolderId.value ?? null
     }
   }
 
-  const clipFolder = (folder: { id: number }) => {
-    clipboard.value = { mode: 'cut', folderIds: [folder.id], fileIds: [], fromFolderId: currentFolderId.value ?? null }
+  const clipSelection = () => {
+    if (selectedCount.value === 0) return
+    setClipboard('cut', Array.from(selectedFolderIds.value), Array.from(selectedFileIds.value))
   }
-  const copyFolder = (folder: { id: number }) => {
-    clipboard.value = { mode: 'copy', folderIds: [folder.id], fileIds: [], fromFolderId: currentFolderId.value ?? null }
+  const copySelection = () => {
+    if (selectedCount.value === 0) return
+    setClipboard('copy', Array.from(selectedFolderIds.value), Array.from(selectedFileIds.value))
   }
-  const clipFile = (file: { id: number }) => {
-    clipboard.value = { mode: 'cut', folderIds: [], fileIds: [file.id], fromFolderId: currentFolderId.value ?? null }
-  }
-  const copyFile = (file: { id: number }) => {
-    clipboard.value = { mode: 'copy', folderIds: [], fileIds: [file.id], fromFolderId: currentFolderId.value ?? null }
-  }
+
+  const clipFolder = (folder: { id: number }) => setClipboard('cut', [folder.id], [])
+  const copyFolder = (folder: { id: number }) => setClipboard('copy', [folder.id], [])
+  const clipFile = (file: { id: number }) => setClipboard('cut', [], [file.id])
+  const copyFile = (file: { id: number }) => setClipboard('copy', [], [file.id])
 
   const pasteClipboard = async () => {
     if (!hasClipboard.value || pasting.value) return
@@ -91,10 +94,11 @@ export function useClipboard(
       const targetFolderId = currentFolderId.value ?? null
       const c = clipboard.value!
       const t = tRef?.value ?? null
+      const admin = useAdmin?.value || undefined
 
       const res = c.mode === 'cut'
-        ? await MoveService.paste(targetFolderId, c.folderIds, c.fileIds, t, options?.overwriteExisting?.value, options?.skipExisting?.value)
-        : await CopyService.paste(targetFolderId, c.folderIds, c.fileIds, t, options?.overwriteExisting?.value, options?.skipExisting?.value)
+        ? await MoveService.paste(targetFolderId, c.folderIds, c.fileIds, t, options?.overwriteExisting?.value, options?.skipExisting?.value, admin)
+        : await CopyService.paste(targetFolderId, c.folderIds, c.fileIds, t, options?.overwriteExisting?.value, options?.skipExisting?.value, admin)
 
       if (!res?.success) {
         notify(res?.message || (c.mode === 'cut' ? '移动失败' : '复制失败'), 'error')

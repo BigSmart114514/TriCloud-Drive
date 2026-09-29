@@ -24,6 +24,14 @@ export function useFileBrowser(options?: {
   ])
   const hasItems = computed(() => folders.value.length + files.value.length > 0)
 
+  /**
+   * 服务端下发的两个判定，原先在 fetchFiles 里被丢掉了。
+   *   sharedList —— 当前是「平铺分享清单」还是真实目录（清单里没有粘贴目标）
+   *   canWrite   —— 当前目录我能不能写（共享视图据此给不给上传/新建/粘贴）
+   */
+  const sharedList = ref(false)
+  const canWrite = ref(true)
+
   // 列表拉取失败时的提示文案。onMounted 直接调 fetchFiles，
   // 这里不兜住异常的话，401/500 会变成未捕获的 promise rejection，
   // 报成 "Unhandled error during execution of mounted hook"，看不出真实原因。
@@ -43,6 +51,8 @@ export function useFileBrowser(options?: {
         folders.value = res.folders || []
         files.value = res.files || []
         currentFolderId.value = res.currentFolderId ?? null
+        sharedList.value = !!res.sharedList
+        canWrite.value = res.canWrite ?? true
       }
     } catch (e: any) {
       folders.value = []
@@ -87,7 +97,7 @@ export function useFileBrowser(options?: {
 
   return {
     folders, files, loading, error, hasItems,
-    currentFolderId, breadcrumbs,
+    currentFolderId, breadcrumbs, sharedList, canWrite,
     fetchFiles, navigateToFolder, goUp, goToBreadcrumb
   }
 }

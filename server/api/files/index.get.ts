@@ -3,7 +3,7 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
 import { FileService, FolderService } from '~~/server/utils/db'
-import { hasPermission, PERM_ALL, PERM_READ } from '~~/types/share'
+import { hasPermission, PERM_ALL, PERM_READ, PERM_WRITE } from '~~/types/share'
 import { getQuery } from 'h3'
 
 /**
@@ -29,11 +29,13 @@ export default defineEventHandler(async (event) => {
     const folderService = new FolderService(db)
 
     /**
-     * 附上 ownerId：分享设置只有属主能改，前端要靠它决定给不给分享入口。
+     * 附上两个前端要用的判定字段：
+     *   ownerId  —— 分享设置只有属主能改，据此决定给不给分享入口
+     *   canWrite —— 据此把剪贴/重命名/删除按条目置灰
      * 记录里本来就带 userId，这里只是给它一个语义明确的名字。
      */
-    const withOwner = <T extends { userId: number }>(rows: T[]) =>
-      rows.map(r => ({ ...r, ownerId: r.userId }))
+    const withMeta = <T extends { userId: number; canWrite?: boolean }>(rows: T[], fallbackWrite: boolean) =>
+      rows.map(r => ({ ...r, ownerId: r.userId, canWrite: r.canWrite ?? fallbackWrite }))
 
     // 解析 folderId，root / 0 / 缺省都视为根层
     let folderId: number | null = null
@@ -59,8 +61,10 @@ export default defineEventHandler(async (event) => {
         isOwner: false,
         sharedList: true,
         ownerId: targetUserId,
-        folders: withOwner(shared.folders),
-        files: withOwner(shared.files)
+        // 平铺清单没有「当前目录」概念，可写性逐条给（listSharedWithMe 已算好）
+        canWrite: false,
+        folders: withMeta(shared.folders, false),
+        files: withMeta(shared.files, false)
       }
     }
 
@@ -71,6 +75,8 @@ export default defineEventHandler(async (event) => {
     const ownedFolder = folderId === null ? null : await folderService.findOwnedById(authId, folderId)
     const isOwner = folderId === null || !!ownedFolder
 
+    // 当前目录我能不能写。共享视图的工具条（上传/新建/粘贴）靠它显隐。
+    let dirCanWrite = true
     let dirAccessMask = PERM_ALL
     let subtreeOwnerId = authId
     if (!isOwner) {
@@ -79,6 +85,7 @@ export default defineEventHandler(async (event) => {
         throw createError({ statusCode: 404, statusMessage: '文件夹不存在或无权限' })
       }
       dirAccessMask = access.mask
+      dirCanWrite = hasPermission(access.mask, PERM_WRITE)
       subtreeOwnerId = (await folderService.getOwnerId(folderId!)) ?? authId
     }
 
@@ -91,10 +98,12 @@ export default defineEventHandler(async (event) => {
     let folders = childFolders
     let files = allFiles
     if (!isOwner) {
-      const kept: OwnedFolder[] = []
+      const kept: (OwnedFolder & { canWrite: boolean })[] = []
       for (const f of childFolders) {
         const access = await folderService.resolveAccess(authId, f.id)
-        if (hasPermission(access.mask, PERM_READ)) kept.push(f)
+        if (hasPermission(access.mask, PERM_READ)) {
+          kept.push({ ...f, canWrite: hasPermission(access.mask, PERM_WRITE) })
+        }
       }
       folders = kept
       files = await fileService.filterAccessible(authId, allFiles, {
@@ -104,18 +113,23 @@ export default defineEventHandler(async (event) => {
       })
     }
 
+    const filesFallbackWrite = hasPermission(dirAccessMask, PERM_WRITE)
     return {
       success: true,
       currentFolderId: folderId,
       isOwner,
+      // 当前目录是否可写：共享视图据此决定要不要给上传/新建/粘贴入口
+      canWrite: dirCanWrite,
       sharedList: false,
       // 当前目录名：从别人的共享目录进去时面包屑需要它，
       // 否则 useFileBrowser 只能显示「全部文件」
       folder: folderId === null
         ? null
         : { id: folderId, name: (await folderService.findOwnedById(subtreeOwnerId, folderId))?.name ?? '' },
-      folders: withOwner(folders),
-      files: withOwner(files)
+      // folders 在被授权分支已逐条算过 canWrite；files 统一继承目录掩码。
+      // 属主时目录掩码是 PERM_ALL，两边都落到 true。
+      folders: withMeta(folders, filesFallbackWrite),
+      files: withMeta(files, filesFallbackWrite)
     }
   } catch (error: any) {
     console.error('Get items error:', error)

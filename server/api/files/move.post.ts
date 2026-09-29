@@ -51,8 +51,12 @@ export default defineEventHandler(async (event) => {
   }
 
   // 目标目录同样要 write。根层（null）不校验 —— 它属于自己的根
-  let destOwnerId: number | null = null
-  if (targetFolderId !== null) {
+  // 根层同样归属请求者自己（authUserId），见 copy/paste.post.ts 的说明：
+  // 留空会让 userId 落到源的属主头上，跨树移动就变成了在对方树里挪。
+  let destOwnerId: number | null
+  if (targetFolderId === null) {
+    destOwnerId = authId
+  } else {
     try {
       const dest = await folderService.findAccessibleById(authId, targetFolderId, PERM_WRITE)
       destOwnerId = dest.userId

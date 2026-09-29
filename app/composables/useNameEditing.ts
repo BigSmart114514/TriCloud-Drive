@@ -10,9 +10,14 @@ export function useNameEditing(
   breadcrumbs: Ref<Array<{ id: number | null; name: string }>>,
   currentFolderId: Ref<number | null>,
   fetchFiles: () => Promise<void>,
-  options?: { targetUserId?: Ref<number | null | undefined> }
+  options?: {
+    targetUserId?: Ref<number | null | undefined>
+    /** 显式传。/manage/files 传 true 才能代建/代改名 */
+    useAdmin?: Ref<boolean | null | undefined>
+  }
 ) {
   const tRef = options?.targetUserId
+  const admin = () => options?.useAdmin?.value || undefined
 
   const keepExtIfNone = (oldName: string, entered: string) => {
     const trim = (entered || '').trim()
@@ -36,7 +41,7 @@ export function useNameEditing(
     if (!name) return
     if (name.length > 255) return notify('文件夹名称过长（最多255字符）','error')
     try {
-      const res = await FoldersService.create(name, currentFolderId.value ?? null, tRef?.value ?? null)
+      const res = await FoldersService.create(name, currentFolderId.value ?? null, tRef?.value ?? null, admin())
       if (res.success) await fetchFiles()
       else notify(res.message || '创建失败', 'error')
     } catch (e) {
@@ -52,7 +57,7 @@ export function useNameEditing(
     if (err) return notify(err, 'error')
     if (newName === folder.name) return
     try {
-      const res = await FoldersService.rename(folder.id, newName, tRef?.value ?? null)
+      const res = await FoldersService.rename(folder.id, newName, tRef?.value ?? null, admin())
       if (!res.success) return notify(res.message || '重命名失败', 'error')
 
       const idx = folders.value.findIndex(f => f.id === folder.id)
@@ -71,7 +76,7 @@ export function useNameEditing(
     if (err) return notify(err, 'error')
     if (finalName === file.filename) return
     try {
-      const res = await FilesService.rename(file.id, finalName, tRef?.value ?? null)
+      const res = await FilesService.rename(file.id, finalName, tRef?.value ?? null, admin())
       if (!res.success) return notify(res.message || '重命名失败', 'error')
       const idx = files.value.findIndex(f => f.id === file.id)
       if (idx >= 0) files.value[idx].filename = finalName

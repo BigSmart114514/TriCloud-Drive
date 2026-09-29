@@ -5,6 +5,7 @@ import {
   normalizePermission,
   normalizeShareMode,
   PERM_READ,
+  PERM_WRITE,
   SHARE_INHERIT,
   SHARE_NONE,
   SHARE_SHARED
@@ -177,7 +178,7 @@ function decideAncestor(
 }
 
 /**
- * 把「起始节点自身」与「最近的边界祖先」合并成最终权限。
+ * 把「起始节点自身」与祖先侧的授权合并成最终权限。
  *
  * 起始节点的三态决定要不要看祖先：
  *   不分享 → 直接拒绝，祖先一律不看
@@ -186,10 +187,24 @@ function decideAncestor(
  *
  * 起始节点自己的名单和公开，在继承态下同样生效 —— 这正是「只给 B 加一个人
  * 而不想切断上层继承」所需要的。
+ *
+ * `belowBoundaryMask` 是 resolveAccess 从链路上额外带下来的一段：节点与最近
+ * 边界之间的那些**非边界**祖先（Shared=2）上的授权，按位 OR。`belowBoundaryIsPublic`
+ * 是同一段里是否存在公开目录（IsPublic=1 等价于给所有人 READ）。
+ *
+ *   为什么需要它：以前只 JOIN 了「自身 + 最近边界」两行，写在继承态目录上的
+ *   授权读不到。后果是能往那个目录里写（它自身是 pri=0，直接授权生效），
+ *   却看不见自己写进去的东西（子项向上找边界时跳过它，落到没有授权的上层）。
+ *   公开标记当时也一样漏读。修好后公开目录下的新建项才对所有人可见。
+ *
+ *   这段只覆盖**边界之下**的部分，边界及其以上仍然由 ancestor 说了算，
+ *   所以「显式不分享」的墙没被绕过。
  */
 function combineWithAncestor(
   self: { mode: ShareMode; isPublic: boolean; permission?: any },
-  ancestor: ResolvedAccess
+  ancestor: ResolvedAccess,
+  belowBoundaryMask = 0,
+  belowBoundaryIsPublic = false
 ): ResolvedAccess {
   const own =
     self.permission !== null && self.permission !== undefined ? normalizePermission(self.permission) : 0
@@ -204,8 +219,8 @@ function combineWithAncestor(
   return {
     boundary: ancestor.boundary,
     mode: SHARE_INHERIT,
-    isPublic: self.isPublic || ancestor.isPublic,
-    mask: normalizePermission(direct | ancestor.mask)
+    isPublic: self.isPublic || ancestor.isPublic || belowBoundaryIsPublic,
+    mask: normalizePermission(direct | ancestor.mask | belowBoundaryMask)
   }
 }
 
@@ -444,9 +459,17 @@ export class FolderService {
   /**
    * 解析该目录对某用户的有效权限。
    *
-   * 一次查询同时取回两样东西：目录**自身**，以及向上最近的**边界祖先**
-   * （Shared IN (0,1)；继承态会被跳过）。两者都要读——继承态下目录自己的
-   * 名单和公开标记同样生效。列目录时整个请求只调一次，之后在内存里过滤。
+   * 一次查询取回「节点自身 → 最近边界祖先（含）之间」的**整条链路**，每一行都读
+   * 该行身上的授权：
+   *   depth=0 的行        —— 节点自身，它的名单/公开在任何三态下都生效
+   *   边界行(pri=1)       —— 最近的 Shared IN (0,1) 祖先，边界以上的授权由它决定，
+   *                         SHARE_NONE 在这里是一道墙
+   *   中间行(pri=2)       —— 夹在两者之间的继承态目录，按位 OR 合并
+   *
+   * 中间那一段是必须的：只 JOIN 自身+边界的话，写在继承态目录上的授权读不到，
+   * 于是能往那个目录里写、却看不见自己写进去的东西。
+   *
+   * 列目录时整个请求只调一次，之后在内存里过滤。
    */
   async resolveAccess(userId: number, folderId: number | null): Promise<ResolvedAccess> {
     if (folderId === null || folderId === undefined) return NO_ACCESS
@@ -460,29 +483,59 @@ export class FolderService {
           FROM folders f
           JOIN up ON f.id = up.parent_id
         ),
+        -- 边界 = 最近的 Shared IN (0,1) 祖先（没有就取到根）。
+        boundary AS (
+          SELECT COALESCE(
+            (SELECT MIN(depth) FROM up WHERE shared IN (0, 1) AND depth > 0),
+            (SELECT MAX(depth) FROM up)
+          ) AS depth
+        ),
         picked AS (
-          SELECT * FROM (
-            SELECT 0 AS pri, id, shared, pub FROM up WHERE depth = 0
-            UNION ALL
-            SELECT 1 AS pri, id, shared, pub FROM (
-              SELECT id, shared, pub FROM up WHERE shared IN (0, 1) AND depth > 0
-              ORDER BY depth ASC LIMIT 1
-            )
-          )
+          SELECT up.id, up.shared, up.pub, up.depth,
+            CASE
+              WHEN up.depth = 0 THEN 0
+              -- 边界行：最近的 Shared IN (0,1)。边界以上的授权归它管，不能混进 below
+              WHEN up.shared IN (0, 1) AND up.depth <= boundary.depth THEN 1
+              ELSE 2
+            END AS pri
+          FROM up, boundary
+          WHERE up.depth = 0 OR up.depth <= boundary.depth
         )
-        SELECT p.pri, p.shared, p.pub, fa.permission
+        SELECT p.pri, p.depth, p.shared, p.pub, fa.permission
         FROM picked p
         LEFT JOIN folder_access fa ON fa.folder_id = p.id AND fa.user_id = ?
-        ORDER BY p.pri
+        ORDER BY p.depth ASC
       `)
       .bind(folderId, userId)
       .all()
       .catch(() => ({ results: [] }))
 
     const rows = res?.results || []
-    const self = rows.find((r: any) => Number(r.pri) === 0)
+    const self = rows.find((r: any) => Number(r.depth) === 0)
     if (!self) return NO_ACCESS
-    const anc = rows.find((r: any) => Number(r.pri) === 1)
+
+    // pri=2 的行 = 节点与最近边界之间的非边界祖先，它们身上的授权与公开标记
+    // 以前读不到，现在合并进来。边界行本身不在这里 —— 归 decideAncestor 管。
+    let belowBoundaryMask = 0
+    let belowBoundaryIsPublic = false
+    for (const r of rows as any[]) {
+      if (Number(r.pri) !== 2) continue
+      const p = r?.permission
+      if (p !== null && p !== undefined) {
+        belowBoundaryMask = normalizePermission(belowBoundaryMask | normalizePermission(p))
+      }
+      if (toBool(r?.pub)) {
+        belowBoundaryIsPublic = true
+        belowBoundaryMask = normalizePermission(belowBoundaryMask | PERM_READ)
+      }
+    }
+
+    // 边界行单独留给 decideAncestor：边界自己的名单与「不分享」的墙都归它管。
+    // rows 已按 depth 升序，find 命中的就是最近的那个边界；depth>0 排除了节点自身
+    // （自身即使 Shared IN (0,1) 也不能当自己的祖先）。
+    const anc = rows.find(
+      (r: any) => Number(r.depth) > 0 && (Number(r.shared) === 0 || Number(r.shared) === 1)
+    )
 
     const ancestor = anc
       ? decideAncestor(normalizeShareMode(anc.shared), toBool(anc.pub), anc)
@@ -494,7 +547,9 @@ export class FolderService {
         isPublic: toBool(self.pub),
         permission: self.permission
       },
-      ancestor
+      ancestor,
+      belowBoundaryMask,
+      belowBoundaryIsPublic
     )
   }
 
@@ -669,7 +724,7 @@ export class FileService {
   async listSharedWithMe(
     userId: number,
     ownerId?: number
-  ): Promise<{ folders: OwnedFolder[]; files: OwnedFile[] }> {
+  ): Promise<{ folders: (OwnedFolder & { canWrite: boolean })[]; files: (OwnedFile & { canWrite: boolean })[] }> {
     // ownerId 限定属主：侧栏选中某人时只列那人的共享内容。
     // 注意它只是**范围收窄**，不构成授权 —— 下面每行仍要过 resolveAccess。
     const ownerSql = ownerId !== undefined ? ' AND user_id = ?' : ''
@@ -693,17 +748,23 @@ export class FileService {
       .bind(...(ownerId !== undefined ? [userId, ownerId] : [userId]))
       .all()
 
-    const folders: OwnedFolder[] = []
+    // canWrite 一并算出来：平铺清单里只读和读写条目混在一起，
+    // 前端要靠它把剪贴/重命名/删除按条目置灰，而不是等点了才报 403。
+    const folders: (OwnedFolder & { canWrite: boolean })[] = []
     for (const row of folderRows?.results || []) {
       const access = await this.folders.resolveAccess(userId, Number(row.id))
-      if (hasPermission(access.mask, PERM_READ)) folders.push(toOwnedFolder(row))
+      if (hasPermission(access.mask, PERM_READ)) {
+        folders.push({ ...toOwnedFolder(row), canWrite: hasPermission(access.mask, PERM_WRITE) })
+      }
     }
 
     const files = await this.attachAccess((fileRows?.results || []).map((row: any) => this.toOwned(row)))
-    const visible: OwnedFile[] = []
+    const visible: (OwnedFile & { canWrite: boolean })[] = []
     for (const f of files) {
       const access = await this.resolveAccessForFile(userId, f)
-      if (hasPermission(access.mask, PERM_READ)) visible.push(f)
+      if (hasPermission(access.mask, PERM_READ)) {
+        visible.push({ ...f, canWrite: hasPermission(access.mask, PERM_WRITE) })
+      }
     }
 
     return { folders, files: visible }
@@ -722,14 +783,24 @@ export class FileService {
   }
 
   /** 目录级解析一次，然后内存里过滤本目录下的文件（勿对每个文件重复调用） */
+  /**
+   * 挑出我能读到的文件。
+   *
+   * `need` 传入具体权限位时按该位过滤（如 PERM_WRITE = 「我能原地改的」），
+   * 省略时保持原语义：任何非零掩码都算（= 有读权限）。
+   */
   async filterAccessible(
     userId: number,
     files: OwnedFile[],
-    inherited?: ResolvedAccess
+    inherited?: ResolvedAccess,
+    need: number = 0
   ): Promise<OwnedFile[]> {
     if (!files.length) return files
     const dirAccess = inherited ?? (await this.folders.resolveAccess(userId, files[0]!.folderId))
-    return files.filter((file) => this.resolveFileAccess(userId, file, dirAccess).mask !== 0)
+    return files.filter((file) => {
+      const mask = this.resolveFileAccess(userId, file, dirAccess).mask
+      return need ? hasPermission(mask, need) : mask !== 0
+    })
   }
 
   async findOwnedById(userId: number, fileId: number): Promise<OwnedFile | null> {
@@ -799,6 +870,15 @@ export class FileService {
       .bind(userId, ...folderIds)
       .all()
     return (res?.results || []).map((row: any) => this.toOwned(row))
+  }
+
+  /**
+   * 按**属主**列目录下的文件，并挂上直接授权。
+   * filterAccessible / resolveFileAccess 依赖 file.grants，listByFolders 不带。
+   */
+  async listByFoldersWithGrants(userId: number, folderIds: number[]): Promise<OwnedFile[]> {
+    if (!folderIds.length) return []
+    return this.attachAccess(await this.listByFolders(userId, folderIds))
   }
 
   async listOwnedByUser(userId: number): Promise<OwnedFile[]> {

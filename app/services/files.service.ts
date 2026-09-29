@@ -11,6 +11,11 @@ export const FilesService = {
     return await $fetch<{
       success: boolean
       currentFolderId: number | null
+      /** 根层且在看别人的树 = 「分享给我的」平铺清单，里面没有可粘的目标目录 */
+      sharedList: boolean
+      /** 当前目录我能不能写（共享视图据此给不给上传/新建/粘贴） */
+      canWrite: boolean
+      isOwner: boolean
       folders: any[]
       files: any[]
     }>('/api/files', { params })

@@ -53,13 +53,13 @@
               </svg>
               <ArrowDownTrayIcon v-else class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-red-600 hover:text-red-500" @click.stop="emit('delete-folder', folder)" title="删除" aria-label="删除">
+            <button :disabled="folder.canWrite === false" :class="folder.canWrite === false ? 'opacity-30 cursor-not-allowed' : ''" class="p-1 text-sm text-red-600 hover:text-red-500 disabled:hover:text-red-500" @click.stop="emit('delete-folder', folder)" title="删除" aria-label="删除">
               <TrashIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-gray-600 hover:text-gray-800" @click.stop="emit('rename-folder', folder)" title="重命名" aria-label="重命名">
+            <button :disabled="folder.canWrite === false" :class="folder.canWrite === false ? 'opacity-30 cursor-not-allowed' : ''" class="p-1 text-sm text-gray-600 hover:text-gray-800" @click.stop="emit('rename-folder', folder)" title="重命名" aria-label="重命名">
               <PencilSquareIcon class="h-5 w-5" />
             </button>
-            <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-folder', folder)" title="剪贴" aria-label="剪贴">
+            <button v-if="showClip" :disabled="folder.canWrite === false" :class="folder.canWrite === false ? 'opacity-30 cursor-not-allowed' : ''" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-folder', folder)" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
             <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-folder', folder)" title="复制" aria-label="复制">
@@ -112,13 +112,13 @@
             <button class="p-1 text-sm text-blue-600 hover:text-blue-500" @click.stop="emit('download-file', file)" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-gray-600 hover:text-gray-800" @click.stop="emit('rename-file', file)" title="重命名" aria-label="重命名">
+            <button :disabled="file.canWrite === false" :class="file.canWrite === false ? 'opacity-30 cursor-not-allowed' : ''" class="p-1 text-sm text-gray-600 hover:text-gray-800" @click.stop="emit('rename-file', file)" title="重命名" aria-label="重命名">
               <PencilSquareIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-red-600 hover:text-red-500" @click.stop="emit('delete-file', file)" title="删除" aria-label="删除">
+            <button :disabled="file.canWrite === false" :class="file.canWrite === false ? 'opacity-30 cursor-not-allowed' : ''" class="p-1 text-sm text-red-600 hover:text-red-500" @click.stop="emit('delete-file', file)" title="删除" aria-label="删除">
               <TrashIcon class="h-5 w-5" />
             </button>
-            <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-file', file)" title="剪贴" aria-label="剪贴">
+            <button v-if="showClip" :disabled="file.canWrite === false" :class="file.canWrite === false ? 'opacity-30 cursor-not-allowed' : ''" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-file', file)" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
             <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-file', file)" title="复制" aria-label="复制">
@@ -163,15 +163,15 @@
                 <EyeIcon class="h-6 w-6 text-gray-700" />
                 <span class="mt-1">预览</span>
               </button>
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('rename-file')">
+              <button :disabled="!menuWritable" :class="menuWritable ? '' : 'opacity-30'" class="px-2 py-3 rounded hover:bg-gray-50 disabled:hover:bg-transparent flex flex-col items-center justify-center" @click="runFileAction('rename-file')">
                 <PencilSquareIcon class="h-6 w-6 text-gray-700" />
                 <span class="mt-1">重命名</span>
               </button>
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('delete-file')">
+              <button :disabled="!menuWritable" :class="menuWritable ? '' : 'opacity-30'" class="px-2 py-3 rounded hover:bg-gray-50 disabled:hover:bg-transparent flex flex-col items-center justify-center" @click="runFileAction('delete-file')">
                 <TrashIcon class="h-6 w-6 text-red-600" />
                 <span class="mt-1">删除</span>
               </button>
-              <button v-if="showClip" class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('clip-file')">
+              <button v-if="showClip" :disabled="!menuWritable" :class="menuWritable ? '' : 'opacity-30'" class="px-2 py-3 rounded hover:bg-gray-50 disabled:hover:bg-transparent flex flex-col items-center justify-center" @click="runFileAction('clip-file')">
                 <ScissorsIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">剪贴</span>
               </button>
@@ -185,15 +185,15 @@
               </button>
             </template>
             <template v-else-if="rowMenu?.type === 'folder'">
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('rename-folder')">
+              <button :disabled="!menuWritable" :class="menuWritable ? '' : 'opacity-30'" class="px-2 py-3 rounded hover:bg-gray-50 disabled:hover:bg-transparent flex flex-col items-center justify-center" @click="runFolderAction('rename-folder')">
                 <PencilSquareIcon class="h-6 w-6 text-gray-700" />
                 <span class="mt-1">重命名</span>
               </button>
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('delete-folder')">
+              <button :disabled="!menuWritable" :class="menuWritable ? '' : 'opacity-30'" class="px-2 py-3 rounded hover:bg-gray-50 disabled:hover:bg-transparent flex flex-col items-center justify-center" @click="runFolderAction('delete-folder')">
                 <TrashIcon class="h-6 w-6 text-red-600" />
                 <span class="mt-1">删除</span>
               </button>
-              <button v-if="showClip" class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('clip-folder')">
+              <button v-if="showClip" :disabled="!menuWritable" :class="menuWritable ? '' : 'opacity-30'" class="px-2 py-3 rounded hover:bg-gray-50 disabled:hover:bg-transparent flex flex-col items-center justify-center" @click="runFolderAction('clip-folder')">
                 <ScissorsIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">剪贴</span>
               </button>
@@ -241,8 +241,8 @@ const props = withDefaults(defineProps<{
   selectedFolderIds?: ReadonlySet<FileListId>
   selectedFileIds?: ReadonlySet<FileListId>
   /**
-   * 是否显示剪贴/复制按钮。共享内容视图传 false：
-   * 剪贴需要「粘到哪里」，而那里没有归属目录的概念，点了无处可粘。
+   * 是否显示剪贴/复制按钮。是否可点由条目自身的 canWrite 决定，
+   * 所以共享视图也传 true —— 只读条目会置灰而不是消失。
    */
   showClip?: boolean
   /**
@@ -291,6 +291,9 @@ const emit = defineEmits<{
 const hasItems = computed(() => props.folders.length + props.files.length > 0)
 
 const canShareItem = (item: FileListFile | FileListFolder) => props.canShare(item)
+
+/** 行菜单里重命名/删除/剪贴是否可点。undefined 视为可写（ZipPreview 等旧调用方） */
+const menuWritable = computed(() => (rowMenu.value?.item as any)?.canWrite !== false)
 const rowMenuOpen = ref(false)
 const rowMenu = ref<{ type: 'file' | 'folder'; item: FileListFile | FileListFolder } | null>(null)
 
@@ -312,9 +315,18 @@ const runFileAction = (
   if (rowMenu.value?.type !== 'file') return
   const file = rowMenu.value.item as FileListFile
   if (action === 'preview-file') emit('preview-file', file)
-  if (action === 'rename-file') emit('rename-file', file)
-  if (action === 'delete-file') emit('delete-file', file)
-  if (action === 'clip-file') emit('clip-file', file)
+  if (action === 'rename-file') {
+    if (!menuWritable.value) return
+    emit('rename-file', file)
+  }
+  if (action === 'delete-file') {
+    if (!menuWritable.value) return
+    emit('delete-file', file)
+  }
+  if (action === 'clip-file') {
+    if (!menuWritable.value) return
+    emit('clip-file', file)
+  }
   if (action === 'copy-file') emit('copy-file', file)
   if (action === 'share-file') {
     if (!canShareItem(file)) return
@@ -328,9 +340,18 @@ const runFolderAction = (
 ) => {
   if (rowMenu.value?.type !== 'folder') return
   const folder = rowMenu.value.item as FileListFolder
-  if (action === 'rename-folder') emit('rename-folder', folder)
-  if (action === 'delete-folder') emit('delete-folder', folder)
-  if (action === 'clip-folder') emit('clip-folder', folder)
+  if (action === 'rename-folder') {
+    if (!menuWritable.value) return
+    emit('rename-folder', folder)
+  }
+  if (action === 'delete-folder') {
+    if (!menuWritable.value) return
+    emit('delete-folder', folder)
+  }
+  if (action === 'clip-folder') {
+    if (!menuWritable.value) return
+    emit('clip-folder', folder)
+  }
   if (action === 'copy-folder') emit('copy-folder', folder)
   if (action === 'share-folder') {
     if (!canShareItem(folder)) return

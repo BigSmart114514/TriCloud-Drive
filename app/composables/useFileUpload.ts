@@ -29,8 +29,17 @@ interface UploadProgress {
 
 type UploadOptions = { folderId?: number | null; overwrite?: boolean; skip?:boolean; partOfBatch?: boolean; onProgressDelta?: (delta: number) => void }
 
-export const useFileUpload = (options?: { targetUserId?: Ref<number | null | undefined> }) => {
+/**
+ * useAdmin 显式传，不能再靠「有没有 targetUserId」推断：
+ * 首页侧栏看别人的共享内容时 targetUserId 一定有值，但那不是管理视角，
+ * 顺手带上 useAdmin=1 会被服务端 403（useAdmin=true 仅管理员）。
+ */
+export const useFileUpload = (options?: {
+  targetUserId?: Ref<number | null | undefined>
+  useAdmin?: Ref<boolean | null | undefined>
+}) => {
   const tRef = options?.targetUserId
+  const useAdmin = options?.useAdmin
   const uploading = ref(false)
   const uploadProgress = ref<UploadProgress>({ loaded: 0, total: 0, percent: 0 })
   const uploadError = ref('')
@@ -54,7 +63,8 @@ export const useFileUpload = (options?: { targetUserId?: Ref<number | null | und
       overwrite: !!params.overwrite,
       skipIfExist: !!params.skip
     }
-    if (tRef?.value) { body.targetUserId = tRef.value; body.useAdmin = 1 }
+    if (tRef?.value) body.targetUserId = tRef.value
+        if (useAdmin?.value) body.useAdmin = 1
     const response = await $fetch<{ success: boolean; data: UploadConfig }>('/api/upload/credentials', {
       method: 'POST',
       body
@@ -98,7 +108,8 @@ export const useFileUpload = (options?: { targetUserId?: Ref<number | null | und
           folderId,
           overwrite
         }
-        if (tRef?.value) { body.targetUserId = tRef.value; body.useAdmin = 1 }
+        if (tRef?.value) body.targetUserId = tRef.value
+        if (useAdmin?.value) body.useAdmin = 1
         await $fetch('/api/files/save', { method: 'POST', body })
         return config.fileKey
       }
@@ -146,7 +157,8 @@ export const useFileUpload = (options?: { targetUserId?: Ref<number | null | und
           folderId,
           overwrite
         }
-        if (tRef?.value) { body.targetUserId = tRef.value; body.useAdmin = 1 }
+        if (tRef?.value) body.targetUserId = tRef.value
+        if (useAdmin?.value) body.useAdmin = 1
         await $fetch('/api/files/save', { method: 'POST', body })
       }
       //console.log(fileUrl)

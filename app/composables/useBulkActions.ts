@@ -12,16 +12,21 @@ export function useBulkActions(
   files: Ref<FileRecord[]>,
   selectedFolderIds: Ref<Set<number>>,
   selectedFileIds: Ref<Set<number>>,
-  options?: { targetUserId?: Ref<number | null | undefined> }
+  options?: {
+    targetUserId?: Ref<number | null | undefined>
+    /** 显式传。/manage/files 传 true 才能代删，首页侧栏不传 */
+    useAdmin?: Ref<boolean | null | undefined>
+  }
 ) {
   const tRef = options?.targetUserId
+  const admin = () => options?.useAdmin?.value || undefined
   const bulkDeleting = ref(false)
   const bulkDownloading = ref(false)
   const downloadingFolderId = ref<number | null>(null)
 
   const downloadFile = async (file: FileRecord) => {
     try {
-      const res = await FilesService.downloadSign({ fileKey: file.fileKey, filename: file.filename }, tRef?.value ?? null)
+      const res = await FilesService.downloadSign({ fileKey: file.fileKey, filename: file.filename }, tRef?.value ?? null, admin())
       if (res.success) triggerDownload(res.data.downloadUrl, res.data.filename)
       else {
         notify(res?.message || '下载文件失败','error')
@@ -35,7 +40,7 @@ export function useBulkActions(
     const ok = confirm(`确定要删除文件 "${file.filename}" 吗？`)
     if (!ok) return
     try {
-      const res = await FilesService.delete(file.id, tRef?.value ?? null)
+      const res = await FilesService.delete(file.id, tRef?.value ?? null, admin())
       if (res.success) {
         files.value = files.value.filter(f => f.id !== file.id)
         selectedFileIds.value.delete(file.id)
@@ -52,7 +57,7 @@ export function useBulkActions(
     const ok = confirm(`确定要删除文件夹 "${folder.name}" 吗？\n将同时删除其所有子文件夹与文件，操作不可恢复。`)
     if (!ok) return
     try {
-      const res = await FoldersService.delete(folder.id, tRef?.value ?? null)
+      const res = await FoldersService.delete(folder.id, tRef?.value ?? null, admin())
       if (res.success) {
         folders.value = folders.value.filter(f => f.id !== folder.id)
         selectedFolderIds.value.delete(folder.id)
@@ -79,9 +84,10 @@ export function useBulkActions(
     bulkDeleting.value = true
     try {
       const t = tRef?.value ?? null
+      const a = admin()
       const tasks = [
-        ...fileIds.map(id => FilesService.delete(id, t).then(r => ({ ok: r.success, id, type: 'file', message: r.message })).catch(e => ({ ok: false, id, type: 'file', message: toMessage(e, '删除失败') }))),
-        ...folderIds.map(id => FoldersService.delete(id, t).then(r => ({ ok: r.success, id, type: 'folder', message: r.message })).catch(e => ({ ok: false, id, type: 'folder', message: toMessage(e, '删除失败') })))
+        ...fileIds.map(id => FilesService.delete(id, t, a).then(r => ({ ok: r.success, id, type: 'file', message: r.message })).catch(e => ({ ok: false, id, type: 'file', message: toMessage(e, '删除失败') }))),
+        ...folderIds.map(id => FoldersService.delete(id, t, a).then(r => ({ ok: r.success, id, type: 'folder', message: r.message })).catch(e => ({ ok: false, id, type: 'folder', message: toMessage(e, '删除失败') })))
       ]
       const results = await Promise.all(tasks)
       const okFiles = results.filter(r => r.ok && r.type === 'file').map(r => r.id as number)
@@ -151,7 +157,7 @@ export function useBulkActions(
 
       // 选中的散文件放在 zip 根目录
       for (const f of selFiles) {
-        const sign = await FilesService.downloadSign({ fileKey: f.fileKey, filename: f.filename }, t)
+        const sign = await FilesService.downloadSign({ fileKey: f.fileKey, filename: f.filename }, t, admin())
         if (!sign.success) throw new Error(`签名失败: ${f.filename}`)
         await sink.addFromUrl(f.filename, sign.data.downloadUrl)
       }

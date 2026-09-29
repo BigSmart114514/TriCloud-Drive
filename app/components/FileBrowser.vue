@@ -3,12 +3,12 @@
     class="bg-white transition-colors"
     :class="[
       fill ? 'flex h-full min-h-0 flex-col p-0' : 'rounded-lg shadow p-4 sm:p-6',
-      { 'border-2 border-dashed border-indigo-400 bg-indigo-50': isDragging && isOwn }
+      { 'border-2 border-dashed border-indigo-400 bg-indigo-50': isDragging && canDropUpload }
     ]"
-    @dragover="isOwn && $event.preventDefault()"
-    @dragenter="isOwn && onDragEnter()"
-    @dragleave="isOwn && onDragLeave()"
-    @drop="isOwn && handleDrop($event)"
+    @dragover="canDropUpload && $event.preventDefault()"
+    @dragenter="canDropUpload && onDragEnter()"
+    @dragleave="canDropUpload && onDragLeave()"
+    @drop="canDropUpload && handleDrop($event)"
   >
     <div
       class="flex items-center justify-between gap-2"
@@ -47,7 +47,7 @@
         </button>
         <button
           class="p-1 text-sm text-red-600 hover:text-red-500 disabled:opacity-50 hidden sm:inline-flex"
-          :disabled="selectedCount === 0 || bulkDeleting"
+          :disabled="!canDeleteSelected || bulkDeleting"
           @click="deleteSelected"
           title="删除所选"
           aria-label="删除所选"
@@ -64,9 +64,8 @@
           <ArrowDownTrayIcon class="h-5 w-5" />
         </button>
         <button
-          v-if="isOwn"
           class="p-1 text-sm text-indigo-600 hover:text-indigo-500 disabled:opacity-50 hidden sm:inline-flex"
-          :disabled="selectedCount === 0"
+          :disabled="!canCutSelected"
           @click="clipSelection"
           title="剪贴所选（移动）"
           aria-label="剪贴所选（移动）"
@@ -74,7 +73,6 @@
           <ScissorsIcon class="h-5 w-5" />
         </button>
         <button
-          v-if="isOwn"
           class="p-1 text-sm text-indigo-600 hover:text-indigo-500 disabled:opacity-50 hidden sm:inline-flex"
           :disabled="selectedCount === 0"
           @click="copySelection"
@@ -84,7 +82,7 @@
           <DocumentDuplicateIcon class="h-5 w-5" />
         </button>
         <button
-          v-if="isOwn"
+          v-if="showPaste"
           class="p-1 text-sm text-green-600 hover:text-green-500 disabled:opacity-50 hidden sm:inline-flex"
           :disabled="!hasClipboard || pasting"
           @click="pasteClipboard"
@@ -93,9 +91,9 @@
         >
           <ClipboardDocumentCheckIcon class="h-5 w-5" />
         </button>
-        <span v-if="isOwn && hasClipboard" class="text-xs text-gray-500 hidden sm:inline">{{ clipboardActionLabel }} {{ clipboardCount }} 项</span>
+        <span v-if="hasClipboard" class="text-xs text-gray-500 hidden sm:inline">{{ clipboardActionLabel }} {{ clipboardCount }} 项</span>
 
-        <div v-if="isOwn" ref="uploadMenuRef" class="relative" @mouseenter="openUploadMenu()" @mouseleave="scheduleCloseUploadMenu()">
+        <div v-if="canWriteHere" ref="uploadMenuRef" class="relative" @mouseenter="openUploadMenu()" @mouseleave="scheduleCloseUploadMenu()">
           <button
             class="p-1 text-sm rounded-md bg-indigo-600 text-white hover:bg-indigo-700"
             @click.stop="toggleUploadMenu"
@@ -132,7 +130,7 @@
         </div>
 
         <button
-          v-if="isOwn"
+          v-if="canWriteHere"
           class="p-1 text-sm text-indigo-600 hover:text-indigo-500 hidden sm:inline-flex"
           @click="createFolder"
           title="新建文件夹"
@@ -151,23 +149,23 @@
           <template v-if="mobileMoreOpen">
             <div class="fixed inset-0 z-10" @click="mobileMoreOpen = false" />
             <div class="absolute right-0 mt-2 w-48 z-20 bg-white border border-gray-200 rounded-md shadow-lg py-1">
-              <button class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="selectedCount === 0 || bulkDeleting" @click="deleteSelected(); mobileMoreOpen = false">
+              <button class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="!canDeleteSelected || bulkDeleting" @click="deleteSelected(); mobileMoreOpen = false">
                 <TrashIcon class="h-5 w-5 text-red-600" />删除所选
               </button>
               <button class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="selectedCount === 0 || bulkDownloading" @click="downloadSelected(); mobileMoreOpen = false">
                 <ArrowDownTrayIcon class="h-5 w-5 text-indigo-600" />下载所选
               </button>
-              <button v-if="isOwn" class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="selectedCount === 0" @click="clipSelection(); mobileMoreOpen = false">
+              <button class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="!canCutSelected" @click="clipSelection(); mobileMoreOpen = false">
                 <ScissorsIcon class="h-5 w-5 text-indigo-600" />剪贴所选
               </button>
-              <button v-if="isOwn" class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="selectedCount === 0" @click="copySelection(); mobileMoreOpen = false">
+              <button  class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="selectedCount === 0" @click="copySelection(); mobileMoreOpen = false">
                 <DocumentDuplicateIcon class="h-5 w-5 text-indigo-600" />复制所选
               </button>
-              <button v-if="isOwn" class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="!hasClipboard || pasting" @click="pasteClipboard(); mobileMoreOpen = false">
+              <button v-if="showPaste" class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="!hasClipboard || pasting" @click="pasteClipboard(); mobileMoreOpen = false">
                 <ClipboardDocumentCheckIcon class="h-5 w-5 text-green-600" />{{ clipboard?.mode === 'cut' ? '粘贴（移动）' : '粘贴（复制）' }}
               </button>
               <div class="border-t border-gray-100 my-1" />
-              <button v-if="isOwn" class="w-full px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-700" @click="createFolder(); mobileMoreOpen = false">
+              <button v-if="canWriteHere" class="w-full px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-700" @click="createFolder(); mobileMoreOpen = false">
                 <FolderPlusIcon class="h-5 w-5 text-indigo-600" />新建文件夹
               </button>
             </div>
@@ -176,11 +174,11 @@
       </div>
     </div>
 
-    <input v-if="isOwn" ref="fileInputRef" type="file" multiple class="hidden" @change="handleFileSelect" />
-    <input v-if="isOwn" ref="folderInputRef" type="file" webkitdirectory directory multiple class="hidden" @change="handleFolderSelect" />
+    <input v-if="canDropUpload" ref="fileInputRef" type="file" multiple class="hidden" @change="handleFileSelect" />
+    <input v-if="canDropUpload" ref="folderInputRef" type="file" webkitdirectory directory multiple class="hidden" @change="handleFolderSelect" />
 
     <div
-      v-if="isOwn && uploading"
+      v-if="canDropUpload && uploading"
       :class="fill ? 'mx-4 mt-3 shrink-0' : 'mt-2 mb-4'"
     >
       <div class="flex items-center justify-between text-sm text-gray-600 mb-2">
@@ -192,7 +190,7 @@
       </div>
     </div>
     <div
-      v-if="isOwn && uploadError"
+      v-if="canDropUpload && uploadError"
       :class="fill ? 'mx-4 mt-3 shrink-0 rounded-md bg-red-50 p-3 text-sm text-red-700' : 'mt-2 mb-4 rounded-md bg-red-50 p-3 text-sm text-red-700'"
     >{{ uploadError }}</div>
 
@@ -222,7 +220,7 @@
         @download-folder="onDownloadFolder"
         @delete-folder="onDeleteFolder"
         @rename-folder="onRenameFolder"
-        :show-clip="isOwn"
+        :show-clip="true"
         :can-share="canShare"
         @clip-folder="onClipFolder"
         @copy-folder="onCopyFolder"
@@ -255,13 +253,13 @@
             <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="bulkDownloading" @click="downloadSelected" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5" />
             </button>
-            <button v-if="isOwn" class="p-1 text-indigo-600 disabled:opacity-50" :disabled="selectedCount === 0" @click="clipSelection" title="剪贴" aria-label="剪贴">
+            <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="!canCutSelected" @click="clipSelection" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
-            <button v-if="isOwn" class="p-1 text-indigo-600 disabled:opacity-50" :disabled="selectedCount === 0" @click="copySelection" title="复制" aria-label="复制">
+            <button  class="p-1 text-indigo-600 disabled:opacity-50" :disabled="selectedCount === 0" @click="copySelection" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
-            <button v-if="isOwn" class="p-1 text-green-600 disabled:opacity-50" :disabled="!hasClipboard || pasting" @click="pasteClipboard" title="粘贴" aria-label="粘贴">
+            <button v-if="showPaste" class="p-1 text-green-600 disabled:opacity-50" :disabled="!hasClipboard || pasting" @click="pasteClipboard" title="粘贴" aria-label="粘贴">
               <ClipboardDocumentCheckIcon class="h-5 w-5" />
             </button>
           </div>
@@ -270,7 +268,7 @@
     </transition>
 
     <button
-      v-if="isOwn"
+      v-if="canWriteHere"
       class="fixed sm:hidden bottom-[72px] right-4 h-12 w-12 rounded-full bg-indigo-600 text-white shadow-lg flex items-center justify-center"
       @click.stop="chooseFiles"
       title="上传"
@@ -323,12 +321,12 @@ import {
 const props = withDefaults(
   defineProps<{
     /**
-     * own    —— 我的文件：可上传 / 新建 / 剪贴
-     * shared —— 代看某人（仅管理员）：同样可上传 / 新建 / 剪贴，
-     *           因为是按 targetUserId 操作的，和 /manage/files 同一条路径
+     * own    —— 我的文件，全部操作可用
+     * shared —— 首页侧栏选人，看的是「他分享给我的」内容（分享权限视角，
+     *           **不是**管理视角，所以不传 useAdmin）
      *
-     * 两种模式的差异只有「上传/新建/剪贴」是否显示：自己的文件允许往里写，
-     * 代看别人的共享内容时这些写操作不暴露。
+     * shared 下写操作按权限给：进了我有写权限的共享目录，上传/新建/粘贴照常；
+     * 只读目录里只给剪贴/复制/下载。逐条操作再按条目自身的 canWrite 置灰。
      */
     variant?: 'own' | 'shared'
     /** variant=shared：被查看的用户 id，透传给 /api/files 的 targetUserId */
@@ -348,11 +346,45 @@ const props = withDefaults(
 
 const isOwn = computed(() => props.variant === 'own')
 const defaultTitle = computed(() => (isOwn.value ? '我的文件' : '用户文件'))
-const emptyDescription = computed(() =>
-  isOwn.value
-    ? '拖拽文件/文件夹到此处上传，或使用右上角“上传”按钮。'
-    : '只有被显式标记为「分享」或「公开」的文件夹与文件会出现在这里。'
-)
+
+/** 侧栏选人 + 停在根层 = 「平铺分享清单」，没有可粘的目标 */
+const isFlatSharedList = computed(() => !isOwn.value && sharedList.value)
+/** 当前目录能不能写：决定上传 / 新建 / 粘贴的入口 */
+const canWriteHere = computed(() => (isOwn.value ? true : canWrite.value))
+/**
+ * 粘贴需要一个真实的目标目录。平铺清单的「根」是对方的根，
+ * 粘过去等于往别人空间里写，语义不对，所以不给入口（要粘先点进具体目录）。
+ */
+const showPaste = computed(() => isOwn.value || currentFolderId.value !== null)
+/** 拖拽上传要一个可写的当前目录 */
+const canDropUpload = computed(() => canWriteHere.value && !isFlatSharedList.value)
+const selectedItems = computed(() => {
+  const fs = (folders.value as any[]).filter((f) => selectedFolderIds.value.has(Number(f.id)))
+  const fl = (files.value as any[]).filter((f) => selectedFileIds.value.has(Number(f.id)))
+  return [...fs, ...fl]
+})
+/**
+ * 剪贴（移动）要求选中项里至少有可写的那一个 —— 只读授权的条目挪不动。
+ * 复制不受此限，读得到就能复制。
+ */
+const canCutSelected = computed(() => {
+  if (selectedCount.value === 0) return false
+  if (isOwn.value) return true
+  return selectedItems.value.some((it) => it.canWrite !== false)
+})
+/** 批量删除同理：只读条目删不掉，混选时交给服务端逐条判定 */
+const canDeleteSelected = computed(() => {
+  if (selectedCount.value === 0) return false
+  if (isOwn.value) return true
+  return selectedItems.value.some((it) => it.canWrite !== false)
+})
+const emptyDescription = computed(() => {
+  if (isOwn.value) return '拖拽文件/文件夹到此处上传，或使用右上角“上传”按钮。'
+  if (isFlatSharedList.value) return '这里是他分享给你的内容。点进具体目录后，才能在该目录里粘贴。'
+  return canWriteHere.value
+    ? '你可以往这个目录里上传、粘贴或新建文件夹。'
+    : '这里只读，不能上传或修改。'
+})
 
 const targetUserIdRef = toRef(props, 'targetUserId')
 const useAdminRef = toRef(props, 'useAdmin')
@@ -373,6 +405,8 @@ const {
   hasItems,
   currentFolderId,
   breadcrumbs,
+  sharedList,
+  canWrite,
   fetchFiles,
   navigateToFolder,
   goUp,
@@ -400,9 +434,9 @@ const {
   deleteFolder,
   deleteSelected,
   downloadSelected
-} = useBulkActions(folders, files, selectedFolderIds, selectedFileIds, { targetUserId: targetUserIdRef })
+} = useBulkActions(folders, files, selectedFolderIds, selectedFileIds, { targetUserId: targetUserIdRef, useAdmin: useAdminRef })
 
-const { uploading, uploadProgress, uploadError, uploadMultipleFiles } = useFileUpload({ targetUserId: targetUserIdRef })
+const { uploading, uploadProgress, uploadError, uploadMultipleFiles } = useFileUpload({ targetUserId: targetUserIdRef, useAdmin: useAdminRef })
 const {
   showUploadMenu,
   uploadMenuRef,
@@ -417,9 +451,9 @@ const { createFolder, renameFolder, renameFile } = useNameEditing(
   breadcrumbs,
   currentFolderId,
   fetchFiles,
-  { targetUserId: targetUserIdRef }
+  { targetUserId: targetUserIdRef, useAdmin: useAdminRef }
 )
-const { downloadingFolderId, downloadFolder } = useFolderDownload({ targetUserId: targetUserIdRef })
+const { downloadingFolderId, downloadFolder } = useFolderDownload({ targetUserId: targetUserIdRef, useAdmin: useAdminRef })
 const {
   isDragging,
   onDragEnter,
@@ -431,7 +465,7 @@ const {
   handleDrop,
   handleFileSelect,
   handleFolderSelect
-} = useDnDUpload(currentFolderId, uploadMultipleFiles, fetchFiles, clearSelection, { targetUserId: targetUserIdRef })
+} = useDnDUpload(currentFolderId, uploadMultipleFiles, fetchFiles, clearSelection, { targetUserId: targetUserIdRef, useAdmin: useAdminRef })
 const {
   clipboard,
   hasClipboard,
@@ -454,7 +488,7 @@ const {
     fetchFiles,
     clearSelection
   },
-  { targetUserId: targetUserIdRef, overwriteExisting, skipExisting }
+  { targetUserId: targetUserIdRef, overwriteExisting, skipExisting, useAdmin: useAdminRef }
 )
 
 const conflictStrategy = computed<'overwrite' | 'skip' | 'rename'>({
