@@ -66,6 +66,7 @@
             fill
             ref="fileListRef"
             @folder-change="onFolderChange"
+            @location-change="onLocationChange"
           />
         </div>
       </SidePanelLayout>
@@ -108,6 +109,7 @@
         <FileBrowser
           ref="fileListRef"
           @folder-change="onFolderChange"
+          @location-change="onLocationChange"
         />
       </div>
     </main>
@@ -128,6 +130,14 @@ const currentFolderId = ref<number | null>(null)
 
 const onFolderChange = (id: number | null) => {
   currentFolderId.value = id
+}
+
+// 标签页标题跟着「当前打开的东西」走：预览文件时是文件名，进目录是目录名。
+const pageTitle = ref('我的文件')
+useHead({ title: pageTitle })
+
+const onLocationChange = (name: string) => {
+  pageTitle.value = name
 }
 
 type Person = {

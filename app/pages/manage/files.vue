@@ -1,11 +1,15 @@
 <script setup lang="ts">
+
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useAuth } from '~/composables/useAuth'
 import FileBrowser from '~/components/FileBrowser.vue'
 import ManageUserList, { type UserSummary } from '~/components/ManageUserList.vue'
 import { FolderOpenIcon, Bars3Icon, HomeIcon, ShieldExclamationIcon } from '@heroicons/vue/24/outline'
 
-definePageMeta({ title: '管理员 - 文件总览', layout: false })
+useHead({ title: '文件总览' })
+
+// 标题用下面的 useHead。definePageMeta({ title }) 在 Nuxt 4 已经不写 <title> 了，别留着误导
+definePageMeta({ layout: false })
 
 const { isAdmin, fetchUser } = useAuth()
 await fetchUser()

@@ -129,8 +129,11 @@
 </template>
 
 <script setup lang="ts">
+
 import { useRouter } from 'vue-router'
 import { HomeIcon } from '@heroicons/vue/24/outline'
+
+useHead({ title: '修改密码' })
 const router = useRouter()
 definePageMeta({
   layout: false

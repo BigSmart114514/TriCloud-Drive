@@ -109,6 +109,8 @@
 </template>
 
 <script setup lang="ts">
+
+useHead({ title: '注册（旧版）' })
 definePageMeta({
   layout: false
 })

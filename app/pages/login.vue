@@ -74,9 +74,12 @@
 </template>
 
 <script setup lang="ts">
+
 import { NuxtLink } from '#components'
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+
+useHead({ title: '登录' })
 const router = useRouter()
 
 // 1. 在 <script setup> 顶层安全调用

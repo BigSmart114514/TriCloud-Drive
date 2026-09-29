@@ -4,6 +4,15 @@ export default defineNuxtConfig({
 
   modules: ['@nuxtjs/tailwindcss'],
 
+  app: {
+    head: {
+      // 站点默认标题 + 模板。页面用 useHead 设了 title 就会变成「xxx · TriCloud Drive」，
+      // 没设的页面至少还有个默认标题（以前全站一个 <title> 都没有）。
+      title: 'TriCloud Drive',
+      titleTemplate: '%s · TriCloud Drive'
+    }
+  },
+
   css: ['~/assets/css/experimental.css'],
 
   nitro: {

@@ -566,7 +566,29 @@ const chooseFiles = () => {
   fileInputRef.value?.click()
 }
 
-const emit = defineEmits<{ 'folder-change': [id: number | null] }>()
+const emit = defineEmits<{
+  'folder-change': [id: number | null]
+  /**
+   * 「现在在看什么」的名字，页面拿它当文档标题用。
+   * 预览中 = 文件名；进了子目录 = 目录名；停在根层 = 面板标题（我的文件 / 用户文件）。
+   */
+  'location-change': [name: string]
+}>()
+
+/**
+ * 标题要跟着预览开关实时变，所以读的是 previewingFile 而不是 watch 数组本身。
+ * 面包屑是 push/splice 原地改的（不是重新赋值），watch(breadcrumbs) 不带 deep 不会触发，
+ * 但走 computed 读末项的 .name 会正常失效。
+ */
+const locationName = computed(
+  () =>
+    // 文件的名字字段是 filename（不是 name），见 types/file-list.ts
+    previewingFile.value?.filename ||
+    (breadcrumbs.value.length > 1
+      ? breadcrumbs.value[breadcrumbs.value.length - 1].name
+      : props.title || defaultTitle.value)
+)
+watch(locationName, (name) => emit('location-change', name), { immediate: true })
 
 watch([folders, files], () => reconcileSelection())
 watch(currentFolderId, (id) => emit('folder-change', id), { immediate: true })

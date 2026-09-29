@@ -71,6 +71,8 @@
 </template>
 
 <script setup lang="ts">
+
+useHead({ title: '登录（旧版）' })
 definePageMeta({
   layout: false
 })

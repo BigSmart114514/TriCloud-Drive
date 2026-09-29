@@ -314,9 +314,12 @@
 </template>
 
 <script setup lang="ts">
+
 import { formatDateTime } from '~/utils/time'
 import { notify } from '~/utils/notify'
 import { HomeIcon } from '@heroicons/vue/24/outline'
+
+useHead({ title: '用户管理' })
 
 type DbUser = {
   id: number
@@ -658,6 +661,7 @@ const fromDatetimeLocal = (val: string | null): string | null => {
   return parseExpireAt(withSeconds) // 返回 "YYYY-MM-DD HH:mm:ss" 或 null
 }
 
+// 标题用下面的 useHead。definePageMeta({ title }) 在 Nuxt 4 已经不写 <title> 了，别留着误导
 definePageMeta({
   layout: false
 })
