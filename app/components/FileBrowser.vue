@@ -223,6 +223,7 @@
         @delete-folder="onDeleteFolder"
         @rename-folder="onRenameFolder"
         :show-clip="isOwn"
+        :can-share="canShare"
         @clip-folder="onClipFolder"
         @copy-folder="onCopyFolder"
         @download-file="onDownloadFile"
@@ -499,12 +500,24 @@ const onRenameFile = (file: FileListFile) => renameFile(asFile(file))
 const onClipFile = (file: FileListFile) => clipFile(asFile(file))
 const onCopyFile = (file: FileListFile) => copyFile(asFile(file))
 
-// 分享弹窗的目标（null = 关闭）。只有属主能在弹窗里改授权，服务端会再校验一次
+// 分享弹窗的目标（null = 关闭）。只有属主能在弹窗里改授权，服务端会再校验一次。
+// 非属主连入口都不给：弹窗一打开就会撞 403「只有属主可以管理分享」，
+// 与其弹错，不如一开始就不让他点。
+const { user: authUser } = useAuth()
 const shareTarget = ref<{ type: 'file' | 'folder'; id: number; name: string } | null>(null)
+const canShare = (item: FileListFile | FileListFolder) => {
+  const myId = authUser.value?.id
+  const ownerId = item.ownerId
+  // 拿不到属主信息时保守为不可分享，避免出现「点开必报错」的入口
+  if (myId == null || ownerId == null) return false
+  return Number(ownerId) === Number(myId)
+}
 const onShareFile = (file: FileListFile) => {
+  if (!canShare(file)) return
   shareTarget.value = { type: 'file', id: Number(file.id), name: String(file.filename) }
 }
 const onShareFolder = (folder: FileListFolder) => {
+  if (!canShare(folder)) return
   shareTarget.value = { type: 'folder', id: Number(folder.id), name: String(folder.name) }
 }
 const closePreview = () => {

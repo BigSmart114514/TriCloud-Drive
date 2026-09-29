@@ -4,6 +4,8 @@ export interface FolderRecord {
   name: string
   parentId: number | null
   createdAt: string
+  /** 属主 id */
+  userId?: number
 }
 
 export interface FileRecord {
@@ -15,6 +17,8 @@ export interface FileRecord {
   fileUrl: string
   contentType: string
   createdAt: string
+  /** 属主 id */
+  userId?: number
   Shared?: boolean
   IsPublic?: boolean
   allowedUsers?: number[]

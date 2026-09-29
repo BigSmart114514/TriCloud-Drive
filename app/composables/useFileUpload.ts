@@ -160,10 +160,10 @@ export const useFileUpload = (options?: { targetUserId?: Ref<number | null | und
      
       if (!partOfBatch) 
       {
-        notify(error.message || '上传失败', 'error')
+        notifyError(error, '上传失败')
         
       }
-      uploadError.value = error.message || '上传失败'
+      uploadError.value = toMessage(error, '上传失败')
       throw error
     } finally {
       if (!partOfBatch) uploading.value = false
@@ -197,9 +197,9 @@ export const useFileUpload = (options?: { targetUserId?: Ref<number | null | und
       }
       setProgress(totalBytes, totalBytes)
       return
-    } catch (error: any) {
-      notify(error.message || '上传失败', 'error')
-      uploadError.value = error.message || '上传失败'
+    } catch (error) {
+      notifyError(error, '上传失败')
+      uploadError.value = toMessage(error, '上传失败')
       throw error
 
     } finally {

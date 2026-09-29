@@ -28,6 +28,13 @@ export default defineEventHandler(async (event) => {
     const fileService = new FileService(db)
     const folderService = new FolderService(db)
 
+    /**
+     * 附上 ownerId：分享设置只有属主能改，前端要靠它决定给不给分享入口。
+     * 记录里本来就带 userId，这里只是给它一个语义明确的名字。
+     */
+    const withOwner = <T extends { userId: number }>(rows: T[]) =>
+      rows.map(r => ({ ...r, ownerId: r.userId }))
+
     // 解析 folderId，root / 0 / 缺省都视为根层
     let folderId: number | null = null
     if (rawFolderId && rawFolderId !== 'root' && rawFolderId !== '0') {
@@ -52,8 +59,8 @@ export default defineEventHandler(async (event) => {
         isOwner: false,
         sharedList: true,
         ownerId: targetUserId,
-        folders: shared.folders,
-        files: shared.files
+        folders: withOwner(shared.folders),
+        files: withOwner(shared.files)
       }
     }
 
@@ -107,8 +114,8 @@ export default defineEventHandler(async (event) => {
       folder: folderId === null
         ? null
         : { id: folderId, name: (await folderService.findOwnedById(subtreeOwnerId, folderId))?.name ?? '' },
-      folders,
-      files
+      folders: withOwner(folders),
+      files: withOwner(files)
     }
   } catch (error: any) {
     console.error('Get items error:', error)

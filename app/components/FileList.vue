@@ -65,7 +65,7 @@
             <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-folder', folder)" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-emerald-600 hover:text-emerald-500" @click.stop="emit('share-folder', folder)" title="分享" aria-label="分享">
+            <button v-if="canShareItem(folder)" class="p-1 text-sm text-emerald-600 hover:text-emerald-500" @click.stop="emit('share-folder', folder)" title="分享" aria-label="分享">
               <ShareIcon class="h-5 w-5" />
             </button>
           </div>
@@ -124,7 +124,7 @@
             <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-file', file)" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-emerald-600 hover:text-emerald-500" @click.stop="emit('share-file', file)" title="分享" aria-label="分享">
+            <button v-if="canShareItem(file)" class="p-1 text-sm text-emerald-600 hover:text-emerald-500" @click.stop="emit('share-file', file)" title="分享" aria-label="分享">
               <ShareIcon class="h-5 w-5" />
             </button>
           </div>
@@ -179,7 +179,7 @@
                 <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">复制</span>
               </button>
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('share-file')">
+              <button v-if="canShareItem(rowMenu.item as FileListFile)" class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('share-file')">
                 <ShareIcon class="h-6 w-6 text-emerald-600" />
                 <span class="mt-1">分享</span>
               </button>
@@ -201,7 +201,7 @@
                 <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">复制</span>
               </button>
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('share-folder')">
+              <button v-if="canShareItem(rowMenu.item as FileListFolder)" class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('share-folder')">
                 <ShareIcon class="h-6 w-6 text-emerald-600" />
                 <span class="mt-1">分享</span>
               </button>
@@ -245,6 +245,12 @@ const props = withDefaults(defineProps<{
    * 剪贴需要「粘到哪里」，而那里没有归属目录的概念，点了无处可粘。
    */
   showClip?: boolean
+  /**
+   * 是否允许打开分享设置。分享状态只有属主能改，被授权人点开只会撞到
+   * 403「只有属主可以管理分享」，所以入口按属主身份显隐，而不是弹错。
+   * 不传 = 不给入口（默认）。
+   */
+  canShare?: (item: FileListFile | FileListFolder) => boolean
   emptyTitle?: string
   emptyDescription?: string
 }>(), {
@@ -258,6 +264,7 @@ const props = withDefaults(defineProps<{
   selectedFolderIds: undefined,
   selectedFileIds: undefined,
   showClip: true,
+  canShare: () => false,
   emptyTitle: '这里空空如也',
   emptyDescription: '当前目录没有可显示的内容。'
 })
@@ -282,6 +289,8 @@ const emit = defineEmits<{
 }>()
 
 const hasItems = computed(() => props.folders.length + props.files.length > 0)
+
+const canShareItem = (item: FileListFile | FileListFolder) => props.canShare(item)
 const rowMenuOpen = ref(false)
 const rowMenu = ref<{ type: 'file' | 'folder'; item: FileListFile | FileListFolder } | null>(null)
 
@@ -307,7 +316,10 @@ const runFileAction = (
   if (action === 'delete-file') emit('delete-file', file)
   if (action === 'clip-file') emit('clip-file', file)
   if (action === 'copy-file') emit('copy-file', file)
-  if (action === 'share-file') emit('share-file', file)
+  if (action === 'share-file') {
+    if (!canShareItem(file)) return
+    emit('share-file', file)
+  }
   closeRowMenu()
 }
 
@@ -320,7 +332,10 @@ const runFolderAction = (
   if (action === 'delete-folder') emit('delete-folder', folder)
   if (action === 'clip-folder') emit('clip-folder', folder)
   if (action === 'copy-folder') emit('copy-folder', folder)
-  if (action === 'share-folder') emit('share-folder', folder)
+  if (action === 'share-folder') {
+    if (!canShareItem(folder)) return
+    emit('share-folder', folder)
+  }
   closeRowMenu()
 }
 </script>

@@ -110,8 +110,8 @@ export function useClipboard(
       clipboard.value = null
       clearSelection()
       await fetchFiles()
-    } catch (e: any) {
-      notify(e?.message || '粘贴失败，请稍后重试','error')
+    } catch (e) {
+      notifyError(e, '粘贴失败，请稍后重试')
     } finally {
       pasting.value = false
     }

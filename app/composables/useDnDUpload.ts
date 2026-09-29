@@ -71,7 +71,7 @@ export function useDnDUpload(
       clearSelection()
       await fetchFiles()
     } catch (error) {
-      console.error('文件上传失败:', error)
+      notifyError(error, '文件上传失败')
     }
   }
 
@@ -92,7 +92,7 @@ export function useDnDUpload(
       try {
         await uploadMultipleFiles(fls, { folderId, overwrite: overwriteExisting.value, skip: skipExisting.value, })
       } catch (e) {
-        console.error('文件夹内文件上传失败:', e)
+        notifyError(e, '文件夹内文件上传失败')
       }
     }
 
@@ -111,7 +111,7 @@ export function useDnDUpload(
       })
       return res?.map || {}
     } catch (e) {
-      console.error('确保目录存在失败:', e)
+      notifyError(e, '创建目录失败')
       return {}
     }
   }

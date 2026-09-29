@@ -35,9 +35,13 @@ export function useNameEditing(
     const name = prompt('请输入新建文件夹名称：')?.trim()
     if (!name) return
     if (name.length > 255) return notify('文件夹名称过长（最多255字符）','error')
-    const res = await FoldersService.create(name, currentFolderId.value ?? null, tRef?.value ?? null)
-    if (res.success) await fetchFiles()
-    else notify(res.message || '创建失败', 'error')
+    try {
+      const res = await FoldersService.create(name, currentFolderId.value ?? null, tRef?.value ?? null)
+      if (res.success) await fetchFiles()
+      else notify(res.message || '创建失败', 'error')
+    } catch (e) {
+      notifyError(e, '创建文件夹失败')
+    }
   }
 
   const renameFolder = async (folder: FolderRecord) => {
@@ -47,12 +51,16 @@ export function useNameEditing(
     const err = validateName(newName, true)
     if (err) return notify(err, 'error')
     if (newName === folder.name) return
-    const res = await FoldersService.rename(folder.id, newName, tRef?.value ?? null)
-    if (!res.success) return notify(res.message || '重命名失败', 'error')
+    try {
+      const res = await FoldersService.rename(folder.id, newName, tRef?.value ?? null)
+      if (!res.success) return notify(res.message || '重命名失败', 'error')
 
-    const idx = folders.value.findIndex(f => f.id === folder.id)
-    if (idx >= 0) folders.value[idx].name = newName
-    breadcrumbs.value = breadcrumbs.value.map(c => c.id === folder.id ? { ...c, name: newName } : c)
+      const idx = folders.value.findIndex(f => f.id === folder.id)
+      if (idx >= 0) folders.value[idx].name = newName
+      breadcrumbs.value = breadcrumbs.value.map(c => c.id === folder.id ? { ...c, name: newName } : c)
+    } catch (e) {
+      notifyError(e, '重命名文件夹失败')
+    }
   }
 
   const renameFile = async (file: FileRecord) => {
@@ -62,10 +70,14 @@ export function useNameEditing(
     const err = validateName(finalName)
     if (err) return notify(err, 'error')
     if (finalName === file.filename) return
-    const res = await FilesService.rename(file.id, finalName, tRef?.value ?? null)
-    if (!res.success) return notify(res.message || '重命名失败', 'error')
-    const idx = files.value.findIndex(f => f.id === file.id)
-    if (idx >= 0) files.value[idx].filename = finalName
+    try {
+      const res = await FilesService.rename(file.id, finalName, tRef?.value ?? null)
+      if (!res.success) return notify(res.message || '重命名失败', 'error')
+      const idx = files.value.findIndex(f => f.id === file.id)
+      if (idx >= 0) files.value[idx].filename = finalName
+    } catch (e) {
+      notifyError(e, '重命名文件失败')
+    }
   }
 
   return {

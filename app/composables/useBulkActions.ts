@@ -5,7 +5,7 @@ import { createZipSink } from '~/utils/zipper'
 import { formatFileSize } from '~/utils/format'
 import type { FolderRecord, FileRecord } from '~/types/files'
 import { ref, type Ref } from 'vue'
-import { notify } from '~/utils/notify'
+import { notify, notifyError, toMessage } from '~/utils/notify'
 
 export function useBulkActions(
   folders: Ref<FolderRecord[]>,
@@ -26,34 +26,42 @@ export function useBulkActions(
       else {
         notify(res?.message || '下载文件失败','error')
       }
-    } catch {
-      notify("下载文件失败",'error')
+    } catch (e) {
+      notifyError(e, '下载文件失败')
     }
   }
 
   const deleteFile = async (file: FileRecord) => {
     const ok = confirm(`确定要删除文件 "${file.filename}" 吗？`)
     if (!ok) return
-    const res = await FilesService.delete(file.id, tRef?.value ?? null)
-    if (res.success) {
-      files.value = files.value.filter(f => f.id !== file.id)
-      selectedFileIds.value.delete(file.id)
-      notify('文件删除成功', 'success')
-    } else {
-      notify(res.message || '删除失败', 'error')
+    try {
+      const res = await FilesService.delete(file.id, tRef?.value ?? null)
+      if (res.success) {
+        files.value = files.value.filter(f => f.id !== file.id)
+        selectedFileIds.value.delete(file.id)
+        notify('文件删除成功', 'success')
+      } else {
+        notify(res.message || '删除失败', 'error')
+      }
+    } catch (e) {
+      notifyError(e, '删除文件失败')
     }
   }
 
   const deleteFolder = async (folder: FolderRecord) => {
     const ok = confirm(`确定要删除文件夹 "${folder.name}" 吗？\n将同时删除其所有子文件夹与文件，操作不可恢复。`)
     if (!ok) return
-    const res = await FoldersService.delete(folder.id, tRef?.value ?? null)
-    if (res.success) {
-      folders.value = folders.value.filter(f => f.id !== folder.id)
-      selectedFolderIds.value.delete(folder.id)
-      notify('文件夹删除成功','success')
-    } else {
-      notify(res.message || '删除失败','error')
+    try {
+      const res = await FoldersService.delete(folder.id, tRef?.value ?? null)
+      if (res.success) {
+        folders.value = folders.value.filter(f => f.id !== folder.id)
+        selectedFolderIds.value.delete(folder.id)
+        notify('文件夹删除成功','success')
+      } else {
+        notify(res.message || '删除失败', 'error')
+      }
+    } catch (e) {
+      notifyError(e, '删除文件夹失败')
     }
   }
 
@@ -72,8 +80,8 @@ export function useBulkActions(
     try {
       const t = tRef?.value ?? null
       const tasks = [
-        ...fileIds.map(id => FilesService.delete(id, t).then(r => ({ ok: r.success, id, type: 'file', message: r.message })).catch(e => ({ ok: false, id, type: 'file', message: e?.data?.message || e?.message }))),
-        ...folderIds.map(id => FoldersService.delete(id, t).then(r => ({ ok: r.success, id, type: 'folder', message: r.message })).catch(e => ({ ok: false, id, type: 'folder', message: e?.data?.message || e?.message })))
+        ...fileIds.map(id => FilesService.delete(id, t).then(r => ({ ok: r.success, id, type: 'file', message: r.message })).catch(e => ({ ok: false, id, type: 'file', message: toMessage(e, '删除失败') }))),
+        ...folderIds.map(id => FoldersService.delete(id, t).then(r => ({ ok: r.success, id, type: 'folder', message: r.message })).catch(e => ({ ok: false, id, type: 'folder', message: toMessage(e, '删除失败') })))
       ]
       const results = await Promise.all(tasks)
       const okFiles = results.filter(r => r.ok && r.type === 'file').map(r => r.id as number)
@@ -150,9 +158,8 @@ export function useBulkActions(
 
       await sink.close()
       notify('打包完成，已保存。','success')
-    } catch (e: any) {
-      console.error('批量下载失败:', e)
-      notify(e?.message || '批量下载失败，请稍后重试','error')
+    } catch (e) {
+      notifyError(e, '批量下载失败，请稍后重试')
     } finally {
       bulkDownloading.value = false
     }

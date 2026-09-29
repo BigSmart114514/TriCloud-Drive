@@ -33,9 +33,8 @@ export function useFolderDownload(options?: { targetUserId?: Ref<number | null |
       }
       await sink.close()
       notify('打包完成，已保存。', 'success')
-    } catch (e: any) {
-      console.error('文件夹下载失败:', e)
-      notify(e?.message || '文件夹下载失败，请稍后重试', 'error')
+    } catch (e) {
+      notifyError(e, '文件夹下载失败，请稍后重试')
     } finally {
       downloadingFolderId.value = null
     }

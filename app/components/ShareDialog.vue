@@ -189,7 +189,7 @@ import {
 } from '@heroicons/vue/24/outline'
 import { ShareService } from '~/services/share.service'
 import type { ShareCandidate, ShareGrant } from '~/services/share.service'
-import { notify } from '~/utils/notify'
+import { notify, notifyError } from '~/utils/notify'
 import {
   PERM_ALL,
   PERM_READ,
@@ -261,7 +261,13 @@ async function load() {
     isPublic.value = res.IsPublic
     grants.value = res.grants ?? []
   } catch (e: any) {
-    notify(e?.data?.statusMessage || '加载分享信息失败', 'error')
+    // 分享状态只有属主能看能改。被授权人打开时直接关窗：
+    // 留一个空壳 + 一条报错弹窗比不给入口更糟
+    if (e?.statusCode === 403 || e?.status === 403) {
+      close()
+      return
+    }
+    notifyError(e, '加载分享信息失败')
   } finally {
     loading.value = false
   }
@@ -276,8 +282,8 @@ async function run<T>(fn: () => Promise<T>, fallback: string): Promise<T | null>
   busy.value = true
   try {
     return await fn()
-  } catch (e: any) {
-    notify(e?.data?.statusMessage || e?.message || fallback, 'error')
+  } catch (e) {
+    notifyError(e, fallback)
     return null
   } finally {
     busy.value = false
