@@ -7,15 +7,11 @@ import { FolderOpenIcon, Bars3Icon, HomeIcon, ShieldExclamationIcon } from '@her
 
 definePageMeta({ title: '管理员 - 文件总览', layout: false })
 
-const { user, fetchUser } = useAuth()
+const { isAdmin, fetchUser } = useAuth()
 await fetchUser()
 
-const isAdmin = computed(() => {
-  const u = user.value as any
-  return !!(u && (u.IsSuperAdmin || u.IsAdmin || u.isSuperAdmin || u.isAdmin))
-})
-
-// 非管理员直接跳回首页
+// 非管理员直接跳回首页。真正的拦截在 auth.global.ts（SSR 阶段就拦），
+// 这里只是客户端兜底 + 页面内那条「您没有管理员权限」的提示。
 if (!isAdmin.value && process.client) navigateTo('/')
 
 const users = ref<UserSummary[]>([])

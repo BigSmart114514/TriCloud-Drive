@@ -33,7 +33,7 @@
       </div>
 
       <!-- 已登录但无权限 -->
-      <div v-else-if="!canManage" class="px-4 py-6 sm:px-0">
+      <div v-else-if="!isAdmin" class="px-4 py-6 sm:px-0">
         <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4">
           <div class="flex">
             <div class="ml-3">
@@ -341,7 +341,7 @@ type ApiUser = Omit<DbUser, 'usedStorage' | 'maxStorage' | 'usedDownload' | 'max
   maxDownload: number
 }
 
-const { user, isLoggedIn, register} = useAuth()
+const { user, isLoggedIn, isAdmin, register} = useAuth()
 
 
 // 修改密码中的用户 ID
@@ -398,7 +398,9 @@ const addError = ref('')
 
 const updatingId = ref<number | null>(null)
 
-const canManage = ref(!!user.value?.IsAdmin || !!user.value?.IsSuperAdmin)
+// 「我是管理员」统一走 useAuth.isAdmin。原来的 canManage 是在 setup 里对
+// user.value 取的一次性快照（ref），user 晚到一步就会永远停在 false；
+// 换成 computed 后会跟着 user 实时更新。
 
 // 删除相关状态
 const deletingId = ref<number | null>(null)
