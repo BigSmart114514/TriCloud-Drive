@@ -73,3 +73,9 @@ export const PERMISSION_LABELS: Record<number, string> = {
   [PERM_READ | PERM_WRITE]: '读写',
   [PERM_ALL]: '读写删'
 }
+
+/**
+ * 一条有效权限的**来源**，用来回答「我为什么能看到 / 能改这个」。
+ * 按「谁最具体谁赢」定优先级：自身名单 > 边界祖先 > 边界之下的授权 > 公开。
+ */
+export type PermSource = 'owner' | 'self' | 'inherited' | 'public' | 'none'

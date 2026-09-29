@@ -3,7 +3,8 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
 import { FileService, FolderService } from '~~/server/utils/db'
-import { hasPermission, PERM_ALL, PERM_READ, PERM_WRITE } from '~~/types/share'
+import type { PermSource, SharedEntry } from '~~/server/utils/db'
+import { hasPermission, PERM_ALL, PERM_READ, PERM_WRITE, SHARE_INHERIT } from '~~/types/share'
 import { getQuery } from 'h3'
 
 /**
@@ -29,13 +30,27 @@ export default defineEventHandler(async (event) => {
     const folderService = new FolderService(db)
 
     /**
-     * 附上两个前端要用的判定字段：
-     *   ownerId  —— 分享设置只有属主能改，据此决定给不给分享入口
-     *   canWrite —— 据此把剪贴/重命名/删除按条目置灰
+     * 附上前端要用的判定字段：
+     *   ownerId     —— 分享设置只有属主能改，据此决定按钮是「管理分享」还是「看权限」
+     *   canWrite    —— 据此把剪贴/重命名/删除按条目置灰
+     *   perm        —— 我对这个条目的**完整**位掩码（含删除位），弹层里显示「你所有的权限」
+     *   permSource  —— 这份权限的来源（直接授权 / 继承 / 公开），回答「我为什么能看到它」
      * 记录里本来就带 userId，这里只是给它一个语义明确的名字。
      */
-    const withMeta = <T extends { userId: number; canWrite?: boolean }>(rows: T[], fallbackWrite: boolean) =>
-      rows.map(r => ({ ...r, ownerId: r.userId, canWrite: r.canWrite ?? fallbackWrite }))
+    const withMeta = <T extends { userId: number; canWrite?: boolean; perm?: number; permSource?: PermSource }>(
+      rows: T[],
+      fallback: { perm: number; permSource: PermSource }
+    ) =>
+      rows.map(r => {
+        const perm = r.perm ?? fallback.perm
+        return {
+          ...r,
+          ownerId: r.userId,
+          perm,
+          permSource: r.permSource ?? fallback.permSource,
+          canWrite: r.canWrite ?? hasPermission(perm, PERM_WRITE)
+        }
+      })
 
     // 解析 folderId，root / 0 / 缺省都视为根层
     let folderId: number | null = null
@@ -63,8 +78,8 @@ export default defineEventHandler(async (event) => {
         ownerId: targetUserId,
         // 平铺清单没有「当前目录」概念，可写性逐条给（listSharedWithMe 已算好）
         canWrite: false,
-        folders: withMeta(shared.folders, false),
-        files: withMeta(shared.files, false)
+        folders: withMeta(shared.folders, { perm: 0, permSource: 'none' }),
+        files: withMeta(shared.files, { perm: 0, permSource: 'none' })
       }
     }
 
@@ -98,22 +113,31 @@ export default defineEventHandler(async (event) => {
     let folders = childFolders
     let files = allFiles
     if (!isOwner) {
-      const kept: (OwnedFolder & { canWrite: boolean })[] = []
+      const kept: SharedEntry<OwnedFolder>[] = []
       for (const f of childFolders) {
         const access = await folderService.resolveAccess(authId, f.id)
         if (hasPermission(access.mask, PERM_READ)) {
-          kept.push({ ...f, canWrite: hasPermission(access.mask, PERM_WRITE) })
+          kept.push({
+            ...f,
+            canWrite: hasPermission(access.mask, PERM_WRITE),
+            perm: access.mask,
+            permSource: access.source
+          })
         }
       }
       folders = kept
-      files = await fileService.filterAccessible(authId, allFiles, {
+      // filterAccessible 已经逐个用 resolveFileAccess 算对了完整掩码（文件自身
+      // Shared=1 时只认自己的名单/公开，不继承目录），只是把结果丢了。
+      // attachMasks 把掩码和来源挂回去，顺带完成过滤。
+      files = (await fileService.attachMasks(authId, allFiles, {
         boundary: true,
+        mode: SHARE_INHERIT,
         isPublic: false,
-        mask: dirAccessMask
-      })
+        mask: dirAccessMask,
+        source: 'inherited'
+      })).filter((f) => f.perm > 0)
     }
 
-    const filesFallbackWrite = hasPermission(dirAccessMask, PERM_WRITE)
     return {
       success: true,
       currentFolderId: folderId,
@@ -126,10 +150,10 @@ export default defineEventHandler(async (event) => {
       folder: folderId === null
         ? null
         : { id: folderId, name: (await folderService.findOwnedById(subtreeOwnerId, folderId))?.name ?? '' },
-      // folders 在被授权分支已逐条算过 canWrite；files 统一继承目录掩码。
-      // 属主时目录掩码是 PERM_ALL，两边都落到 true。
-      folders: withMeta(folders, filesFallbackWrite),
-      files: withMeta(files, filesFallbackWrite)
+      // 被授权分支里 perm/permSource 已逐条算好，withMeta 的 fallback 不会生效；
+      // 属主走的是另一条路（不调 resolveAccess），直接标 owner + 全权。
+      folders: withMeta(folders, { perm: PERM_ALL, permSource: 'owner' }),
+      files: withMeta(files, { perm: PERM_ALL, permSource: 'owner' })
     }
   } catch (error: any) {
     console.error('Get items error:', error)

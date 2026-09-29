@@ -10,7 +10,9 @@ import {
   SHARE_NONE,
   SHARE_SHARED
 } from '~~/types/share'
-import type { AccessGrant, ShareMode } from '~~/types/share'
+import type { AccessGrant, PermSource, ShareMode } from '~~/types/share'
+
+export type { PermSource } from '~~/types/share'
 
 export interface User {
   id: number
@@ -131,6 +133,16 @@ export interface OwnedFile {
   grants: AccessGrant[]
 }
 
+/**
+ * 列表接口里每个条目附带的「我对它的权限」元信息。
+ * perm 是完整位掩码，permSource 说明这份权限从哪来（见 PermSource）。
+ */
+export type SharedEntry<T> = T & {
+  canWrite: boolean
+  perm: number
+  permSource: PermSource
+}
+
 export interface ManifestFile {
   id: number
   filename: string
@@ -150,9 +162,16 @@ export interface ResolvedAccess {
   mode: ShareMode
   isPublic: boolean
   mask: number
+  source: PermSource
 }
 
-export const NO_ACCESS: ResolvedAccess = { boundary: false, mode: SHARE_INHERIT, isPublic: false, mask: 0 }
+export const NO_ACCESS: ResolvedAccess = {
+  boundary: false,
+  mode: SHARE_INHERIT,
+  isPublic: false,
+  mask: 0,
+  source: 'none'
+}
 
 /**
  * 边界祖先自身的决策：
@@ -165,7 +184,7 @@ function decideAncestor(
   row: { permission?: any } | null | undefined
 ): ResolvedAccess {
   if (mode === SHARE_INHERIT) return NO_ACCESS
-  if (mode === SHARE_NONE) return { boundary: true, mode, isPublic: false, mask: 0 }
+  if (mode === SHARE_NONE) return { boundary: true, mode, isPublic: false, mask: 0, source: 'none' }
   const own = row && row.permission !== null && row.permission !== undefined
     ? normalizePermission(row.permission)
     : 0
@@ -173,7 +192,9 @@ function decideAncestor(
     boundary: true,
     mode,
     isPublic,
-    mask: normalizePermission(own | (isPublic ? PERM_READ : 0))
+    mask: normalizePermission(own | (isPublic ? PERM_READ : 0)),
+    // 对子节点来说，边界上的授权就是「继承来的」
+    source: own > 0 ? 'inherited' : (isPublic ? 'public' : 'none')
   }
 }
 
@@ -204,23 +225,39 @@ function combineWithAncestor(
   self: { mode: ShareMode; isPublic: boolean; permission?: any },
   ancestor: ResolvedAccess,
   belowBoundaryMask = 0,
-  belowBoundaryIsPublic = false
+  belowBoundaryIsPublic = false,
+  belowBoundaryGrants = 0
 ): ResolvedAccess {
   const own =
     self.permission !== null && self.permission !== undefined ? normalizePermission(self.permission) : 0
   const direct = normalizePermission(own | (self.isPublic ? PERM_READ : 0))
 
   if (self.mode === SHARE_NONE) {
-    return { boundary: true, mode: SHARE_NONE, isPublic: false, mask: 0 }
+    return { boundary: true, mode: SHARE_NONE, isPublic: false, mask: 0, source: 'none' }
   }
   if (self.mode === SHARE_SHARED) {
-    return { boundary: true, mode: SHARE_SHARED, isPublic: self.isPublic, mask: direct }
+    return {
+      boundary: true,
+      mode: SHARE_SHARED,
+      isPublic: self.isPublic,
+      mask: direct,
+      source: own > 0 ? 'self' : (self.isPublic ? 'public' : 'none')
+    }
   }
+  const isPublicAny = self.isPublic || ancestor.isPublic || belowBoundaryIsPublic
+  // 谁最具体谁赢：自身名单 > 边界祖先 > 边界之下的授权 > 公开
+  const source: PermSource =
+    own > 0 ? 'self'
+      : ancestor.mask > 0 ? ancestor.source
+        : belowBoundaryGrants > 0 ? 'inherited'
+          : isPublicAny ? 'public'
+            : 'none'
   return {
     boundary: ancestor.boundary,
     mode: SHARE_INHERIT,
-    isPublic: self.isPublic || ancestor.isPublic || belowBoundaryIsPublic,
-    mask: normalizePermission(direct | ancestor.mask | belowBoundaryMask)
+    isPublic: isPublicAny,
+    mask: normalizePermission(direct | ancestor.mask | belowBoundaryMask),
+    source
   }
 }
 
@@ -516,19 +553,22 @@ export class FolderService {
 
     // pri=2 的行 = 节点与最近边界之间的非边界祖先，它们身上的授权与公开标记
     // 以前读不到，现在合并进来。边界行本身不在这里 —— 归 decideAncestor 管。
-    let belowBoundaryMask = 0
+    //
+    // 授权贡献与公开贡献要分开记：公开派生的那个 READ 位也混在 mask 里，
+    // 不分开的话「靠公开看到的」会被误判成来源 inherited。
+    let belowBoundaryGrants = 0
     let belowBoundaryIsPublic = false
     for (const r of rows as any[]) {
       if (Number(r.pri) !== 2) continue
       const p = r?.permission
       if (p !== null && p !== undefined) {
-        belowBoundaryMask = normalizePermission(belowBoundaryMask | normalizePermission(p))
+        belowBoundaryGrants = normalizePermission(belowBoundaryGrants | normalizePermission(p))
       }
-      if (toBool(r?.pub)) {
-        belowBoundaryIsPublic = true
-        belowBoundaryMask = normalizePermission(belowBoundaryMask | PERM_READ)
-      }
+      if (toBool(r?.pub)) belowBoundaryIsPublic = true
     }
+    const belowBoundaryMask = normalizePermission(
+      belowBoundaryGrants | (belowBoundaryIsPublic ? PERM_READ : 0)
+    )
 
     // 边界行单独留给 decideAncestor：边界自己的名单与「不分享」的墙都归它管。
     // rows 已按 depth 升序，find 命中的就是最近的那个边界；depth>0 排除了节点自身
@@ -549,7 +589,8 @@ export class FolderService {
       },
       ancestor,
       belowBoundaryMask,
-      belowBoundaryIsPublic
+      belowBoundaryIsPublic,
+      belowBoundaryGrants
     )
   }
 
@@ -724,7 +765,7 @@ export class FileService {
   async listSharedWithMe(
     userId: number,
     ownerId?: number
-  ): Promise<{ folders: (OwnedFolder & { canWrite: boolean })[]; files: (OwnedFile & { canWrite: boolean })[] }> {
+  ): Promise<{ folders: SharedEntry<OwnedFolder>[]; files: SharedEntry<OwnedFile>[] }> {
     // ownerId 限定属主：侧栏选中某人时只列那人的共享内容。
     // 注意它只是**范围收窄**，不构成授权 —— 下面每行仍要过 resolveAccess。
     const ownerSql = ownerId !== undefined ? ' AND user_id = ?' : ''
@@ -750,20 +791,30 @@ export class FileService {
 
     // canWrite 一并算出来：平铺清单里只读和读写条目混在一起，
     // 前端要靠它把剪贴/重命名/删除按条目置灰，而不是等点了才报 403。
-    const folders: (OwnedFolder & { canWrite: boolean })[] = []
+    const folders: SharedEntry<OwnedFolder>[] = []
     for (const row of folderRows?.results || []) {
       const access = await this.folders.resolveAccess(userId, Number(row.id))
       if (hasPermission(access.mask, PERM_READ)) {
-        folders.push({ ...toOwnedFolder(row), canWrite: hasPermission(access.mask, PERM_WRITE) })
+        folders.push({
+          ...toOwnedFolder(row),
+          canWrite: hasPermission(access.mask, PERM_WRITE),
+          perm: access.mask,
+          permSource: access.source
+        })
       }
     }
 
     const files = await this.attachAccess((fileRows?.results || []).map((row: any) => this.toOwned(row)))
-    const visible: (OwnedFile & { canWrite: boolean })[] = []
+    const visible: SharedEntry<OwnedFile>[] = []
     for (const f of files) {
       const access = await this.resolveAccessForFile(userId, f)
       if (hasPermission(access.mask, PERM_READ)) {
-        visible.push({ ...f, canWrite: hasPermission(access.mask, PERM_WRITE) })
+        visible.push({
+          ...f,
+          canWrite: hasPermission(access.mask, PERM_WRITE),
+          perm: access.mask,
+          permSource: access.source
+        })
       }
     }
 
@@ -789,6 +840,31 @@ export class FileService {
    * `need` 传入具体权限位时按该位过滤（如 PERM_WRITE = 「我能原地改的」），
    * 省略时保持原语义：任何非零掩码都算（= 有读权限）。
    */
+  /**
+   * 把「我对这批文件的权限」挂回每个文件上。
+   *
+   * filterAccessible 内部已经用 resolveFileAccess 逐个算对了完整掩码，只是把结果
+   * 丢掉了。这里把掩码与来源挂回去，前端才能显示「你所有的权限」。
+   * 同一批文件应属同一目录 —— 传 inherited 可以避免逐个去解析目录。
+   */
+  async attachMasks(
+    userId: number,
+    files: OwnedFile[],
+    inherited?: ResolvedAccess
+  ): Promise<SharedEntry<OwnedFile>[]> {
+    if (!files.length) return []
+    const dirAccess = inherited ?? (await this.folders.resolveAccess(userId, files[0]!.folderId))
+    return files.map((file) => {
+      const access = this.resolveFileAccess(userId, file, dirAccess)
+      return {
+        ...file,
+        perm: access.mask,
+        permSource: access.source,
+        canWrite: hasPermission(access.mask, PERM_WRITE)
+      }
+    })
+  }
+
   async filterAccessible(
     userId: number,
     files: OwnedFile[],

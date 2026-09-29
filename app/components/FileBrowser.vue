@@ -221,7 +221,7 @@
         @delete-folder="onDeleteFolder"
         @rename-folder="onRenameFolder"
         :show-clip="true"
-        :can-share="canShare"
+        :share-action="shareAction"
         @clip-folder="onClipFolder"
         @copy-folder="onCopyFolder"
         @download-file="onDownloadFile"
@@ -534,24 +534,29 @@ const onRenameFile = (file: FileListFile) => renameFile(asFile(file))
 const onClipFile = (file: FileListFile) => clipFile(asFile(file))
 const onCopyFile = (file: FileListFile) => copyFile(asFile(file))
 
-// 分享弹窗的目标（null = 关闭）。只有属主能在弹窗里改授权，服务端会再校验一次。
-// 非属主连入口都不给：弹窗一打开就会撞 403「只有属主可以管理分享」，
-// 与其弹错，不如一开始就不让他点。
+// 分享按钮的行为（FileList 消费）：
+//   manage  —— 我是属主，点开 ShareDialog 改授权
+//   inspect —— 是别人的内容，弹层显示「我所有的权限」（inspact 时不冒泡到这里）
+//   none    —— 不给按钮
+//
+// /manage/files 是纯管理视角：管理员以属主身份操作，「我的权限」对他没有意义，
+// 所以那里一律 none。
 const { user: authUser } = useAuth()
 const shareTarget = ref<{ type: 'file' | 'folder'; id: number; name: string } | null>(null)
-const canShare = (item: FileListFile | FileListFolder) => {
+const shareAction = (item: FileListFile | FileListFolder): 'manage' | 'inspect' | 'none' => {
+  if (props.useAdmin) return 'none'
   const myId = authUser.value?.id
   const ownerId = item.ownerId
-  // 拿不到属主信息时保守为不可分享，避免出现「点开必报错」的入口
-  if (myId == null || ownerId == null) return false
-  return Number(ownerId) === Number(myId)
+  // 拿不到属主信息时保守为不给入口，避免出现「点开必报错」的按钮
+  if (myId == null || ownerId == null) return 'none'
+  return Number(ownerId) === Number(myId) ? 'manage' : 'inspect'
 }
 const onShareFile = (file: FileListFile) => {
-  if (!canShare(file)) return
+  if (shareAction(file) !== 'manage') return
   shareTarget.value = { type: 'file', id: Number(file.id), name: String(file.filename) }
 }
 const onShareFolder = (folder: FileListFolder) => {
-  if (!canShare(folder)) return
+  if (shareAction(folder) !== 'manage') return
   shareTarget.value = { type: 'folder', id: Number(folder.id), name: String(folder.name) }
 }
 const closePreview = () => {
