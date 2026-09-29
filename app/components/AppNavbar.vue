@@ -26,8 +26,11 @@
               欢迎，{{ user?.username }}
             </span>
 
-            <!-- 右侧额外内容（修改密码） -->
+            <!-- 右侧额外内容（修改密码 / 返回首页） -->
             <slot name="extra" />
+
+            <!-- 管理入口：仅管理员渲染，普通用户导航栏完全看不到 -->
+            <UiManageMenu v-if="isAdmin" />
 
             <button
               @click="handleLogout"
@@ -66,6 +69,7 @@
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { ArrowRightOnRectangleIcon, ShieldExclamationIcon } from '@heroicons/vue/24/outline'
+import UiManageMenu from '~/components/UiManageMenu.vue'
 import UiSettingsMenu from '~/components/UiSettingsMenu.vue'
 
 const props = withDefaults(defineProps<{ fluid?: boolean }>(), { fluid: false })
@@ -74,6 +78,6 @@ const fluid = computed(() => props.fluid)
 const route = useRoute()
 const isManageArea = computed(() => route.path === '/manage' || route.path.startsWith('/manage/'))
 
-const { user, isLoggedIn, logout } = useAuth()
+const { user, isLoggedIn, isAdmin, logout } = useAuth()
 const handleLogout = async () => { await logout() }
 </script>
