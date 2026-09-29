@@ -59,10 +59,10 @@
             <button class="p-1 text-sm text-gray-600 hover:text-gray-800" @click.stop="emit('rename-folder', folder)" title="重命名" aria-label="重命名">
               <PencilSquareIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-folder', folder)" title="剪贴" aria-label="剪贴">
+            <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-folder', folder)" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-folder', folder)" title="复制" aria-label="复制">
+            <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-folder', folder)" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
             <button class="p-1 text-sm text-emerald-600 hover:text-emerald-500" @click.stop="emit('share-folder', folder)" title="分享" aria-label="分享">
@@ -118,10 +118,10 @@
             <button class="p-1 text-sm text-red-600 hover:text-red-500" @click.stop="emit('delete-file', file)" title="删除" aria-label="删除">
               <TrashIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-file', file)" title="剪贴" aria-label="剪贴">
+            <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('clip-file', file)" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-file', file)" title="复制" aria-label="复制">
+            <button v-if="showClip" class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click.stop="emit('copy-file', file)" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
             </button>
             <button class="p-1 text-sm text-emerald-600 hover:text-emerald-500" @click.stop="emit('share-file', file)" title="分享" aria-label="分享">
@@ -171,11 +171,11 @@
                 <TrashIcon class="h-6 w-6 text-red-600" />
                 <span class="mt-1">删除</span>
               </button>
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('clip-file')">
+              <button v-if="showClip" class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('clip-file')">
                 <ScissorsIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">剪贴</span>
               </button>
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('copy-file')">
+              <button v-if="showClip" class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFileAction('copy-file')">
                 <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">复制</span>
               </button>
@@ -193,11 +193,11 @@
                 <TrashIcon class="h-6 w-6 text-red-600" />
                 <span class="mt-1">删除</span>
               </button>
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('clip-folder')">
+              <button v-if="showClip" class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('clip-folder')">
                 <ScissorsIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">剪贴</span>
               </button>
-              <button class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('copy-folder')">
+              <button v-if="showClip" class="px-2 py-3 rounded hover:bg-gray-50 flex flex-col items-center justify-center" @click="runFolderAction('copy-folder')">
                 <DocumentDuplicateIcon class="h-6 w-6 text-indigo-600" />
                 <span class="mt-1">复制</span>
               </button>
@@ -240,6 +240,11 @@ const props = withDefaults(defineProps<{
   downloadingFolderId?: FileListId | null
   selectedFolderIds?: ReadonlySet<FileListId>
   selectedFileIds?: ReadonlySet<FileListId>
+  /**
+   * 是否显示剪贴/复制按钮。共享内容视图传 false：
+   * 剪贴需要「粘到哪里」，而那里没有归属目录的概念，点了无处可粘。
+   */
+  showClip?: boolean
   emptyTitle?: string
   emptyDescription?: string
 }>(), {
@@ -252,6 +257,7 @@ const props = withDefaults(defineProps<{
   downloadingFolderId: null,
   selectedFolderIds: undefined,
   selectedFileIds: undefined,
+  showClip: true,
   emptyTitle: '这里空空如也',
   emptyDescription: '当前目录没有可显示的内容。'
 })

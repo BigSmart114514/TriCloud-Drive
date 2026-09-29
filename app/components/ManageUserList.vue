@@ -68,11 +68,14 @@
 
             <span class="min-w-0 flex-1">
               <span class="flex items-center gap-1.5">
-                <span class="truncate text-sm font-medium text-gray-900">{{ u.username || u.email || '未命名' }}</span>
+                <span class="truncate text-sm font-medium text-gray-900">{{ u.self ? '我的文件' : (u.username || u.email || '未命名') }}</span>
                 <ShieldCheckIcon v-if="u.IsSuperAdmin" class="h-4 w-4 shrink-0 text-purple-500" title="超级管理员" />
                 <StarIcon v-else-if="u.IsAdmin" class="h-4 w-4 shrink-0 text-amber-500" title="管理员" />
               </span>
-              <span class="mt-0.5 flex items-center gap-1.5 text-xs text-gray-500">
+              <span v-if="u.self" class="mt-0.5 block truncate text-xs text-gray-500">
+                全部文件 · 上传 · 新建
+              </span>
+              <span v-else class="mt-0.5 flex items-center gap-1.5 text-xs text-gray-500">
                 <span class="truncate">{{ u.email || '—' }}</span>
                 <span class="shrink-0 text-gray-300">·</span>
                 <span class="shrink-0 tabular-nums">ID {{ u.id }}</span>
@@ -98,6 +101,8 @@ export interface UserSummary {
   IsAdmin?: boolean
   IsSuperAdmin?: boolean
   created_at?: string
+  /** 固定首行「我的文件」：点它等于取消选中，回到自己的目录 */
+  self?: boolean
 }
 </script>
 

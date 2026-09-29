@@ -4,11 +4,12 @@ import { useRuntimeConfig } from '#imports'
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
+import type { OwnedFile, OwnedFolder } from '~~/server/utils/db'
 import { ensurePaths } from '~~/server/utils/folders'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { uniqPositiveInts } from '~~/server/utils/functions'
 import { skipAndOverwriteError } from '~~/types/error'
-import { DEFAULT_SHARE_MODE } from '~~/types/share'
+import { DEFAULT_SHARE_MODE, PERM_READ, PERM_WRITE } from '~~/types/share'
 
 function sanitizeForKey(name: string): string {
   return name.replace(/[\\?%*:|"<>]/g, '_').replace(/[\s]+/g, ' ')
@@ -18,8 +19,9 @@ function randomId(len = 10) {
 }
 
 export default defineEventHandler(async (event) => {
-  const { targetUserId } = await getMeAndTarget(event)
-  const userId = Number(targetUserId)
+  const { authUserId } = await getMeAndTarget(event)
+  // 鉴权身份：判「我能不能读这些 / 能不能往那儿写」
+  const authId = Number(authUserId)
   const db: any = getDb(event)
   if (!db) return { success: false, message: '数据库连接失败' }
 
@@ -44,18 +46,34 @@ export default defineEventHandler(async (event) => {
   const fileService = new FileService(db)
   const folderService = new FolderService(db)
 
-  // 读取目标文件夹（仅校验属于该用户）
+  // 复制源：对我可读即可（属主放行 / 分享给了 READ）
+  let movedFolders: OwnedFolder[]
+  let movedFileRows: OwnedFile[]
+  try {
+    movedFolders = await folderService.findAccessibleMany(authId, folderIds, PERM_READ)
+    movedFileRows = await fileService.findAccessibleMany(authId, fileIds, PERM_READ)
+  } catch (e: any) {
+    return { success: false, message: e?.statusMessage || '部分内容不存在或无权限' }
+  }
+
+  // 目标目录：要 write。原来只有 findOwnedById(userId)，
+  // 普通用户传 targetUserId 就能往别人树里粘贴。
+  let destOwnerId: number | null = null
   if (targetFolderId !== null) {
-    if (!(await folderService.findOwnedById(userId, targetFolderId))) {
-      return { success: false, message: '目标文件夹不存在或无权限' }
+    try {
+      const dest = await folderService.findAccessibleById(authId, targetFolderId, PERM_WRITE)
+      destOwnerId = dest.userId
+    } catch (e: any) {
+      return { success: false, message: e?.statusMessage || '目标文件夹不存在或无权限' }
     }
   }
 
-  // 拉取待复制的顶层文件夹列表
-  const movedFolders = await folderService.findOwnedMany(userId, folderIds)
-  if (movedFolders.length !== folderIds.length) {
-    return { success: false, message: '部分文件夹不存在或无权限' }
-  }
+  /**
+   * 树属主：下面所有 owner-scoped SQL 用它，不是 authId。
+   * 副本永远落在**目标目录的属主**树里（不是源的属主）—— 复制到别人树里
+   * 时副本归对方，这是分享语义下唯一自洽的解释。
+   */
+  const userId = destOwnerId ?? (movedFolders[0]?.userId ?? movedFileRows[0]?.userId ?? authId)
 
   // 拉取待复制的单个文件列表（包含复制所需字段）
   type SrcFile = {
@@ -66,7 +84,7 @@ export default defineEventHandler(async (event) => {
     fileSize: number
     contentType: string | null
   }
-  const movedFiles: SrcFile[] = (await fileService.findOwnedMany(userId, fileIds)).map((r) => ({
+  const movedFiles: SrcFile[] = movedFileRows.map((r) => ({
     id: r.id,
     filename: r.filename,
     folderId: r.folderId,
@@ -211,7 +229,7 @@ export default defineEventHandler(async (event) => {
   const reserveBytes = Math.max(0, bytesToCopy - bytesToFreeByOverwrite)
   if (reserveBytes > 0) {
     const res = await db
-      .prepare('UPDATE users SET usedStorage = usedStorage + ? WHERE id = ? AND usedStorage + ? <= maxStorage')
+      .prepare('UPDATE users SET usedStorage = usedStorage + ? WHERE id = ? AND (maxStorage = 0 OR usedStorage + ? <= maxStorage)')
       .bind(reserveBytes, userId, reserveBytes)
       .run()
     const changed = Number(res?.meta?.changes || res?.meta?.rows_affected || 0)

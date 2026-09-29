@@ -42,8 +42,8 @@ const getAffectedRows = (res: any) =>
 export default defineEventHandler(async (event) => {
   try {
     //const user = await requireAuth(event)
-    const { targetUserId } = await getMeAndTarget(event)
-    const userId = Number(targetUserId)
+    const { authUserId } = await getMeAndTarget(event)
+    const userId = Number(authUserId)
 
     const { fileKey, filename } = await readBody(event)
 

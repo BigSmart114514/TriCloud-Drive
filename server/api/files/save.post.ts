@@ -1,9 +1,9 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
-import { FileService } from '~~/server/utils/db'
+import { FileService, FolderService } from '~~/server/utils/db'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { userExpiredError, userNotFindError, dbConnectionError, upload403Error } from '~~/types/error'
-import { DEFAULT_SHARE_MODE } from '~~/types/share'
+import { DEFAULT_SHARE_MODE, PERM_WRITE } from '~~/types/share'
 
 export default defineEventHandler(async (event) => {
   function parseSqlDateTime(input: any): Date | null {
@@ -62,8 +62,9 @@ export default defineEventHandler(async (event) => {
 
   try {
     //const user = await requireAuth(event)
-    const { targetUserId } = await getMeAndTarget(event)
-    const userId = Number(targetUserId)
+    const { authUserId } = await getMeAndTarget(event)
+    // 鉴权身份：useAdmin 时是属主，否则是我（只往我有 write 的目录里写）
+    const authId = Number(authUserId)
     const body = await readBody(event)
     const { filename, safeFilename, fileKey, fileSize, fileUrl, contentType, overwrite } = body || {}
     const folderId = normalizeFolderId(body?.folderId ?? (event as any)?.context?.folderId)
@@ -77,13 +78,20 @@ export default defineEventHandler(async (event) => {
     if (!db) throw dbConnectionError
 
     const fileService = new FileService(db)
+    const folderService = new FolderService(db)
 
+    // 目标目录必须对我有 write。原来只有 assertFolderOwned(userId)（要求 userId 拥有
+    // 它），普通用户传 targetUserId=<属主> 就能往别人树里塞文件。根层是自己的根，放行。
+    let userId = authId
+    if (folderId !== null) {
+      const dest = await folderService.findAccessibleById(authId, folderId, PERM_WRITE)
+      userId = dest.userId
+    }
+
+    // 额度与过期一律按**属主**判定：文件落在谁的树里，就占谁的容量、算谁过期。
     const userRow: any = await db.prepare('SELECT expire_at FROM users WHERE id = ?').bind(userId).first()
     if (!userRow) throw userNotFindError
     if (isExpired(userRow.expire_at)) throw userExpiredError
-
-    // 目标目录归属校验，根层直接放行
-    await fileService.assertFolderOwned(userId, folderId)
 
     await db.prepare('SAVEPOINT upload_tx').bind().run()
     try {

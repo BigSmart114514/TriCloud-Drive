@@ -16,8 +16,8 @@ function isUniqueError(err: any) {
 
 export default defineEventHandler(async (event) => {
   //const user = await requireAuth(event)
-  const {targetUserId} = await getMeAndTarget(event)
-  const userId = Number(targetUserId)
+  const {authUserId} = await getMeAndTarget(event)
+  const userId = Number(authUserId)
   const db = getDb(event)
 
   const body = await readBody<{ fileId: number; newName: string }>(event)

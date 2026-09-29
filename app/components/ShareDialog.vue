@@ -318,48 +318,49 @@ async function applyPublic(next: boolean) {
   }
 }
 
-async function changePermission(userId: number, value: string) {
-  const permission = Number(value)
-  const prev = grants.value.find((g) => g.userId === userId)?.permission
+/**
+ * 提交整份名单。名单是覆盖语义：传什么就是最终结果。
+ * 所以「改某人权限」「加人」「移人」都只是先在本地算出新的名单再重发，
+ * 服务端自己算出增删改（server/utils/share.ts 的 replaceAccess）。
+ */
+async function submitGrants(next: ShareGrant[], okMessage: string) {
+  const snapshot = grants.value
+  grants.value = next
   const res = await run(
-    () => ShareService.grant({ targetType: props.targetType, targetId: props.targetId! }, [userId], permission),
-    '修改权限失败'
+    () => ShareService.setState(
+      { targetType: props.targetType, targetId: props.targetId! },
+      { grants: next.map((g) => ({ userId: g.userId, permission: g.permission })) }
+    ),
+    '保存授权名单失败'
   )
   if (res) {
-    const g = grants.value.find((x) => x.userId === userId)
-    if (g) g.permission = permission
-    notify(res.message, 'success')
+    // 服务端回传的是权威值（标签、用户名可能已变），用它覆盖本地
+    if (Array.isArray(res.grants)) grants.value = res.grants
+    notify(res.message || okMessage, 'success')
     emit('changed')
-  } else if (prev !== undefined) {
-    const g = grants.value.find((x) => x.userId === userId)
-    if (g) g.permission = prev
+    return true
   }
+  grants.value = snapshot
+  return false
+}
+
+async function changePermission(userId: number, value: string) {
+  const permission = Number(value)
+  const next = grants.value.map((g) => (g.userId === userId ? { ...g, permission } : g))
+  await submitGrants(next, '权限已更新')
 }
 
 async function addGrant(c: ShareCandidate) {
   const permission = PERM_READ | PERM_WRITE
-  const res = await run(
-    () => ShareService.grant({ targetType: props.targetType, targetId: props.targetId! }, [c.id], permission),
-    '添加授权失败'
-  )
-  if (res) {
+  const next = [...grants.value, { userId: c.id, permission, user: { username: c.username, email: c.email } }]
+  if (await submitGrants(next, `已授权给 ${c.username}`)) {
     candidates.value = candidates.value.filter((x) => x.id !== c.id)
-    notify(`已授权给 ${c.username}`, 'success')
-    await load()
-    emit('changed')
   }
 }
 
 async function removeGrant(userId: number) {
-  const res = await run(
-    () => ShareService.revoke({ targetType: props.targetType, targetId: props.targetId! }, [userId]),
-    '移除授权失败'
-  )
-  if (res) {
-    grants.value = grants.value.filter((g) => g.userId !== userId)
-    notify(res.message, 'success')
-    emit('changed')
-  }
+  const next = grants.value.filter((g) => g.userId !== userId)
+  await submitGrants(next, '已移除授权')
 }
 
 function searchCandidates() {

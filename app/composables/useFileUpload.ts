@@ -54,7 +54,7 @@ export const useFileUpload = (options?: { targetUserId?: Ref<number | null | und
       overwrite: !!params.overwrite,
       skipIfExist: !!params.skip
     }
-    if (tRef?.value) body.targetUserId = tRef.value
+    if (tRef?.value) { body.targetUserId = tRef.value; body.useAdmin = 1 }
     const response = await $fetch<{ success: boolean; data: UploadConfig }>('/api/upload/credentials', {
       method: 'POST',
       body
@@ -98,7 +98,7 @@ export const useFileUpload = (options?: { targetUserId?: Ref<number | null | und
           folderId,
           overwrite
         }
-        if (tRef?.value) body.targetUserId = tRef.value
+        if (tRef?.value) { body.targetUserId = tRef.value; body.useAdmin = 1 }
         await $fetch('/api/files/save', { method: 'POST', body })
         return config.fileKey
       }
@@ -146,7 +146,7 @@ export const useFileUpload = (options?: { targetUserId?: Ref<number | null | und
           folderId,
           overwrite
         }
-        if (tRef?.value) body.targetUserId = tRef.value
+        if (tRef?.value) { body.targetUserId = tRef.value; body.useAdmin = 1 }
         await $fetch('/api/files/save', { method: 'POST', body })
       }
       //console.log(fileUrl)

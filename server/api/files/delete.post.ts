@@ -8,8 +8,10 @@ export default defineEventHandler(async (event) => {
   try {
     // 验证用户认证
     //const user = await requireAuth(event)
-    const { targetUserId } = await getMeAndTarget(event)
-    const userId = Number(targetUserId)
+    // 权限判定用 authUserId：useAdmin 时它是属主（等同原版的纯归属），
+    // 否则是我（只碰分享权限够得着的）
+    const { authUserId } = await getMeAndTarget(event)
+    const userId = Number(authUserId)
 
     const { fileId } = await readBody(event)
 

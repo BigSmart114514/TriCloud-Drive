@@ -35,27 +35,18 @@ export const ShareService = {
     )
   },
 
+  /**
+   * 改共享状态。这是唯一的写接口：mode / isPublic / grants 都走它。
+   * grants 是**整份名单**，传什么就是最终结果（不在列表里的会被移出），
+   * 所以加人和移人都只是「改数组后重发」，不用分别调两个接口。
+   */
   async setState(
     target: ShareTargetType,
-    payload: { mode?: ShareMode; isPublic?: boolean }
+    payload: { mode?: ShareMode; isPublic?: boolean; grants?: Array<{ userId: number; permission: number }> }
   ) {
     return await $fetch<ShareState & { success: boolean; message: string }>('/api/share/mode', {
       method: 'POST',
       body: { ...target, ...payload }
-    })
-  },
-
-  async grant(target: ShareTargetType, userIds: number[], permission: number) {
-    return await $fetch<{ success: boolean; message: string }>('/api/share/grant', {
-      method: 'POST',
-      body: { ...target, userIds, permission }
-    })
-  },
-
-  async revoke(target: ShareTargetType, userIds: number[]) {
-    return await $fetch<{ success: boolean; message: string }>('/api/share/revoke', {
-      method: 'POST',
-      body: { ...target, userIds }
     })
   },
 

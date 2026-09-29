@@ -2,18 +2,29 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { ensurePaths } from '~~/server/utils/folders'
+import { FolderService } from '~~/server/utils/db'
+import { PERM_WRITE } from '~~/types/share'
 import { dbConnectionError } from '~~/types/error'
 
 export default defineEventHandler(async (event) => {
   try {
-    const { targetUserId } = await getMeAndTarget(event)
-    const userId = Number(targetUserId)
+    const { authUserId } = await getMeAndTarget(event)
+    const authId = Number(authUserId)
     const db = getDb(event)
     if (!db) throw dbConnectionError
 
     const body = await readBody(event)
-    const map = await ensurePaths(db, userId, {
-      parentId: body?.parentId,
+    const parentId = body?.parentId ?? null
+
+    // 同 folders/create：父目录要 write，路径落在父目录属主的树下
+    let ownerId = authId
+    if (parentId !== null && parentId !== undefined) {
+      const parent = await new FolderService(db).findAccessibleById(authId, Number(parentId), PERM_WRITE)
+      ownerId = parent.userId
+    }
+
+    const map = await ensurePaths(db, ownerId, {
+      parentId: parentId ?? null,
       paths: body?.paths,
     })
 

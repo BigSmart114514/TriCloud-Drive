@@ -105,17 +105,64 @@ export async function optionalAuth(event: any, opts?: { withUser?: boolean }): P
   }
 }
 
-export async function getMeAndTarget(event: any): Promise<{ me: AuthenticatedUser, targetUserId: number }> {
+export interface MeAndTarget {
+  me: AuthenticatedUser
+  /** 数据范围：看谁的东西。缺省是自己。 */
+  targetUserId: number
+  /**
+   * 是否以管理权限操作 = 显式传了 useAdmin 且调用者确实是管理员/超管。
+   * 非管理员传 useAdmin 一律 403，不做静默降级 —— 静默降级会让「我以为我拿到了
+   * 管理视图」和「我其实只看到自己的」无法区分。
+   */
+  adminMode: boolean
+  /**
+   * **鉴权身份**：所有权限判定都用它。
+   *
+   *   adminMode → targetUserId（以属主身份，纯归属，等同改造前的行为）
+   *   否则     → me.userId（以行动者身份，只能碰自己有权的东西）
+   *
+   * 各接口凡是原来拿 targetUserId 判权限的地方，一律换成 authUserId。
+   * 于是同一个接口靠这一个变量同时具备两种语义，不需要两套实现：
+   * findAccessibleById 之类的「属主放行 / 无权 404 / 不足 403」三段逻辑
+   * 在 authUserId=属主 时自然退化成纯归属判定。
+   */
+  authUserId: number
+}
+
+/** 布尔参数在 query / body 里可能是 true / 'true' / 1 / '1'，都当 true */
+function readBool(v: any): boolean {
+  return v === true || v === 1 || v === '1' || v === 'true'
+}
+
+/**
+ * 统一的鉴权入口：解析「以谁的身份、对谁操作、用什么权限」。
+ *
+ * 约定：
+ *   targetUserId 缺省 = 自己          —— 数据范围
+ *   useAdmin      缺省 = false        —— 是否管理权限
+ *
+ *   - useAdmin=true  → adminMode 必须成立，否则 403；authUserId = targetUserId
+ *   - useAdmin=false → authUserId = me；targetUserId 只用来圈定候选集，
+ *                      返回的每一行仍要过 me 的分享权限过滤
+ */
+export async function getMeAndTarget(event: any): Promise<MeAndTarget> {
   const me = await requireAuth(event, { withUser: true })
   const isGet = getMethod(event) === 'GET'
   const q: any = isGet ? getQuery(event) : null
   const b: any = isGet ? null : await readBody(event)
-  const provided = q?.targetUserId ?? b?.targetUserId
-  const targetUserId = provided != null ? Number(provided) : me.userId
 
-  // 只需校验是否管理员：当操作他人资源时需要管理员
-  if (targetUserId !== me.userId && !(me.isAdmin || me.isSuperAdmin)) {
-    throw createError({ statusCode: 403, statusMessage: '仅管理员可操（作）（？？？他人' })
+  const useAdmin = readBool(q?.useAdmin ?? b?.useAdmin)
+  const isStaff = !!(me.isAdmin || me.isSuperAdmin)
+  if (useAdmin && !isStaff) {
+    throw createError({ statusCode: 403, statusMessage: '仅管理员可使用管理权限' })
   }
-  return { me, targetUserId }
+  const adminMode = useAdmin && isStaff
+
+  const provided = q?.targetUserId ?? b?.targetUserId
+  const targetUserId = provided != null && provided !== '' ? Number(provided) : me.userId
+  if (!Number.isInteger(targetUserId) || targetUserId < 1) {
+    throw createError({ statusCode: 400, statusMessage: '非法的 targetUserId' })
+  }
+
+  return { me, targetUserId, adminMode, authUserId: adminMode ? targetUserId : me.userId }
 }

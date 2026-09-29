@@ -2,17 +2,20 @@ import { defineEventHandler, readBody } from 'h3'
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
+import type { OwnedFile, OwnedFolder } from '~~/server/utils/db'
 import { ensurePaths } from '~~/server/utils/folders'
 import { skipAndOverwriteError } from '~~/types/error'
 import { uniqPositiveInts } from '~~/server/utils/functions'
+import { PERM_WRITE } from '~~/types/share'
 import {
   resolveUniqueFilename,
   delEmptySubfolder,
 } from '~~/server/utils/file'
 
 export default defineEventHandler(async (event) => {
-  const { targetUserId } = await getMeAndTarget(event)
-  const userId = Number(targetUserId)
+  const { authUserId } = await getMeAndTarget(event)
+  // 鉴权身份：判「我能不能动这些」—— useAdmin 时是属主，否则是我（走分享权限）
+  const authId = Number(authUserId)
   const db = getDb(event)
 
   const body = await readBody<{
@@ -36,25 +39,44 @@ export default defineEventHandler(async (event) => {
   const fileService = new FileService(db)
   const folderService = new FolderService(db)
 
-  // 校验目标文件夹
+  // 待移动的每一项都要对我有 write。注意：原来这里用的是「目标拥有这些条目」
+  // （findOwnedById），普通用户传 targetUserId 就能搬走别人的文件。
+  let movedFolders: OwnedFolder[]
+  let movedFiles: OwnedFile[]
+  try {
+    movedFolders = await folderService.findAccessibleMany(authId, folderIds, PERM_WRITE)
+    movedFiles = await fileService.findAccessibleMany(authId, fileIds, PERM_WRITE)
+  } catch (e: any) {
+    return { success: false, message: e?.statusMessage || e?.message || '无权限移动所选内容' }
+  }
+
+  // 目标目录同样要 write。根层（null）不校验 —— 它属于自己的根
+  let destOwnerId: number | null = null
   if (targetFolderId !== null) {
-    if (!(await folderService.findOwnedById(userId, targetFolderId))) {
-      return { success: false, message: '目标文件夹不存在或无权限' }
+    try {
+      const dest = await folderService.findAccessibleById(authId, targetFolderId, PERM_WRITE)
+      destOwnerId = dest.userId
+    } catch (e: any) {
+      return { success: false, message: e?.statusMessage || '目标文件夹不存在或无权限' }
     }
   }
 
-  // 拉取待移动文件夹/文件（基本信息）
-  const movedFolders = await folderService.findOwnedMany(userId, folderIds)
-
-  if (movedFolders.length !== folderIds.length) {
-    return { success: false, message: '部分文件夹不存在或无权限' }
+  /**
+   * 树属主：下面所有 owner-scoped SQL 都要用它，不是 authId。
+   *
+   * 触发器 trg_folders_user_matches_parent_* / trg_files_user_matches_folder_*
+   * 要求同一棵子树里 user_id 一致，跨树搬移本来就不可能，所以取任一项的属主即可；
+   * 但为防呆这里显式校验：来源和目的地必须属于同一棵树。
+   */
+  const owners = new Set<number>([
+    ...movedFolders.map((f) => f.userId),
+    ...movedFiles.map((f) => f.userId)
+  ])
+  if (destOwnerId !== null) owners.add(destOwnerId)
+  if (owners.size > 1) {
+    return { success: false, message: '不能跨用户移动内容' }
   }
-
-  const movedFiles = await fileService.findOwnedMany(userId, fileIds)
-
-  if (movedFiles.length !== fileIds.length) {
-    return { success: false, message: '部分文件不存在或无权限' }
-  }
+  const userId = owners.size === 1 ? [...owners][0]! : authId
 
   // 工具：取父级 id（带 user_id，跨用户目录会直接取不到）
   const getParentId = (fid: number): Promise<number | null> => folderService.getParentId(userId, fid)

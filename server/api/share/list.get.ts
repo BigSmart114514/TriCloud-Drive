@@ -7,8 +7,10 @@ import { isShareBoundary, PERMISSION_LABELS, SHARE_MODE_LABELS } from '~~/types/
 
 export default defineEventHandler(async (event) => {
   try {
-    const { targetUserId } = await getMeAndTarget(event)
-    const ownerId = Number(targetUserId)
+    const { authUserId } = await getMeAndTarget(event)
+    // 属主只能是「我」：分享设置是私有数据。
+    // useAdmin 时 authUserId 才是 targetUserId，管理员代看行为与原版一致。
+    const ownerId = Number(authUserId)
     const db = getDb(event)
     if (!db) throw dbConnectionError
 

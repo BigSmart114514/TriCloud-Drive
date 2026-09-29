@@ -4,6 +4,7 @@ import { getDb } from '~~/server/utils/db-adapter'
 import { FolderService } from '~~/server/utils/db'
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { normalizeFolderName } from '~~/server/utils/folders'
+import { PERM_WRITE } from '~~/types/share'
 
 function isUniqueError(err: any) {
   return (
@@ -15,8 +16,8 @@ function isUniqueError(err: any) {
 }
 
 export default defineEventHandler(async (event) => {
-  const { targetUserId } = await getMeAndTarget(event)
-  const userId = Number(targetUserId)
+  const { authUserId } = await getMeAndTarget(event)
+  const userId = Number(authUserId)
   const db = getDb(event)
 
   const body = await readBody<{ folderId: number; newName: string }>(event)
@@ -35,12 +36,15 @@ export default defineEventHandler(async (event) => {
 
   const folderService = new FolderService(db)
 
-  // 归属校验，不存在与不属于本人统一 404
-  await folderService.assertOwned(userId, folderId)
+  // 需要 write 权限：属主放行，被授权人凭分享权限也能改名。
+  // 原来只有 assertOwned(userId)（要求 userId 本人拥有），
+  // 普通用户传 targetUserId=<属主> 就能改别人目录名。
+  // 返回的 row 带真实属主，写入仍按属主限定。
+  const target = await folderService.findAccessibleById(userId, folderId, PERM_WRITE)
 
   try {
     // 即使 changes=0（同名或无变化）也当成功返回
-    await folderService.updateName(userId, folderId, newName)
+    await folderService.updateName(target.userId, folderId, newName)
     return { success: true }
   } catch (err: any) {
     if (isUniqueError(err)) {

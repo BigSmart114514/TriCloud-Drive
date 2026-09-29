@@ -1,7 +1,8 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import crypto from 'crypto'
-import { UserService, FileService } from '~~/server/utils/db'
+import { UserService, FileService, FolderService } from '~~/server/utils/db'
+import { PERM_WRITE } from '~~/types/share'
 
 export default defineEventHandler(async (event) => {
   // 处理 CORS 预检
@@ -62,7 +63,8 @@ export default defineEventHandler(async (event) => {
   }
 
   try {
-    const { targetUserId } = await getMeAndTarget(event)
+    const { authUserId } = await getMeAndTarget(event)
+    const authId = Number(authUserId)
     const config = useRuntimeConfig()
     const db = getDb(event)
     
@@ -72,6 +74,7 @@ export default defineEventHandler(async (event) => {
     }
     const userService = new UserService(db)
     const fileService = new FileService(db)
+    const folderService = new FolderService(db)
 
     const body = await readBody(event)
     const { filename, fileSize, overwrite, skipIfExist } = body
@@ -92,7 +95,23 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 400, statusMessage: 'fileSize 参数无效' })
     }
 
-    const user = await userService.getUserById(Number(targetUserId))
+    /**
+     * 目标目录必须对我有 write。
+     *
+     * 这一段是补的：原来这里只 `getUserById(targetUserId)` 查了**目标用户**的
+     * 账号状态就直接发 STS 临时凭证，完全没问「我有没有权限往那儿传」。
+     * 任何登录用户传 targetUserId=<属主> 就能拿到对方的腾讯云临时凭证，
+     * 往对方桶里写文件。
+     *
+     * 凭证归属与配额按属主：文件落在谁的树里就用谁的 bucket 路径、占谁的容量。
+     */
+    let userId = authId
+    if (folderId !== null) {
+      const dest = await folderService.findAccessibleById(authId, folderId, PERM_WRITE)
+      userId = dest.userId
+    }
+
+    const user = await userService.getUserById(userId)
     if (!user)
     {
       throw createError({ statusCode: 404, statusMessage: '用户不存在或已被删除' })

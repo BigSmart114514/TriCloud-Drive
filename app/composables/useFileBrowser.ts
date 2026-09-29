@@ -1,8 +1,19 @@
 import { FilesService } from '~/services/files.service'
 import type { FolderRecord, FileRecord } from '~/types/files'
 
-export function useFileBrowser(options?: { targetUserId?: Ref<number | null | undefined> }) {
+export function useFileBrowser(options?: {
+  targetUserId?: Ref<number | null | undefined>
+  /** 非激活时跳过取数。FileBrowser 同时挂载两个数据源，靠它避免多余请求 */
+  enabled?: Ref<boolean>
+  /**
+   * 是否以管理权限浏览。仅 /manage/files 传 true（管理员看别人）。
+   * 首页侧栏选人浏览**不传** —— 那是分享权限视角，管理员在首页拿不到提权。
+   */
+  useAdmin?: Ref<boolean>
+}) {
   const tRef = options?.targetUserId
+  const enabled = options?.enabled ?? ref(true)
+  const useAdmin = options?.useAdmin ?? ref(false)
 
   const folders = ref<FolderRecord[]>([])
   const files = ref<FileRecord[]>([])
@@ -19,10 +30,15 @@ export function useFileBrowser(options?: { targetUserId?: Ref<number | null | un
   const error = ref('')
 
   const fetchFiles = async () => {
+    if (!enabled.value) return
     try {
       loading.value = true
       error.value = ''
-      const res = await FilesService.list(currentFolderId.value, tRef?.value ?? null)
+      const res = await FilesService.list(
+        currentFolderId.value,
+        tRef?.value ?? null,
+        useAdmin.value || undefined
+      )
       if (res.success) {
         folders.value = res.folders || []
         files.value = res.files || []
@@ -61,7 +77,7 @@ export function useFileBrowser(options?: { targetUserId?: Ref<number | null | un
   onMounted(fetchFiles)
 
   // 切换 targetUserId 时重置浏览状态
-  watch(tRef, () => {
+  watch([tRef, enabled], () => {
     folders.value = []
     files.value = []
     currentFolderId.value = null

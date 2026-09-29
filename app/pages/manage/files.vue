@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useAuth } from '~/composables/useAuth'
-import CloudFileBrowser from '~/components/CloudFileBrowser.vue'
+import FileBrowser from '~/components/FileBrowser.vue'
 import ManageUserList, { type UserSummary } from '~/components/ManageUserList.vue'
 import { FolderOpenIcon, Bars3Icon, HomeIcon, ShieldExclamationIcon } from '@heroicons/vue/24/outline'
 
@@ -143,11 +143,12 @@ await fetchUsers()
             </p>
           </div>
 
-          <CloudFileBrowser
+          <FileBrowser
             v-else
             :key="selectedUser.id"
             fill
             :target-user-id="selectedUser.id"
+            :use-admin="true"
             :title="`用户：${selectedUser.username || selectedUser.email}（ID: ${selectedUser.id}）`"
           />
         </div>

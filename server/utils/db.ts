@@ -138,22 +138,6 @@ export interface ManifestFile {
   relDir: string
 }
 
-/** 被标记为分享的文件夹；relDir 是它**所在**的目录，根层为空串 */
-export interface SharedFolder {
-  id: number
-  name: string
-  parentId: number | null
-  createdAt: string | null
-  Shared: ShareMode
-  IsPublic: boolean
-  relDir: string
-}
-
-/** 被标记为分享的文件；relDir 是它所在目录的路径，根层为空串 */
-export interface SharedFile extends OwnedFile {
-  relDir: string
-}
-
 /**
  * 某个节点对某个用户的有效权限。
  * mode 为该节点的共享三态（0 不分享 / 1 分享 / 2 继承）。
@@ -290,6 +274,40 @@ export class FolderService {
     const folder = await this.findOwnedById(userId, folderId)
     if (!folder) throw folderNotFindError
     return folder
+  }
+
+  /**
+   * 定位目录并校验权限，**不要求是属主** —— 与 FileService 的同名方法对称。
+   * 属主放行；否则按 resolveAccess 判分享权限。
+   *
+   * 错误口径与文件一致：完全无权 → 404（与不存在相同，避免探测）；
+   * 有权但权限不够 → 403。
+   *
+   * 传 authUserId（getMeAndTarget 给的）进来：
+   *   useAdmin=true  → authUserId 是属主，走第一行「属主放行」，退化成纯归属判定
+   *   useAdmin=false → authUserId 是行动者，走 resolveAccess，即分享权限
+   */
+  async findAccessibleById(userId: number, folderId: number, need: number): Promise<OwnedFolder> {
+    const owned = await this.findOwnedById(userId, folderId)
+    if (owned) return owned
+    const access = await this.resolveAccess(userId, folderId)
+    if (access.mask === 0) throw folderNotFindError
+    if (!hasPermission(access.mask, need)) {
+      throw createError({ statusCode: 403, statusMessage: '该文件夹的权限不足' })
+    }
+    // 属主信息从库里反查：这里返回的 row 一定属于别人
+    return (await this.findOwnedById((await this.getOwnerId(folderId))!, folderId))!
+  }
+
+  /**
+   * 批量版，逐个过 findAccessibleById。少一个就整体 404/403 —— 不做部分成功，
+   * 否则移动/复制会出现「搬了一半」的中间态。
+   */
+  async findAccessibleMany(userId: number, folderIds: number[], need: number): Promise<OwnedFolder[]> {
+    const ids = uniqPositiveInts(folderIds)
+    const out: OwnedFolder[] = []
+    for (const id of ids) out.push(await this.findAccessibleById(userId, id, need))
+    return out
   }
 
   async findOwnedMany(userId: number, folderIds: number[]): Promise<OwnedFolder[]> {
@@ -601,6 +619,16 @@ export class FileService {
     return this.ensureAccess(userId, file!, need)
   }
 
+  /**
+   * 批量版，逐个过 findAccessibleById。少一个就整体 404/403，不做部分成功。
+   */
+  async findAccessibleMany(userId: number, fileIds: number[], need: number): Promise<OwnedFile[]> {
+    const ids = uniqPositiveInts(fileIds)
+    const out: OwnedFile[] = []
+    for (const id of ids) out.push(await this.findAccessibleById(userId, id, need))
+    return out
+  }
+
   private async ensureAccess(userId: number, file: OwnedFile, need: number): Promise<OwnedFile> {
     if (file.userId === userId) return file
     const resolved = await this.resolveAccessForFile(userId, file)
@@ -625,83 +653,60 @@ export class FileService {
   }
 
   /**
-   * 列出某属主**行自身带共享标记**的文件夹与文件，不限深度。
+   * 平铺列出「分享给我的」全部条目，跨属主。
    *
-   * 判定只看行自己的两个字段：`Shared = 1`（分享）或 `IsPublic = 1`（公开）。
-   * 继承态（`Shared = 2`）本身不命中 —— 它只是「继续向上找」的标记。
-   * 所以「某个被分享文件夹下的子目录」只要自己也被显式标记过，就会出现在
-   * 结果里；没被标记的纯继承子项不会出现，这与「明确分享出去的」语义一致。
+   * 两步：
+   *  1. SQL 取候选 —— 明确授权给我的（folder_access / file_access 里有我的行），
+   *     加上公开的（IsPublic = 1）。这一步只是粗筛。
+   *  2. 逐个过 resolveAccess / resolveAccessForFile 过滤出真正读得到的。
    *
-   * 路径在内存里拼，而不是用递归 CTE 上溯：先一次取回该用户全部文件夹建
-   * 索引，再让每个命中项沿 parent_id 走到根层。这样命中项再多也只有 3 次
-   * 查询，且天然处理 folder_id 为 NULL（根层）的情况。walks 用 seen 兜底，
-   * 防止库里被手工改出环时死循环。
+   * 第 2 步不能省：IsPublic 只对**该节点自身**生效。如果它躺在一个
+   * Shared = 0（不分享，拒绝型边界）的祖先下面，向上查找会停在那个边界上直接
+   * 拒绝 —— 此时它虽然标着公开，我其实打不开。只做第 1 步会把死链列出来。
+   *
+   * 候选集只含「被明确分享或公开」的项，量级小，N+1 的向上递归可以接受。
    */
-  async listSharedByOwner(ownerId: number): Promise<{ folders: SharedFolder[]; files: SharedFile[] }> {
-    const all = await this.db
-      .prepare('SELECT id, name, parent_id FROM folders WHERE user_id = ?')
-      .bind(ownerId)
-      .all()
-    const index = new Map<number, { name: string; parentId: number | null }>()
-    for (const row of all?.results || []) {
-      const parentId = row.parent_id === null || row.parent_id === undefined ? null : Number(row.parentId)
-      index.set(Number(row.id), { name: String(row.name), parentId })
-    }
-
-    const relDirOf = (startId: number | null): string => {
-      if (startId === null) return ''
-      const parts: string[] = []
-      const seen = new Set<number>()
-      let cursor: number | null = startId
-      while (cursor !== null && index.has(cursor) && !seen.has(cursor)) {
-        seen.add(cursor)
-        const node: { name: string; parentId: number | null } = index.get(cursor)!
-        parts.push(node.name)
-        cursor = node.parentId
-      }
-      return parts.reverse().join('/')
-    }
-
-    // 顺序执行而不是 Promise.all：同一个 sqlite3 handle 上并发跑语句时，
-    // 本机的 node-sqlite3 原生绑定崩过（Work_AfterPrepare 抛 napi 异常，
-    // 整个 dev 进程 FATAL）。串行只多一点延迟，稳妥。
+  async listSharedWithMe(
+    userId: number,
+    ownerId?: number
+  ): Promise<{ folders: OwnedFolder[]; files: OwnedFile[] }> {
+    // ownerId 限定属主：侧栏选中某人时只列那人的共享内容。
+    // 注意它只是**范围收窄**，不构成授权 —— 下面每行仍要过 resolveAccess。
+    const ownerSql = ownerId !== undefined ? ' AND user_id = ?' : ''
     const folderRows = await this.db
       .prepare(`
-        SELECT id, name, parent_id AS parentId, created_at AS createdAt, Shared, IsPublic
-        FROM folders
-        WHERE user_id = ? AND (Shared = 1 OR IsPublic = 1)
+        SELECT * FROM folders
+        WHERE (IsPublic = 1
+           OR EXISTS (SELECT 1 FROM folder_access fa WHERE fa.folder_id = folders.id AND fa.user_id = ?))${ownerSql}
         ORDER BY name COLLATE NOCASE ASC
       `)
-      .bind(ownerId)
+      .bind(...(ownerId !== undefined ? [userId, ownerId] : [userId]))
       .all()
 
     const fileRows = await this.db
       .prepare(`
         SELECT * FROM files
-        WHERE user_id = ? AND (Shared = 1 OR IsPublic = 1)
+        WHERE (IsPublic = 1
+           OR EXISTS (SELECT 1 FROM file_access ga WHERE ga.file_id = files.id AND ga.user_id = ?))${ownerSql}
         ORDER BY created_at DESC
       `)
-      .bind(ownerId)
+      .bind(...(ownerId !== undefined ? [userId, ownerId] : [userId]))
       .all()
 
-    const folders: SharedFolder[] = (folderRows?.results || []).map((row: any) => ({
-      id: Number(row.id),
-      name: String(row.name),
-      parentId: row.parentId === null || row.parentId === undefined ? null : Number(row.parentId),
-      createdAt: row.createdAt ?? null,
-      Shared: normalizeShareMode(row.Shared),
-      IsPublic: toBool(row.IsPublic),
-      relDir: relDirOf(row.parentId === null || row.parentId === undefined ? null : Number(row.parentId))
-    }))
+    const folders: OwnedFolder[] = []
+    for (const row of folderRows?.results || []) {
+      const access = await this.folders.resolveAccess(userId, Number(row.id))
+      if (hasPermission(access.mask, PERM_READ)) folders.push(toOwnedFolder(row))
+    }
 
-    const files = (await this.attachAccess(
-      (fileRows?.results || []).map((row: any) => {
-        const owned = this.toOwned(row)
-        return { ...owned, relDir: relDirOf(owned.folderId) }
-      })
-    )) as SharedFile[]
+    const files = await this.attachAccess((fileRows?.results || []).map((row: any) => this.toOwned(row)))
+    const visible: OwnedFile[] = []
+    for (const f of files) {
+      const access = await this.resolveAccessForFile(userId, f)
+      if (hasPermission(access.mask, PERM_READ)) visible.push(f)
+    }
 
-    return { folders, files }
+    return { folders, files: visible }
   }
 
   /** 该文件被直接授权给哪些人（不含从父文件夹继承的） */

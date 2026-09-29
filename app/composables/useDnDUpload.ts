@@ -104,7 +104,7 @@ export function useDnDUpload(
     if (!paths.length) return {} as Record<string, number | null>
     try {
       const body: any = { parentId, paths }
-      if (tRef?.value) body.targetUserId = tRef.value
+        if (tRef?.value) { body.targetUserId = tRef.value; body.useAdmin = 1 }
       const res = await $fetch<{ success: boolean; map: Record<string, number> }>('/api/folders/ensure-paths', {
         method: 'POST',
         body

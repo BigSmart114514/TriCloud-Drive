@@ -1,10 +1,12 @@
 <!-- pages/index.vue -->
 <template>
   <!--
-    管理员：整页铺满（h-[100dvh] + SidePanelLayout），左栏顶格、与 /manage/files 一致。
-    顶部那排切换按钮挪进 toolbar，主区因此能占满整列宽度。
+    已登录：整页铺满 + 左侧用户栏。
+    侧栏是普通功能，数据源 /api/share/people（不是 /api/manage）：只列
+    「对我分享的」+「有公开分享的」，管理员和普通用户拿到同一份数据。
+    选中某人后不传 useAdmin —— 那是分享权限视角，管理员在首页拿不到提权。
   -->
-  <div v-if="isLoggedIn && isAdmin" class="flex h-[100dvh] flex-col overflow-hidden bg-gray-50">
+  <div v-if="isLoggedIn" class="flex h-[100dvh] flex-col overflow-hidden bg-gray-50">
     <AppNavbar fluid>
       <template #extra>
         <NuxtLink
@@ -20,16 +22,16 @@
     </AppNavbar>
 
     <div class="flex min-h-0 flex-1">
-      <SidePanelLayout v-model:open="drawerOpen" aria-label="用户列表">
+      <SidePanelLayout v-model:open="drawerOpen" aria-label="分享给我的人">
         <template #sidebar>
           <ManageUserList
             v-model="userSearch"
-            :users="users"
-            :selected-id="selectedUserId"
-            :loading="loadingUsers"
-            @select="onSelectUserSummary"
-            @search="fetchUsers"
-            @refresh="fetchUsers"
+            :users="[selfEntry, ...people] as any"
+            :selected-id="selectedUserId ?? myId"
+            :loading="loadingPeople"
+            @select="onSelectPerson"
+            @search="loadPeople"
+            @refresh="loadPeople"
           />
         </template>
 
@@ -39,7 +41,7 @@
               type="button"
               class="-ml-1 rounded-md p-2 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900 lg:hidden"
               aria-label="打开用户列表"
-              title="用户列表"
+              title="分享给我的人"
               @click="drawerOpen = true"
             >
               <Bars3Icon class="h-5 w-5" />
@@ -47,23 +49,20 @@
 
             <div class="min-w-0 flex-1">
               <h1 class="truncate text-base font-semibold text-gray-900">
-                {{ selectedUser ? `${selectedUser.username || selectedUser.email} 的分享内容` : '我的文件' }}
+                {{ selected ? `${selected.username || selected.email} 的分享内容` : '我的文件' }}
               </h1>
-              <p v-if="selectedUser" class="truncate text-xs text-gray-500">
-                ID {{ selectedUser.id }} · 只列出被标记为分享或公开的项
+              <p v-if="selected" class="truncate text-xs text-gray-500">
+                {{ relationLabel(selected) }}
               </p>
             </div>
           </div>
         </template>
 
         <div class="h-full bg-white">
-          <SharedItemsBrowser
-            v-if="selectedUser"
-            :key="selectedUser.id"
-            :user-id="selectedUser.id"
-          />
-          <CloudFileBrowser
-            v-else
+          <FileBrowser
+            :key="selected ? `shared-${selected.id}` : 'own'"
+            :variant="selected ? 'shared' : 'own'"
+            :target-user-id="selected?.id ?? null"
             fill
             ref="fileListRef"
             @folder-change="onFolderChange"
@@ -106,7 +105,7 @@
       </div>
 
       <div v-else class="px-4 py-6 sm:px-0">
-        <CloudFileBrowser
+        <FileBrowser
           ref="fileListRef"
           @folder-change="onFolderChange"
         />
@@ -118,13 +117,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { KeyIcon, Bars3Icon } from '@heroicons/vue/24/outline'
-import CloudFileBrowser from '~/components/CloudFileBrowser.vue'
+import FileBrowser from '~/components/FileBrowser.vue'
 import SidePanelLayout from '~/components/SidePanelLayout.vue'
-import SharedItemsBrowser from '~/components/SharedItemsBrowser.vue'
-import ManageUserList, { type UserSummary } from '~/components/ManageUserList.vue'
+import ManageUserList from '~/components/ManageUserList.vue'
 import { useAuth } from '~/composables/useAuth'
 
-const { user, isLoggedIn, fetchUser } = useAuth()
+const { user, isLoggedIn } = useAuth()
 const fileListRef = ref()
 const currentFolderId = ref<number | null>(null)
 
@@ -132,71 +130,89 @@ const onFolderChange = (id: number | null) => {
   currentFolderId.value = id
 }
 
-const isAdmin = computed(() => {
-  const u = user.value as any
-  return !!(u && (u.IsSuperAdmin || u.IsAdmin || u.isSuperAdmin || u.isAdmin))
-})
+type Person = {
+  id: number
+  username?: string | null
+  email?: string | null
+  self?: boolean
+  relation?: 'granted' | 'public' | 'both' | null
+  maxPermission?: number
+}
 
-// 侧栏与共享清单只对管理员开放；非管理员走下面的普通分支
-const users = ref<UserSummary[]>([])
-const loadingUsers = ref(false)
+/**
+ * 侧栏 = 「有内容是我能看的」的人，数据源 /api/share/people。
+ * 普通功能：不判断 isAdmin，管理员和普通用户拿到同一份数据；
+ * 选中某人后 FileBrowser 也不传 useAdmin，服务端按分享权限判。
+ */
+const people = ref<Person[]>([])
+const loadingPeople = ref(false)
 const userSearch = ref('')
+/** null = 我的文件 */
 const selectedUserId = ref<number | null>(null)
 const drawerOpen = ref(false)
 
-const selectedUser = computed(
-  () => users.value.find((u) => u.id === selectedUserId.value) || null
-)
-
-// 自己没有「分享给我的人」这层含义：点自己等于回到我的文件
+const selected = computed(() => people.value.find((p) => p.id === selectedUserId.value) || null)
 const myId = computed(() => {
   const u = user.value as any
   return u ? Number(u.id) : null
 })
+// 侧栏首行固定是「我的文件」。接口已排除自己，这里再显式排一个，
+// 语义比「在列表里找自己」清楚。
+const selfEntry = computed<Person>(() => ({
+  id: myId.value ?? 0,
+  username: (user.value as any)?.username ?? null,
+  email: (user.value as any)?.email ?? null,
+  self: true
+}))
 
-async function fetchUsers() {
-  if (!isAdmin.value) return
+function relationLabel(p: Person) {
+  if (p.relation === 'granted') return '授权给我'
+  if (p.relation === 'public') return '公开'
+  if (p.relation === 'both') return '授权 + 公开'
+  return ''
+}
+
+async function loadPeople() {
   try {
-    loadingUsers.value = true
+    loadingPeople.value = true
     const headers = process.server ? useRequestHeaders(['cookie']) : undefined
-    const res = await $fetch<{ users: UserSummary[]; totalCount: number }>(
-      '/api/manage/listUsers',
-      {
-        params: userSearch.value ? { username: userSearch.value } : undefined,
-        headers,
-        credentials: 'include'
-      }
-    )
-    users.value = res.users ?? []
+    const res = await $fetch<{ people: Person[] }>('/api/share/people', {
+      headers,
+      credentials: 'include'
+    })
+    const q = userSearch.value.trim().toLowerCase()
+    const list = res.people ?? []
+    people.value = q
+      ? list.filter(
+          (p) =>
+            (p.username || '').toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q)
+        )
+      : list
   } catch {
-    users.value = []
+    people.value = []
   } finally {
-    loadingUsers.value = false
+    loadingPeople.value = false
   }
 }
 
-function onSelectUserSummary(u: UserSummary) {
-  selectUser(Number(u.id) === myId.value ? null : u.id)
+// 点自己（首行）等于回到我的文件
+function onSelectPerson(p: { id: number }) {
+  selectedUserId.value = Number(p.id) === myId.value ? null : Number(p.id)
   drawerOpen.value = false
 }
 
-function selectUser(id: number | null) {
-  selectedUserId.value = id
-}
-
-watch(isAdmin, (admin) => {
-  if (admin) fetchUsers()
+watch(isLoggedIn, (ok) => {
+  if (ok) loadPeople()
   else {
-    users.value = []
+    people.value = []
     selectedUserId.value = null
   }
 }, { immediate: true })
 
 let timer: ReturnType<typeof setTimeout> | undefined
 watch(userSearch, () => {
-  if (!isAdmin.value) return
   clearTimeout(timer)
-  timer = setTimeout(fetchUsers, 250)
+  timer = setTimeout(loadPeople, 250)
 })
 onBeforeUnmount(() => clearTimeout(timer))
 

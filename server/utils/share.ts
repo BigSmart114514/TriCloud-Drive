@@ -91,15 +91,46 @@ function targetColumn(target: ShareTarget) {
  * 早期版本在这里自动把 Shared 置 1，结果属主只是想定向加一个人，
  * 却把这个节点变成了边界，把上层已共享的其他人全挡在门外。
  */
-export async function grantAccess(
+/**
+ * 整体覆盖授权名单。
+ *
+ * 取代原来的 grant / revoke 两个接口：接口只暴露「这份名单应该长这样」，
+ * 由本函数算出增删改。前端改一个人的权限、或把人移出，都只是改一份数组后重发，
+ * 不用分别调「加」和「删」。
+ *
+ * 事务外逐步执行：同库里 delete-then-insert 有先后依赖，不能并发。
+ */
+export async function replaceAccess(
   db: Database,
   target: ShareTarget,
-  userIds: number[],
-  permission: number
-): Promise<number> {
+  entries: Array<{ userId: number; permission: number }>
+): Promise<void> {
   const table = accessTable(target)
   const column = targetColumn(target)
-  for (const userId of userIds) {
+
+  // 同一人只保留一条，取最后一次出现的（后端不依赖前端去重）
+  const wanted = new Map<number, number>()
+  for (const e of entries) wanted.set(e.userId, e.permission)
+
+  const current = await db
+    .prepare(`SELECT user_id AS userId, permission FROM ${table} WHERE ${column} = ?`)
+    .bind(target.id)
+    .all()
+  const have = new Map<number, number>()
+  for (const row of current?.results || []) have.set(Number(row.userId), Number(row.permission))
+
+  // 名单里没有的 → 删
+  for (const userId of have.keys()) {
+    if (wanted.has(userId)) continue
+    await db
+      .prepare(`DELETE FROM ${table} WHERE ${column} = ? AND user_id = ?`)
+      .bind(target.id, userId)
+      .run()
+  }
+
+  // 名单里有的 → 变了就改，没变就跳过
+  for (const [userId, permission] of wanted) {
+    if (have.get(userId) === permission) continue
     const updated = await db
       .prepare(`UPDATE ${table} SET permission = ? WHERE ${column} = ? AND user_id = ?`)
       .bind(permission, target.id, userId)
@@ -112,26 +143,6 @@ export async function grantAccess(
         .run()
     }
   }
-  return userIds.length
-}
-
-/** 取消授权 */
-export async function revokeAccess(
-  db: Database,
-  target: ShareTarget,
-  userIds: number[]
-): Promise<number> {
-  const table = accessTable(target)
-  const column = targetColumn(target)
-  let removed = 0
-  for (const userId of userIds) {
-    const res = await db
-      .prepare(`DELETE FROM ${table} WHERE ${column} = ? AND user_id = ?`)
-      .bind(target.id, userId)
-      .run()
-    removed += Number((res?.meta?.changes ?? 0) ?? (res as any)?.meta?.changes ?? 0)
-  }
-  return removed
 }
 
 /** 设置共享三态。不分享时顺带清掉公开标记，避免「严格私密却对外可读」的自相矛盾。 */

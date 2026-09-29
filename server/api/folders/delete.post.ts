@@ -3,11 +3,13 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
 import { dbConnectionError } from '~~/types/error'
+import { PERM_DELETE } from '~~/types/share'
 
 export default defineEventHandler(async (event) => {
   try {
-    const { targetUserId } = await getMeAndTarget(event)
-    const userId = Number(targetUserId)
+    // 鉴权身份判权限
+    const { authUserId } = await getMeAndTarget(event)
+    const authId = Number(authUserId)
     const db = getDb(event)
     if (!db) throw dbConnectionError
 
@@ -20,8 +22,11 @@ export default defineEventHandler(async (event) => {
     const folderService = new FolderService(db)
     const fileService = new FileService(db)
 
-    // 归属校验
-    await folderService.assertOwned(userId, id)
+    // 需要 delete 权限（属主放行 / 被授权人凭权限）。
+    // 原来只有 assertOwned(userId)，只读授权者也能删别人（经 targetUserId）的目录。
+    // 下面所有 owner-scoped SQL 都要用真实属主，不是 authId。
+    const target = await folderService.findAccessibleById(authId, id, PERM_DELETE)
+    const userId = target.userId
 
     // 递归收集所有后代文件夹ID（含自身，每一跳都带 user_id）
     const ids = await folderService.listDescendantIds(userId, id)
