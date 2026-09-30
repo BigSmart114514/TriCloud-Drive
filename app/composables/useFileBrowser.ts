@@ -1,4 +1,5 @@
 import { FilesService } from '~/services/files.service'
+import { toMessage } from '~/utils/notify'
 import type { FolderRecord, FileRecord } from '~/types/files'
 
 export function useFileBrowser(options?: {
@@ -60,7 +61,7 @@ export function useFileBrowser(options?: {
       error.value =
         e?.statusCode === 401 || e?.status === 401
           ? '登录已失效，请重新登录'
-          : e?.data?.statusMessage || e?.statusMessage || '加载文件列表失败'
+          : toMessage(e, '加载文件列表失败')
     } finally {
       loading.value = false
     }

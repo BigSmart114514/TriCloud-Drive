@@ -8,7 +8,7 @@ import { dbConnectionError } from '~~/types/error'
  *
  * 两类取并集：
  *   granted —— folder_access / file_access 里明确授权给我的
- *   public  —— 有 IsPublic = 1 的公开项（对所有人可读）
+ *   public  —— 有 IsPublic = 1 的公开项（对所有已登录用户可读）
  *
  * 不含全站所有人，只含和我有关系的。排除自己（侧栏首行固定是「我的文件」，
  * 重复一行没法解释）。

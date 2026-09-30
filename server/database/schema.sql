@@ -63,7 +63,9 @@ CREATE TABLE folders (
 
   -- 共享三态：0=不分享(拒绝型边界) 1=分享(边界，名单内放行) 2=继承(非边界，继续上溯)
   -- 注意：Shared 只管「要不要切断继承」，授权名单在 folder_access 里，二者互不干涉
-  -- IsPublic 只是「给所有人 READ」的快捷写法，等价于一条 everyone 的授权
+  -- IsPublic 只是「给所有已登录用户 READ」的快捷写法，等价于一条 everyone 的授权。
+  -- 注意是**已登录**：所有 /api/**（除 login/register/logout 外）都过 requireAuth，
+  -- IsPublic 从来没有、也不会开出一个免登录的匿名入口。见 server/middleware/01.api-auth.ts
   Shared      INTEGER NOT NULL DEFAULT 2,
   IsPublic    BOOLEAN NOT NULL DEFAULT 0,
 
@@ -96,7 +98,7 @@ CREATE TABLE files (
 
   -- 共享三态：0=不分享(拒绝型边界) 1=分享(边界，名单内放行) 2=继承(非边界，继续上溯)
   -- Shared 只管要不要切断继承；本文件的直接授权在 file_access 里，与祖先授权取并集
-  -- IsPublic 等价于「给所有人(含未登录) READ」
+  -- IsPublic 等价于「对所有已登录用户 READ」。不含未登录 —— 见上面 folders 那段说明
   Shared       INTEGER NOT NULL DEFAULT 2,
   IsPublic     BOOLEAN NOT NULL DEFAULT 0,
 

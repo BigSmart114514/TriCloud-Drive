@@ -37,7 +37,7 @@ export async function resolveShareTarget(
   const table = type === 'file' ? 'files' : 'folders'
   const row = await db.prepare(`SELECT id, user_id AS userId FROM ${table} WHERE id = ?`).bind(targetId).first()
   if (!row) {
-    throw createError({ statusCode: 404, statusMessage: type === 'file' ? '文件不存在' : '文件夹不存在' })
+    throw createError({ statusCode: 404, message: type === 'file' ? '文件不存在' : '文件夹不存在' })
   }
   if (Number(row.userId) !== actingUserId) {
     throw createError({ statusCode: 403, message: '只有属主可以管理分享' })
@@ -166,7 +166,7 @@ export async function setShareMode(
   return m
 }
 
-/** 设置公开（等价于给所有人 READ），属主专属 */
+/** 设置公开（等价于给所有已登录用户 READ），属主专属 */
 export async function setPublic(
   db: Database,
   target: ShareTarget,
@@ -198,4 +198,49 @@ export async function getShareState(db: Database, target: ShareTarget) {
     mode: normalizeShareMode(row?.Shared),
     isPublic: Number(row?.IsPublic ?? 0) === 1
   }
+}
+
+/** 授权名单 + 用户信息（展示用）。user 查不到时留 null，由前端决定怎么兜底 */
+export interface GrantWithUser {
+  userId: number
+  permission: number
+  user: { username: string | null; email: string | null } | null
+}
+
+/**
+ * 读授权名单并补上用户名/邮箱。
+ *
+ * /api/share/list 和 /api/share/mode 都用这一个。以前两边各写各的：
+ * list 补了用户名、mode 没补，于是「打开弹窗 → 加人 → 保存」之后名单里的
+ * user 字段被 mode 的返回值抹掉，界面上变成「未知用户」，重开弹窗才恢复。
+ * 返回结构必须两边一致，否则就是同一个 bug 再来一遍。
+ */
+export async function listGrantsWithUsers(db: Database, target: ShareTarget): Promise<GrantWithUser[]> {
+  const table = accessTable(target)
+  const column = targetColumn(target)
+
+  const rows = await db
+    .prepare(`SELECT user_id AS userId, permission FROM ${table} WHERE ${column} = ? ORDER BY user_id ASC`)
+    .bind(target.id)
+    .all()
+
+  const grants = (rows?.results || []).map((r: any) => ({
+    userId: Number(r.userId),
+    permission: normalizePermission(r.permission)
+  }))
+  if (!grants.length) return []
+
+  const users = await db
+    .prepare(`SELECT id, username, email FROM users WHERE id IN (${placeholders(grants.length)})`)
+    .bind(...grants.map((g) => g.userId))
+    .all()
+
+  const userMap = new Map(
+    (users?.results || []).map((u: any) => [
+      Number(u.id),
+      { username: u.username ?? null, email: u.email ?? null }
+    ])
+  )
+
+  return grants.map((g) => ({ ...g, user: userMap.get(g.userId) ?? null }))
 }

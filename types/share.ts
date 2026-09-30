@@ -3,13 +3,67 @@
 // 「要不要在此切断向上继承」才由本字段决定。二者解耦后，
 // 给某个节点单独加一个人就不会再意外切断上层已共享的其他人。
 export const SHARE_NONE = 0        // 不分享：拒绝型边界，除属主外谁都拿不到
-export const SHARE_SHARED = 1      // 分享：名单内放行（含 IsPublic 给所有人的 READ），名单外到此为止
+export const SHARE_SHARED = 1      // 分享：名单内放行（含 IsPublic 给所有已登录用户的 READ），名单外到此为止
 export const SHARE_INHERIT = 2     // 继承：不是边界，继续向上查找；本节点名单仍然叠加生效
 
 export type ShareMode = typeof SHARE_NONE | typeof SHARE_SHARED | typeof SHARE_INHERIT
 
 /** 新建节点默认继承：在共享文件夹里新建的东西，团队立即可见 */
 export const DEFAULT_SHARE_MODE: ShareMode = SHARE_INHERIT
+
+/**
+ * 节点自身的分享标记，UI 据此在图标上加角标。
+ *
+ * 只回答「属主对这个节点做过什么设置」，不回答「谁能访问」——
+ * 后者是 resolveAccess / combineWithAncestor 的事，两回事，别混。
+ */
+export type ShareBadge = 'lock' | 'users' | 'share'
+
+export interface ShareBadgeInput {
+  /** 三态。缺失时按「没设置过」处理，不亮角标 */
+  Shared?: number | null
+  IsPublic?: boolean | null
+  /** 我授权了多少人。只在继承态下参与判定：非空说明属主显式分享过 */
+  grantCount?: number | null
+}
+
+/**
+ * 算文件夹该亮什么角标。规则（与 SHARE_MODE_LABELS 同一套语义）：
+ *
+ *   不分享       → lock    阻止优先，IsPublic/名单都不看
+ *   分享 + 公开  → users   非继承下公开优先
+ *   分享 + 未公开 → share  非继承、无公开，那就是按名单
+ *   继承 + 公开  → users
+ *   继承 + 有人  → share   名单非空 = 属主分享过
+ *   继承 + 没人  → 无角标  继承是默认值，没设置过就不提示
+ *
+ * 继承态为什么要看名单：继承本身「不表态」，默认不给任何人读（mask=0，
+ * 见 combineWithAncestor）。所以「继承了但授权了人」是值得提示的设置，
+ * 而「继承了但什么都没配」不是。
+ *
+ * `Shared` 走 normalizeShareMode 归一：字段缺失、null、''、脏值一律当「继承」，
+ * 也就是「没设置过」→ 不亮角标。直接比 `!== SHARE_INHERIT` 会把这些全判成
+ * 非继承（undefined !== 2 成立），于是没带该字段的条目全都亮起角标。
+ */
+export function resolveShareBadge(input: ShareBadgeInput): ShareBadge | null {
+  // 走 normalizeShareMode 而不是 Number(input.Shared)：后者对 null/'' 都得到 0，
+  // 而 0 正是 SHARE_NONE，字段缺失会被误判成「不分享」亮出锁图标。
+  // normalizeShareMode 把 null/undefined/''/非 0-1-2 的一律当继承（fail-closed）。
+  const mode = normalizeShareMode(input.Shared)
+
+  if (mode === SHARE_NONE) return 'lock'
+  if (input.IsPublic === true) return 'users'
+  if (mode === SHARE_SHARED) return 'share'
+  // 继承（含字段缺失）：只有名单非空才算「共享中」
+  return Number(input.grantCount ?? 0) > 0 ? 'share' : null
+}
+
+/** 角标的悬浮说明。与 resolveShareBadge 的判定同源，避免文案和实际逻辑脱节 */
+export const SHARE_BADGE_LABELS: Record<ShareBadge, string> = {
+  lock: '不分享（已阻止继承）',
+  users: '公开（所有登录用户可读）',
+  share: '已分享（按授权名单）'
+}
 
 export const SHARE_MODE_LABELS: Record<number, string> = {
   [SHARE_NONE]: '不分享',
@@ -26,6 +80,10 @@ export function normalizeShareMode(value: any): ShareMode {
   // 只有真实的 0/1/2 映射到自身；null / undefined / '' / NaN / 其它一律当「继承」。
   // 先挡掉这几个，否则 Number(null) 和 Number('') 都会变成 0 被误判成「不分享」。
   if (value === null || value === undefined || value === '') return SHARE_INHERIT
+  // 对象/数组/布尔同样要挡：Number([]) 和 Number([0]) 都等于 0（0 是 SHARE_NONE），
+  // Number(true) 等于 1（1 是 SHARE_SHARED）。不挡的话一个 [] 传进来就会凭空
+  // 立一道「不分享」的墙把权限砍掉，一个 true 会凭空把权限放开。
+  if (typeof value === 'object' || typeof value === 'boolean') return SHARE_INHERIT
   const n = Number(value)
   if (n === SHARE_NONE || n === SHARE_SHARED || n === SHARE_INHERIT) return n
   // 取不到值时一律按「继承」处理，而不是「分享」。

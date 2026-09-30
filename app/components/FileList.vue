@@ -26,10 +26,24 @@
             @click.stop
             :title="`选择文件夹：${folder.name}`"
           />
-          <div class="shrink-0 cursor-pointer" @click="emit('navigate-folder', folder)">
+          <div class="shrink-0 cursor-pointer relative" @click="emit('navigate-folder', folder)">
             <svg class="h-8 w-8 text-yellow-500" fill="currentColor" viewBox="0 0 20 20">
               <path d="M2 6a2 2 0 012-2h3l2 2h7a2 2 0 012 2v6a2 2 0 01-2 2H4a2 2 0 01-2-2V6z" />
             </svg>
+            <!--
+              分享角标：白底圆角小块是必要的 —— Heroicons 是描边风格，
+              直接叠在黄色实心文件夹上会糊成一团，看不出是什么图标。
+            -->
+            <span
+              v-if="showShareBadge && folderBadges.get(folder.id)"
+              class="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded bg-white shadow-sm ring-1 ring-gray-200"
+              :title="folderBadgeTitle(folderBadges.get(folder.id)!)"
+              :aria-label="folderBadgeTitle(folderBadges.get(folder.id)!)"
+            >
+              <LockClosedIcon v-if="folderBadges.get(folder.id) === 'lock'" class="h-3 w-3 text-red-500" />
+              <UsersIcon v-else-if="folderBadges.get(folder.id) === 'users'" class="h-3 w-3 text-emerald-500" />
+              <ShareIcon v-else class="h-3 w-3 text-blue-500" />
+            </span>
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="emit('navigate-folder', folder)">
             <p class="text-sm sm:text-base font-medium text-gray-900 truncate">{{ folder.name }}</p>
@@ -311,15 +325,19 @@ import { formatFileSize } from '~/utils/format'
 import { formatDateTime } from '~/utils/time'
 import FileIcon from '~/components/FileIcon.vue'
 import type { FileListFile, FileListFolder, FileListId } from '~~/types/file-list'
+import { resolveShareBadge, SHARE_BADGE_LABELS } from '~~/types/share'
+import type { ShareBadge } from '~~/types/share'
 import {
   ArrowDownTrayIcon,
   DocumentDuplicateIcon,
   EllipsisVerticalIcon,
   EyeIcon,
+  LockClosedIcon,
   PencilSquareIcon,
   ScissorsIcon,
   ShareIcon,
-  TrashIcon
+  TrashIcon,
+  UsersIcon
 } from '@heroicons/vue/24/outline'
 
 const props = withDefaults(defineProps<{
@@ -344,6 +362,11 @@ const props = withDefaults(defineProps<{
    *   none    —— 不给这个按钮（默认；ZipPreview 等调用方不传）
    */
   shareAction?: (item: FileListFile | FileListFolder) => 'manage' | 'inspect' | 'none'
+  /**
+   * 是否在文件夹图标上显示分享角标（不分享 / 公开 / 已分享）。
+   * 只有「我的文件」该显示 —— 共享清单里那些是别人的目录，属主设的角标会误导。
+   */
+  showShareBadge?: boolean
   emptyTitle?: string
   emptyDescription?: string
 }>(), {
@@ -358,6 +381,7 @@ const props = withDefaults(defineProps<{
   selectedFileIds: undefined,
   showClip: true,
   shareAction: () => 'none',
+  showShareBadge: false,
   emptyTitle: '这里空空如也',
   emptyDescription: '当前目录没有可显示的内容。'
 })
@@ -397,7 +421,7 @@ const SOURCE_LABELS: Record<string, string> = {
   owner: '我是属主',
   self: '直接授权给我',
   inherited: '继承自上级目录',
-  public: '该内容公开',
+  public: '该内容对所有登录用户公开',
   none: '无访问权'
 }
 
@@ -416,6 +440,22 @@ const permLabel = (mask: number) => (mask === 0 ? '无权限' : PERM_LABELS.map(
   return mask & bit ? p.label : ''
 }).filter(Boolean).join(' / '))
 const sourceLabel = (src: string) => SOURCE_LABELS[src] ?? '未知'
+
+/**
+ * 文件夹图标上的分享角标。只在「我的文件」视角下有意义（共享清单里那些是
+ * 别人的目录，角标会误导），所以由父级用 v-if 控是否传入。
+ * 判定规则见 types/share.ts 的 resolveShareBadge。
+ */
+const folderBadge = (folder: FileListFolder): ShareBadge | null =>
+  resolveShareBadge({ Shared: folder.Shared, IsPublic: folder.IsPublic, grantCount: folder.grantCount })
+const folderBadgeTitle = (badge: ShareBadge): string => SHARE_BADGE_LABELS[badge]
+
+// 按 id 预计算，避免模板里每个文件夹调三次 folderBadge
+const folderBadges = computed(() => {
+  const map = new Map<FileListId, ShareBadge | null>()
+  for (const f of props.folders) map.set(f.id, folderBadge(f))
+  return map
+})
 
 /**
  * 悬停即出、移开即收；点击钉住，方便停留和复制文字。

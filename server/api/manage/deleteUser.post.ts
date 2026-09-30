@@ -136,7 +136,7 @@ export default defineEventHandler(async (event) => {
   try {
     await db.prepare('DELETE FROM users WHERE id = ?').bind(userId).run()
   } catch (e: any) {
-    throw createError({ statusCode: 500, statusMessage: e?.message || '删除失败' })
+    throw createError({ statusCode: 500, message: e?.message || '删除失败' })
   }
 
   return {

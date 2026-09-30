@@ -88,6 +88,7 @@
 import { NuxtLink } from '#components'
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { toMessage } from '~/utils/notify'
 
 useHead({ title: '注册' })
 const router = useRouter()
@@ -138,7 +139,7 @@ async function handleRegister() {
     }
   } catch (e : any) {
     console.error(e)
-    showNotification('注册失败，' + e.data?.statusMessage || '请重试', 'error')
+    showNotification('注册失败，' + toMessage(e, '请重试'), 'error')
   } finally {
     loading.value = false
   }

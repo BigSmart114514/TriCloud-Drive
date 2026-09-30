@@ -132,6 +132,7 @@
 
 import { useRouter } from 'vue-router'
 import { HomeIcon } from '@heroicons/vue/24/outline'
+import { toMessage } from '~/utils/notify'
 
 useHead({ title: '修改密码' })
 const router = useRouter()
@@ -200,7 +201,7 @@ const handleChangePassword = async () => {
     await useAuth().logout()
     setTimeout(() => navigateTo("/login"), 1000)
   } catch (err: any) {
-    error.value = err?.data?.statusMessage || err?.message || '修改失败，请重试'
+    error.value = toMessage(err, '修改失败，请重试')
   } finally {
     loading.value = false
   }

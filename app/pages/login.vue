@@ -78,6 +78,7 @@
 import { NuxtLink } from '#components'
 import { ref } from 'vue'
 import { useRouter } from 'vue-router'
+import { toMessage } from '~/utils/notify'
 
 useHead({ title: '登录' })
 const router = useRouter()
@@ -122,7 +123,11 @@ async function handleLogin() {
     }
   } catch (e : any) {
     console.error(e)
-    showNotification('登录失败，' + e.data?.statusMessage || '请重试', 'error')
+    // toMessage 而不是 e.data?.statusMessage：h3 错误体里中文在 message，
+// statusMessage 没填时会被兜底成 "Server Error"，读到的是那个垃圾值。
+// （原来写成 '登录失败，' + e.data?.statusMessage || '请重试'，
+//   '+' 优先级高于 '||'，兜底是死代码，实际显示「登录失败，undefined」。）
+showNotification('登录失败，' + toMessage(e, '请重试'), 'error')
   } finally {
     loading.value = false
   }

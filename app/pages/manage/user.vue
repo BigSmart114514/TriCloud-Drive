@@ -225,7 +225,7 @@
 <script setup lang="ts">
 
 import { formatDateTime } from '~/utils/time'
-import { notify, notifyError } from '~/utils/notify'
+import { notify, notifyError, toMessage } from '~/utils/notify'
 import { formatBytes, parseBytes } from '~/utils/size'
 import { fromDatetimeLocal, toDatetimeLocal } from '~/utils/datetimeLocal'
 import { HomeIcon, PencilSquareIcon, ShieldCheckIcon, StarIcon } from '@heroicons/vue/24/outline'
@@ -435,7 +435,7 @@ const handleAddUser = async () => {
     addPassword.value = ''
     await fetchUsers()
   } catch (err: any) {
-    addError.value = err?.data?.statusMessage || '创建失败'
+    addError.value = toMessage(err, '创建失败')
   } finally {
     addLoading.value = false
   }

@@ -113,6 +113,8 @@ export interface OwnedFolder {
   /** 共享三态：0 不分享 / 1 分享 / 2 继承 */
   Shared: number
   IsPublic: boolean
+  /** 我授权了多少人（folder_access 行数）。继承态下角标靠它区分「共享中」和默认态 */
+  grantCount: number
 }
 
 export interface OwnedFile {
@@ -127,7 +129,7 @@ export interface OwnedFile {
   createdAt: string
   /** 共享三态：0 不分享 / 1 分享 / 2 继承 */
   Shared: number
-  /** 等价于「给所有人(含未登录) READ」的快捷写法 */
+  /** 等价于「对所有已登录用户 READ」的快捷写法。不含未登录：/api/** 一律先过 requireAuth */
   IsPublic: boolean
   /** 该文件的直接授权（不含从父文件夹继承的） */
   grants: AccessGrant[]
@@ -163,6 +165,17 @@ export interface ResolvedAccess {
   isPublic: boolean
   mask: number
   source: PermSource
+  /**
+   * 向上查是否真找到一个 `Shared IN (0,1)` 的拍板者。
+   *
+   * 不能从 boundary/mask 反推：CTE 在没找到边界时把边界兜底成根，得到的
+   * ancestor 与「找到了一个继承态边界」同形，都是 NO_ACCESS。
+   *
+   * 必须跟着 ResolvedAccess 一起传下去：文件本身也要按它判断「自己的公开
+   * 是预设还是生效」，而文件的那次 combineWithAncestor 拿到的是**目录**解析
+   * 的结果。少了这个字段，文件就会退回「自己 IsPublic=1 就生效」的老行为。
+   */
+  hasBoundary?: boolean
 }
 
 export const NO_ACCESS: ResolvedAccess = {
@@ -170,13 +183,14 @@ export const NO_ACCESS: ResolvedAccess = {
   mode: SHARE_INHERIT,
   isPublic: false,
   mask: 0,
-  source: 'none'
+  source: 'none',
+  hasBoundary: false
 }
 
 /**
  * 边界祖先自身的决策：
  *   不分享 → 拒绝（到此为止）
- *   分享   → 名单 + IsPublic 给所有人 READ
+ *   分享   → 名单 + IsPublic 给所有已登录用户 READ
  */
 function decideAncestor(
   mode: ShareMode,
@@ -184,7 +198,9 @@ function decideAncestor(
   row: { permission?: any } | null | undefined
 ): ResolvedAccess {
   if (mode === SHARE_INHERIT) return NO_ACCESS
-  if (mode === SHARE_NONE) return { boundary: true, mode, isPublic: false, mask: 0, source: 'none' }
+  if (mode === SHARE_NONE) {
+    return { boundary: true, mode, isPublic: false, mask: 0, source: 'none', hasBoundary: true }
+  }
   const own = row && row.permission !== null && row.permission !== undefined
     ? normalizePermission(row.permission)
     : 0
@@ -194,7 +210,9 @@ function decideAncestor(
     isPublic,
     mask: normalizePermission(own | (isPublic ? PERM_READ : 0)),
     // 对子节点来说，边界上的授权就是「继承来的」
-    source: own > 0 ? 'inherited' : (isPublic ? 'public' : 'none')
+    source: own > 0 ? 'inherited' : (isPublic ? 'public' : 'none'),
+    // 能走到这里说明这一行本身就是一个边界（有拍板者）
+    hasBoundary: true
   }
 }
 
@@ -211,39 +229,95 @@ function decideAncestor(
  *
  * `belowBoundaryMask` 是 resolveAccess 从链路上额外带下来的一段：节点与最近
  * 边界之间的那些**非边界**祖先（Shared=2）上的授权，按位 OR。`belowBoundaryIsPublic`
- * 是同一段里是否存在公开目录（IsPublic=1 等价于给所有人 READ）。
+ * 是同一段里是否存在公开目录（IsPublic=1 等价于给所有已登录用户 READ）。
  *
  *   为什么需要它：以前只 JOIN 了「自身 + 最近边界」两行，写在继承态目录上的
  *   授权读不到。后果是能往那个目录里写（它自身是 pri=0，直接授权生效），
  *   却看不见自己写进去的东西（子项向上找边界时跳过它，落到没有授权的上层）。
- *   公开标记当时也一样漏读。修好后公开目录下的新建项才对所有人可见。
+ *   公开标记当时也一样漏读。修好后公开目录下的新建项才对所有已登录用户可见。
  *
- *   这段只覆盖**边界之下**的部分，边界及其以上仍然由 ancestor 说了算，
- *   所以「显式不分享」的墙没被绕过。
+ *   这段只覆盖**边界之下**的部分。边界本身由 ancestor 说了算，且继承态下
+ *   ancestor 是「不分享」时整个 mask 直接归零 —— 连节点自身写在 folder_access
+ *   里的直接授权一起挡。「不分享」是拒绝型边界，不是「只挡外来继承」。
+ *
+ * `hasBoundary` = 这条链上是否真的找到了一个 `Shared IN (0,1)` 的边界祖先。
+ *
+ *   必须由调用方显式传，不能从 ancestor 反推：resolveAccess 的 CTE 在没找到
+ *   边界时用 COALESCE 把边界兜底成根（db.ts:524），ancestor 拿到的是
+ *   decideAncestor(继承态) = NO_ACCESS，与「找到了一个继承态边界」完全同形。
+ *   所以「没人拍板」这个事实在合并前就丢了，只能靠 anc 是否命中来还原。
+ *
+ *   false 时（整条链全是继承，没有任何一层表态）→ mask 直接 0。
+ *   继承是**预设**语义：设的公开标记和名单先存在库里，但没人拍板时它们不生效；
+ *   等上游哪天出现边界（有人设 Shared=1），它们自动跟着生效，无需重设。
+ *   改之前这里是 direct | ancestor.mask | belowBoundaryMask，
+ *   ancestor 恒为 0，于是唯一给权限的就是 direct 里的 self.isPublic ——
+ *   根目录设了公开就全网可读，而它向上根本没有任何东西可以继承。
  */
 function combineWithAncestor(
   self: { mode: ShareMode; isPublic: boolean; permission?: any },
   ancestor: ResolvedAccess,
   belowBoundaryMask = 0,
   belowBoundaryIsPublic = false,
-  belowBoundaryGrants = 0
+  belowBoundaryGrants = 0,
+  hasBoundary = true
 ): ResolvedAccess {
   const own =
     self.permission !== null && self.permission !== undefined ? normalizePermission(self.permission) : 0
   const direct = normalizePermission(own | (self.isPublic ? PERM_READ : 0))
 
   if (self.mode === SHARE_NONE) {
-    return { boundary: true, mode: SHARE_NONE, isPublic: false, mask: 0, source: 'none' }
+    return { boundary: true, mode: SHARE_NONE, isPublic: false, mask: 0, source: 'none', hasBoundary }
   }
   if (self.mode === SHARE_SHARED) {
+    // 分享是明确的表态，不依赖祖先。根目录设成「分享」照样生效。
     return {
       boundary: true,
       mode: SHARE_SHARED,
       isPublic: self.isPublic,
       mask: direct,
-      source: own > 0 ? 'self' : (self.isPublic ? 'public' : 'none')
+      source: own > 0 ? 'self' : (self.isPublic ? 'public' : 'none'),
+      hasBoundary
     }
   }
+
+  // 继承态，但整条链没人拍板 → 等同「不分享」。
+  // 自身的名单/公开只是预设，不在此刻生效；belowBoundary 那段同理
+  // （那一批也是继承态目录，没有边界给它们背书）。
+  if (!hasBoundary) {
+    return {
+      boundary: true,
+      mode: SHARE_NONE,
+      isPublic: false,
+      mask: 0,
+      source: 'none',
+      hasBoundary: false
+    }
+  }
+
+  // 继承态，最近边界是「不分享」→ 墙，下游一律 0。
+  //
+  // 必须在 direct | ancestor.mask 之前判。decideAncestor 对 SHARE_NONE 返回
+  // mask:0，那 0 只是个数值，OR 进去不改变任何东西 —— 于是 direct 里
+  // 自身的名单/公开照样生效，墙被穿过去了：
+  //
+  //   97 ABCD (不分享)
+  //   └─ 99 ADBC (继承, 名单里给了 user5 perm=3)
+  //
+  // 实际给出 mask=3，属主明明在 97 划了墙。直接授权同样要挡：
+  // 「不分享」是拒绝型边界，不是「只挡外来继承」。放在 SHARED 分支之后，
+  // 因为分享态的节点本来就不看祖先，行为不变。
+  if (ancestor.mode === SHARE_NONE) {
+    return {
+      boundary: true,
+      mode: SHARE_NONE,
+      isPublic: false,
+      mask: 0,
+      source: 'none',
+      hasBoundary: true
+    }
+  }
+
   const isPublicAny = self.isPublic || ancestor.isPublic || belowBoundaryIsPublic
   // 谁最具体谁赢：自身名单 > 边界祖先 > 边界之下的授权 > 公开
   const source: PermSource =
@@ -257,7 +331,8 @@ function combineWithAncestor(
     mode: SHARE_INHERIT,
     isPublic: isPublicAny,
     mask: normalizePermission(direct | ancestor.mask | belowBoundaryMask),
-    source
+    source,
+    hasBoundary: true
   }
 }
 
@@ -274,7 +349,9 @@ function toOwnedFolder(row: any): OwnedFolder {
     createdAt: row.createdAt ?? row.created_at,
     updatedAt: row.updatedAt ?? row.updated_at ?? null,
     Shared: normalizeShareMode(row.Shared),
-    IsPublic: toBool(row.IsPublic)
+    IsPublic: toBool(row.IsPublic),
+    // 缺列时兜底 0：老查询没带 grantCount，语义上等于「没授权任何人」
+    grantCount: Number(row.grantCount ?? 0) || 0
   }
 }
 
@@ -298,8 +375,25 @@ function toOwnedFile(row: any): OwnedFile {
   }
 }
 
-const FOLDER_COLUMNS =
+/**
+ * folders 表的标准列清单。所有读 folders 的地方都用它，避免各处各写一套。
+ */
+const FOLDER_COLUMNS_BASE =
   'id, user_id AS userId, name, parent_id AS parentId, created_at AS createdAt, updated_at AS updatedAt, Shared, IsPublic'
+
+/**
+ * 列表用：在标准列后加 grantCount = 我授权了多少人（folder_access 行数）。
+ *
+ * 列表页的角标要区分「继承 + 有人」和「继承 + 没人」，光看 Shared/IsPublic
+ * 分不出来 —— 继承态默认不给任何人读（见 combineWithAncestor），名单非空
+ * 才说明属主显式分享过。
+ *
+ * 只给列表用。findOwnedById / findByName 这些单条热路径用 BASE 就够，
+ * 没必要为一次用不到的计数多跑子查询。走 ix_folder_access_folder 索引。
+ * 带 `folders.` 限定名：个别查询里 folders 会与 folder_access 联表，不限定会歧义。
+ */
+const FOLDER_COLUMNS_WITH_GRANTS =
+  `${FOLDER_COLUMNS_BASE}, (SELECT COUNT(*) FROM folder_access fa WHERE fa.folder_id = folders.id) AS grantCount`
 
 /**
  * 文件夹归属校验：所有读写都必须经过这里，SQL 里始终带 user_id
@@ -314,7 +408,7 @@ export class FolderService {
 
   async findOwnedById(userId: number, folderId: number): Promise<OwnedFolder | null> {
     const row = await this.db
-      .prepare(`SELECT ${FOLDER_COLUMNS} FROM folders WHERE id = ? AND user_id = ?`)
+      .prepare(`SELECT ${FOLDER_COLUMNS_BASE} FROM folders WHERE id = ? AND user_id = ?`)
       .bind(folderId, userId)
       .first()
     return row ? toOwnedFolder(row) : null
@@ -366,7 +460,7 @@ export class FolderService {
     if (!folderIds.length) return []
     const res = await this.db
       .prepare(
-        `SELECT ${FOLDER_COLUMNS} FROM folders WHERE user_id = ? AND id IN (${placeholders(folderIds.length)})`
+        `SELECT ${FOLDER_COLUMNS_BASE} FROM folders WHERE user_id = ? AND id IN (${placeholders(folderIds.length)})`
       )
       .bind(userId, ...folderIds)
       .all()
@@ -382,8 +476,8 @@ export class FolderService {
 
   async listChildren(userId: number, parentId: number | null): Promise<OwnedFolder[]> {
     const sql = parentId === null
-      ? `SELECT ${FOLDER_COLUMNS} FROM folders WHERE user_id = ? AND parent_id IS NULL ORDER BY name COLLATE NOCASE ASC`
-      : `SELECT ${FOLDER_COLUMNS} FROM folders WHERE user_id = ? AND parent_id = ? ORDER BY name COLLATE NOCASE ASC`
+      ? `SELECT ${FOLDER_COLUMNS_WITH_GRANTS} FROM folders WHERE user_id = ? AND parent_id IS NULL ORDER BY name COLLATE NOCASE ASC`
+      : `SELECT ${FOLDER_COLUMNS_WITH_GRANTS} FROM folders WHERE user_id = ? AND parent_id = ? ORDER BY name COLLATE NOCASE ASC`
     const args = parentId === null ? [userId] : [userId, parentId]
     const res = await this.db.prepare(sql).bind(...args).all()
     return (res?.results || []).map(toOwnedFolder)
@@ -393,7 +487,7 @@ export class FolderService {
     if (!parentIds.length) return []
     const res = await this.db
       .prepare(
-        `SELECT ${FOLDER_COLUMNS} FROM folders WHERE user_id = ? AND parent_id IN (${placeholders(parentIds.length)})`
+        `SELECT ${FOLDER_COLUMNS_WITH_GRANTS} FROM folders WHERE user_id = ? AND parent_id IN (${placeholders(parentIds.length)})`
       )
       .bind(userId, ...parentIds)
       .all()
@@ -429,8 +523,8 @@ export class FolderService {
 
   async findByName(userId: number, parentId: number | null, name: string): Promise<OwnedFolder | null> {
     const sql = parentId === null
-      ? `SELECT ${FOLDER_COLUMNS} FROM folders WHERE user_id = ? AND parent_id IS NULL AND name = ? LIMIT 1`
-      : `SELECT ${FOLDER_COLUMNS} FROM folders WHERE user_id = ? AND parent_id = ? AND name = ? LIMIT 1`
+      ? `SELECT ${FOLDER_COLUMNS_BASE} FROM folders WHERE user_id = ? AND parent_id IS NULL AND name = ? LIMIT 1`
+      : `SELECT ${FOLDER_COLUMNS_BASE} FROM folders WHERE user_id = ? AND parent_id = ? AND name = ? LIMIT 1`
     const args = parentId === null ? [userId, name] : [userId, parentId, name]
     const row = await this.db.prepare(sql).bind(...args).first()
     return row ? toOwnedFolder(row) : null
@@ -590,7 +684,10 @@ export class FolderService {
       ancestor,
       belowBoundaryMask,
       belowBoundaryIsPublic,
-      belowBoundaryGrants
+      belowBoundaryGrants,
+      // anc 是否命中 = 链上是否真有人拍板。CTE 的 COALESCE 兜底把「没找到边界」
+      // 伪装成「边界是根」，ancestor 两者都是 NO_ACCESS，这里是唯一能还原的地方。
+      !!anc
     )
   }
 
@@ -681,7 +778,14 @@ export class FileService {
     const own = file.grants.find((g) => g.userId === userId)
     return combineWithAncestor(
       { mode: normalizeShareMode(file.Shared), isPublic: file.IsPublic, permission: own?.permission },
-      inherited
+      inherited,
+      // 目录那侧的 inherited 已经在 combineWithAncestor 里算过祖先叠加，
+      // 这里只需要它带下来的「链上有没有拍板者」——文件自己若是继承态，
+      // 自己的 IsPublic 属不属于预设，就看这一条。
+      0,
+      false,
+      0,
+      inherited.hasBoundary !== false
     )
   }
 

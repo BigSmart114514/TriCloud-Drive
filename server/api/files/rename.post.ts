@@ -47,6 +47,6 @@ export default defineEventHandler(async (event) => {
     if (isUniqueError(err)) {
       throw createError({ statusCode: 409, message: '当前文件夹内已存在同名文件' })
     }
-    throw createError({ statusCode: 500, statusMessage: err?.message || '重命名失败' })
+    throw createError({ statusCode: 500, message: err?.message || '重命名失败' })
   }
 })

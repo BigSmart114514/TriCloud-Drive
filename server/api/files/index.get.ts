@@ -3,8 +3,8 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
 import { FileService, FolderService } from '~~/server/utils/db'
-import type { PermSource, SharedEntry } from '~~/server/utils/db'
-import { hasPermission, PERM_ALL, PERM_READ, PERM_WRITE, SHARE_INHERIT } from '~~/types/share'
+import type { PermSource, ResolvedAccess, SharedEntry } from '~~/server/utils/db'
+import { hasPermission, PERM_ALL, PERM_READ, PERM_WRITE, SHARE_SHARED } from '~~/types/share'
 import { getQuery } from 'h3'
 
 /**
@@ -92,14 +92,23 @@ export default defineEventHandler(async (event) => {
 
     // 当前目录我能不能写。共享视图的工具条（上传/新建/粘贴）靠它显隐。
     let dirCanWrite = true
-    let dirAccessMask = PERM_ALL
     let subtreeOwnerId = authId
+    // 目录解析的真结果，attachMasks 直接用它。原先手搓一个字面量传进去，
+    // 会把 hasBoundary 丢掉，文件于是退回「自己 IsPublic=1 就生效」的老行为。
+    let dirAccess: ResolvedAccess = {
+      boundary: true,
+      mode: SHARE_SHARED,
+      isPublic: false,
+      mask: PERM_ALL,
+      source: 'owner',
+      hasBoundary: true
+    }
     if (!isOwner) {
       const access = await folderService.resolveAccess(authId, folderId)
       if (!hasPermission(access.mask, PERM_READ)) {
         throw createError({ statusCode: 404, message: '文件夹不存在或无权限' })
       }
-      dirAccessMask = access.mask
+      dirAccess = access
       dirCanWrite = hasPermission(access.mask, PERM_WRITE)
       subtreeOwnerId = (await folderService.getOwnerId(folderId!)) ?? authId
     }
@@ -129,13 +138,7 @@ export default defineEventHandler(async (event) => {
       // filterAccessible 已经逐个用 resolveFileAccess 算对了完整掩码（文件自身
       // Shared=1 时只认自己的名单/公开，不继承目录），只是把结果丢了。
       // attachMasks 把掩码和来源挂回去，顺带完成过滤。
-      files = (await fileService.attachMasks(authId, allFiles, {
-        boundary: true,
-        mode: SHARE_INHERIT,
-        isPublic: false,
-        mask: dirAccessMask,
-        source: 'inherited'
-      })).filter((f) => f.perm > 0)
+      files = (await fileService.attachMasks(authId, allFiles, dirAccess)).filter((f) => f.perm > 0)
     }
 
     return {

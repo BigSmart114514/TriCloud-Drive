@@ -1,8 +1,13 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
-import { FileService, FolderService } from '~~/server/utils/db'
-import { assertShareTargetType, assertTargetId, getShareState, resolveShareTarget } from '~~/server/utils/share'
+import {
+  assertShareTargetType,
+  assertTargetId,
+  getShareState,
+  listGrantsWithUsers,
+  resolveShareTarget
+} from '~~/server/utils/share'
 import { isShareBoundary, PERMISSION_LABELS, SHARE_MODE_LABELS } from '~~/types/share'
 
 export default defineEventHandler(async (event) => {
@@ -19,27 +24,8 @@ export default defineEventHandler(async (event) => {
     const targetId = assertTargetId(q?.targetId)
 
     const target = await resolveShareTarget(db, type, targetId, ownerId)
-    const fileService = new FileService(db)
-    const folderService = new FolderService(db)
 
-    const grants =
-      type === 'file' ? await fileService.listGrants(targetId) : await folderService.listGrants(targetId)
-
-    const users = grants.length
-      ? await db
-          .prepare(
-            `SELECT id, username, email FROM users WHERE id IN (${grants.map(() => '?').join(',')})`
-          )
-          .bind(...grants.map((g) => g.userId))
-          .all()
-      : { results: [] }
-
-    const userMap = new Map(
-      (users?.results || []).map((u: any) => [
-        Number(u.id),
-        { username: u.username, email: u.email }
-      ])
-    )
+    const grants = await listGrantsWithUsers(db, target)
 
     // 目标自身的共享状态，方便前端直接渲染三态选择器
     const state = await getShareState(db, target)
@@ -55,8 +41,7 @@ export default defineEventHandler(async (event) => {
       IsPublic: state.isPublic,
       grants: grants.map((g) => ({
         ...g,
-        label: PERMISSION_LABELS[g.permission] ?? String(g.permission),
-        user: userMap.get(g.userId) ?? null
+        label: PERMISSION_LABELS[g.permission] ?? String(g.permission)
       }))
     }
   } catch (error: any) {

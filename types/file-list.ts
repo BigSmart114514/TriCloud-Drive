@@ -19,6 +19,8 @@ export interface FileListFolder extends FileListPerm {
   /** 共享三态：0 不分享 / 1 分享 / 2 继承 */
   Shared?: number
   IsPublic?: boolean
+  /** 我授权了多少人。继承态下配合 Shared 决定角标：非空 = 共享中 */
+  grantCount?: number
   createdAt?: string | null
   /** 所在目录的相对路径。仅「共享清单」这类平铺视图会带，普通目录浏览不传 */
   relDir?: string

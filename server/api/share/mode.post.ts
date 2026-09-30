@@ -1,13 +1,13 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
-import { FileService, FolderService } from '~~/server/utils/db'
 import {
   assertGrantees,
   assertPermissionBits,
   assertShareTargetType,
   assertTargetId,
   getShareState,
+  listGrantsWithUsers,
   replaceAccess,
   resolveShareTarget,
   setPublic,
@@ -20,7 +20,7 @@ import type { ShareMode } from '~~/types/share'
  * 修改分享状态。这是唯一的写接口，取代了原来的 grant / revoke：
  *
  *   mode      共享三态：0 不分享 / 1 分享 / 2 继承
- *   isPublic  对所有人可读
+ *   isPublic  对所有已登录用户可读（不含未登录：/api/** 一律先过 requireAuth）
  *   grants    授权名单，**整体覆盖**：传什么就是最终名单，不在列表里的人会被移除
  *
  * 三个字段都可选，只传要改的。grants 传空数组 = 清空名单。
@@ -69,9 +69,9 @@ export default defineEventHandler(async (event) => {
     }
 
     const state = await getShareState(db, target)
-    const grants = type === 'file'
-      ? await new FileService(db).listGrants(targetId)
-      : await new FolderService(db).listGrants(targetId)
+    // 用共用的这个而不是 listGrants：它补了用户名。前端 submitGrants 会用这里的
+    // 返回覆盖本地名单，缺 user 的话界面上会变成「未知用户」。
+    const grants = await listGrantsWithUsers(db, target)
 
     return {
       success: true,

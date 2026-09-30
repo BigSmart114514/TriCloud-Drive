@@ -78,7 +78,7 @@
                     :disabled="busy || mode === SHARE_NONE"
                     @change="applyPublic(($event.target as HTMLInputElement).checked)"
                   />
-                  公开（免登录只读）
+                  公开（所有登录用户可读）
                 </label>
                 <p v-if="mode === SHARE_NONE" class="mt-1 text-[11px] leading-relaxed text-amber-600">
                   当前为「不分享」，公开不可用。

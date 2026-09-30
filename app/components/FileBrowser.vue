@@ -222,6 +222,7 @@
         @rename-folder="onRenameFolder"
         :show-clip="true"
         :share-action="shareAction"
+        :show-share-badge="isOwn"
         @clip-folder="onClipFolder"
         @copy-folder="onCopyFolder"
         @download-file="onDownloadFile"
