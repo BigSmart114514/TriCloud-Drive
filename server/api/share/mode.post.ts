@@ -89,6 +89,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Share mode error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '设置分享状态失败' })
+    throw createError({ statusCode: 500, message: '设置分享状态失败' })
   }
 })

@@ -37,13 +37,13 @@ export async function requireAuth(event: any, opts?: { withUser?: boolean }): Pr
 
   const token = getCookie(event, 'auth-token')
   if (!token) {
-    throw createError({ statusCode: 401, statusMessage: '未登录' })
+    throw createError({ statusCode: 401, message: '未登录' })
   }
 
   const config = useRuntimeConfig()
   const decoded = verifyToken(token, config.sessionSecret)
   if (!decoded) {
-    throw createError({ statusCode: 401, statusMessage: '登录已过期' })
+    throw createError({ statusCode: 401, message: '登录已过期' })
   }
 
   const baseUser: AuthenticatedUser = { userId: decoded.userId }
@@ -56,7 +56,7 @@ export async function requireAuth(event: any, opts?: { withUser?: boolean }): Pr
   // 需要更多信息时查库
   const db = getDb(event)
   if (!db) {
-    throw createError({ statusCode: 500, statusMessage: '数据库连接失败' })
+    throw createError({ statusCode: 500, message: '数据库连接失败' })
   }
   const row = await db
     .prepare('SELECT id, username, email, IsAdmin, IsSuperAdmin, canChangePassword, password_hash FROM users WHERE id = ?')
@@ -64,7 +64,7 @@ export async function requireAuth(event: any, opts?: { withUser?: boolean }): Pr
     .first() as any
 
   if (!row) {
-    throw createError({ statusCode: 401, statusMessage: '用户不存在或已被删除' })
+    throw createError({ statusCode: 401, message: '用户不存在或已被删除' })
   }
 
   const fullUser: AuthenticatedUser = {
@@ -86,7 +86,7 @@ export async function requireAuth(event: any, opts?: { withUser?: boolean }): Pr
 export async function requireAdmin(event: any): Promise<AuthenticatedUser> {
   const user = await requireAuth(event, { withUser: true })
   if (!(user.isAdmin || user.isSuperAdmin)) {
-    throw createError({ statusCode: 403, statusMessage: '仅管理员可访问' })
+    throw createError({ statusCode: 403, message: '仅管理员可访问' })
   }
   return user
 }
@@ -154,14 +154,14 @@ export async function getMeAndTarget(event: any): Promise<MeAndTarget> {
   const useAdmin = readBool(q?.useAdmin ?? b?.useAdmin)
   const isStaff = !!(me.isAdmin || me.isSuperAdmin)
   if (useAdmin && !isStaff) {
-    throw createError({ statusCode: 403, statusMessage: '仅管理员可使用管理权限' })
+    throw createError({ statusCode: 403, message: '仅管理员可使用管理权限' })
   }
   const adminMode = useAdmin && isStaff
 
   const provided = q?.targetUserId ?? b?.targetUserId
   const targetUserId = provided != null && provided !== '' ? Number(provided) : me.userId
   if (!Number.isInteger(targetUserId) || targetUserId < 1) {
-    throw createError({ statusCode: 400, statusMessage: '非法的 targetUserId' })
+    throw createError({ statusCode: 400, message: '非法的 targetUserId' })
   }
 
   // 非超管不得进入超管的数据范围。
@@ -177,13 +177,13 @@ export async function getMeAndTarget(event: any): Promise<MeAndTarget> {
   // 只在「管理视图 + 自己不是超管」时多查这一次；超管和普通浏览都是零额外查询。
   if (adminMode && !me.isSuperAdmin) {
     const db = getDb(event)
-    if (!db) throw createError({ statusCode: 500, statusMessage: '数据库连接失败' })
+    if (!db) throw createError({ statusCode: 500, message: '数据库连接失败' })
     const row = await db
       .prepare('SELECT IsSuperAdmin FROM users WHERE id = ?')
       .bind(targetUserId)
       .first() as any
     if (row && (row.IsSuperAdmin === true || row.IsSuperAdmin === 1)) {
-      throw createError({ statusCode: 403, statusMessage: '普通管理员不能访问超级管理员的数据' })
+      throw createError({ statusCode: 403, message: '普通管理员不能访问超级管理员的数据' })
     }
   }
 

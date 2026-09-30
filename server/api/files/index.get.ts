@@ -57,7 +57,7 @@ export default defineEventHandler(async (event) => {
     if (rawFolderId && rawFolderId !== 'root' && rawFolderId !== '0') {
       const parsed = Number(rawFolderId)
       if (!Number.isInteger(parsed) || parsed < 1) {
-        throw createError({ statusCode: 400, statusMessage: '非法的 folderId' })
+        throw createError({ statusCode: 400, message: '非法的 folderId' })
       }
       folderId = parsed
     }
@@ -97,7 +97,7 @@ export default defineEventHandler(async (event) => {
     if (!isOwner) {
       const access = await folderService.resolveAccess(authId, folderId)
       if (!hasPermission(access.mask, PERM_READ)) {
-        throw createError({ statusCode: 404, statusMessage: '文件夹不存在或无权限' })
+        throw createError({ statusCode: 404, message: '文件夹不存在或无权限' })
       }
       dirAccessMask = access.mask
       dirCanWrite = hasPermission(access.mask, PERM_WRITE)
@@ -158,6 +158,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Get items error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '获取列表失败' })
+    throw createError({ statusCode: 500, message: '获取列表失败' })
   }
 })

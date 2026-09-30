@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
   const body = await readBody<{ id: number | string }>(event)
   const userId = Number(body?.id)
   if (!Number.isInteger(userId) || userId <= 0) {
-    throw createError({ statusCode: 400, statusMessage: '参数错误：id' })
+    throw createError({ statusCode: 400, message: '参数错误：id' })
   }
 
   const db = getDb(event)
@@ -32,7 +32,7 @@ export default defineEventHandler(async (event) => {
     .first()
 
   if (!target) {
-    throw createError({ statusCode: 404, statusMessage: '用户不存在' })
+    throw createError({ statusCode: 404, message: '用户不存在' })
   }
 
   const targetIsAdmin = toBool(target.IsAdmin)
@@ -43,7 +43,7 @@ export default defineEventHandler(async (event) => {
   // - 管理员只能删除普通用户（不能删管理员或超管）
   if (!me.isSuperAdmin) {
     if (targetIsAdmin || targetIsSuperAdmin) {
-      throw createError({ statusCode: 403, statusMessage: '普通管理员不能删除管理员或超级管理员' })
+      throw createError({ statusCode: 403, message: '普通管理员不能删除管理员或超级管理员' })
     }
   }
 
@@ -57,7 +57,7 @@ export default defineEventHandler(async (event) => {
       .first()
     const cnt = Number(row?.cnt ?? 0)
     if (cnt <= 1) {
-      throw createError({ statusCode: 400, statusMessage: '不能删除最后一个超级管理员' })
+      throw createError({ statusCode: 400, message: '不能删除最后一个超级管理员' })
     }
   }
 

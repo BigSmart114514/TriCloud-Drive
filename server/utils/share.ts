@@ -16,13 +16,13 @@ export interface ShareTarget {
 
 export function assertShareTargetType(value: any): ShareTargetType {
   if (value === 'file' || value === 'folder') return value
-  throw createError({ statusCode: 400, statusMessage: 'targetType 必须是 file 或 folder' })
+  throw createError({ statusCode: 400, message: 'targetType 必须是 file 或 folder' })
 }
 
 export function assertTargetId(value: any): number {
   const id = Number(value)
   if (!Number.isInteger(id) || id < 1) {
-    throw createError({ statusCode: 400, statusMessage: '非法的 targetId' })
+    throw createError({ statusCode: 400, message: '非法的 targetId' })
   }
   return id
 }
@@ -40,7 +40,7 @@ export async function resolveShareTarget(
     throw createError({ statusCode: 404, statusMessage: type === 'file' ? '文件不存在' : '文件夹不存在' })
   }
   if (Number(row.userId) !== actingUserId) {
-    throw createError({ statusCode: 403, statusMessage: '只有属主可以管理分享' })
+    throw createError({ statusCode: 403, message: '只有属主可以管理分享' })
   }
   return { type, table, id: targetId, ownerId: Number(row.userId) }
 }
@@ -48,10 +48,10 @@ export async function resolveShareTarget(
 export function assertPermissionBits(value: any): number {
   const raw = Number(value)
   if (!Number.isInteger(raw) || raw <= 0) {
-    throw createError({ statusCode: 400, statusMessage: '非法的 permission' })
+    throw createError({ statusCode: 400, message: '非法的 permission' })
   }
   if (raw & ~PERM_ALL) {
-    throw createError({ statusCode: 400, statusMessage: 'permission 含未定义的权限位' })
+    throw createError({ statusCode: 400, message: 'permission 含未定义的权限位' })
   }
   return normalizePermission(raw)
 }
@@ -60,10 +60,10 @@ export function assertPermissionBits(value: any): number {
 export async function assertGrantees(db: Database, userIds: number[], ownerId: number): Promise<number[]> {
   const ids = uniqPositiveInts(userIds)
   if (!ids.length) {
-    throw createError({ statusCode: 400, statusMessage: 'userIds 不能为空' })
+    throw createError({ statusCode: 400, message: 'userIds 不能为空' })
   }
   if (ids.includes(ownerId)) {
-    throw createError({ statusCode: 400, statusMessage: '不能授权给属主本人' })
+    throw createError({ statusCode: 400, message: '不能授权给属主本人' })
   }
   const res = await db
     .prepare(`SELECT id FROM users WHERE id IN (${placeholders(ids.length)})`)
@@ -72,7 +72,7 @@ export async function assertGrantees(db: Database, userIds: number[], ownerId: n
   const found = new Set((res?.results || []).map((r: any) => Number(r.id)))
   const missing = ids.filter((id) => !found.has(id))
   if (missing.length) {
-    throw createError({ statusCode: 400, statusMessage: `用户不存在：${missing.join(', ')}` })
+    throw createError({ statusCode: 400, message: `用户不存在：${missing.join(', ')}` })
   }
   return ids
 }

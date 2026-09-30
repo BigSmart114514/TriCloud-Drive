@@ -18,7 +18,7 @@ export default defineEventHandler(async (event) => {
     if (!fileId) {
       throw createError({
         statusCode: 400,
-        statusMessage: '文件ID不能为空'
+        message: '文件ID不能为空'
       })
     }
 
@@ -113,7 +113,7 @@ export default defineEventHandler(async (event) => {
 
     throw createError({
       statusCode: 500,
-      statusMessage: '删除文件失败'
+      message: '删除文件失败'
     })
   }
 })

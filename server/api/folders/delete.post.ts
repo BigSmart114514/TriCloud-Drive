@@ -16,7 +16,7 @@ export default defineEventHandler(async (event) => {
     const { folderId } = await readBody(event)
     const id = Number(folderId)
     if (!Number.isInteger(id) || id < 1) {
-      throw createError({ statusCode: 400, statusMessage: '非法的 folderId' })
+      throw createError({ statusCode: 400, message: '非法的 folderId' })
     }
 
     const folderService = new FolderService(db)
@@ -111,6 +111,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Delete folder error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '删除文件夹失败' })
+    throw createError({ statusCode: 500, message: '删除文件夹失败' })
   }
 })

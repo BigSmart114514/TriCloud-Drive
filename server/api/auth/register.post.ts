@@ -26,27 +26,27 @@ export default defineEventHandler(async (event) => {
     if (!email || !password || !username) {
       throw createError({
         statusCode: 400,
-        statusMessage: '邮箱,用户名,密码暂时都是必填项'
+        message: '邮箱,用户名,密码暂时都是必填项'
       })
     }
 
     if (!validateEmail(email)) {
       throw createError({
         statusCode: 400,
-        statusMessage: '邮箱格式不正确'
+        message: '邮箱格式不正确'
       })
     }
 
     if (!validatePassword(password)) {
       throw createError({
         statusCode: 400,
-        statusMessage: '密码至少8位，且包含字母和数字'
+        message: '密码至少8位，且包含字母和数字'
       })
     }
     if (!validateUsername(username)) {
       throw createError({
         statusCode: 400,
-        statusMessage: '用户名格式不正确,暂时只能包含大小写字母和数字'
+        message: '用户名格式不正确,暂时只能包含大小写字母和数字'
       })
     }
 
@@ -64,7 +64,7 @@ export default defineEventHandler(async (event) => {
     if (existingUser) {
       throw createError({
         statusCode: 409,
-        statusMessage: '该用户名已被注册'
+        message: '该用户名已被注册'
       })
     }
 
@@ -75,7 +75,7 @@ export default defineEventHandler(async (event) => {
     if (!newUser) {
       throw createError({
         statusCode: 500,
-        statusMessage: '用户创建失败'
+        message: '用户创建失败'
       })
     }
 

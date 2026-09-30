@@ -15,7 +15,7 @@ export default defineEventHandler(async (event) => {
   if (!validatePassword(newPassword)) {
     throw createError({
       statusCode: 400,
-      statusMessage: '密码至少8位，且包含字母和数字'
+      message: '密码至少8位，且包含字母和数字'
     })
   }
   
@@ -24,7 +24,7 @@ export default defineEventHandler(async (event) => {
   if (!db) {
     throw createError({
       statusCode: 500,
-      statusMessage: '数据库连接失败'
+      message: '数据库连接失败'
     })
   }
   const userService = new UserService(db)
@@ -32,7 +32,7 @@ export default defineEventHandler(async (event) => {
   if (!user) {
     throw createError({
       statusCode: 500,
-      statusMessage: '用户查询失败'
+      message: '用户查询失败'
     })
   }
   
@@ -44,13 +44,13 @@ export default defineEventHandler(async (event) => {
     const canChange = user.canChangePassword
 
     if (!canChange) {
-      throw createError({ statusCode: 403, statusMessage: '无权限修改密码' })
+      throw createError({ statusCode: 403, message: '无权限修改密码' })
     }
     const isValidPassword = await verifyPassword(currentPassword, user.password_hash || '')
     if (!isValidPassword) {
       throw createError({
         statusCode: 400,
-        statusMessage: '当前密码不正确'
+        message: '当前密码不正确'
       })
     }
   }

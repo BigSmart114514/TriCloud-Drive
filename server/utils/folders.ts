@@ -17,7 +17,7 @@ export function normalizeFolderId(input: any): number | null {
   }
   const n = Number(input)
   if (!Number.isInteger(n) || n < 1) {
-    throw createError({ statusCode: 400, statusMessage: '非法的 parentId' })
+    throw createError({ statusCode: 400, message: '非法的 parentId' })
   }
   return n
 }
@@ -31,9 +31,9 @@ export function normalizePath(p: string): string {
 
 function validateSegment(seg: string) {
   const name = seg.trim()
-  if (!name) throw createError({ statusCode: 400, statusMessage: '目录名不能为空' })
-  if (name.length > 255) throw createError({ statusCode: 400, statusMessage: `目录名过长：${name}` })
-  if (name === '.' || name === '..') throw createError({ statusCode: 400, statusMessage: `非法目录名：${name}` })
+  if (!name) throw createError({ statusCode: 400, message: '目录名不能为空' })
+  if (name.length > 255) throw createError({ statusCode: 400, message: `目录名过长：${name}` })
+  if (name === '.' || name === '..') throw createError({ statusCode: 400, message: `非法目录名：${name}` })
   return name
 }
 
@@ -46,7 +46,7 @@ async function assertParent(db: Database, userId: number, parentId: number | nul
   if (parentId === null) return
   const folderService = new FolderService(db)
   if (!(await folderService.findOwnedById(userId, parentId))) {
-    throw createError({ statusCode: 404, statusMessage: '父级文件夹不存在或无权限' })
+    throw createError({ statusCode: 404, message: '父级文件夹不存在或无权限' })
   }
 }
 
@@ -63,10 +63,10 @@ export async function createFolder(
   const parentId = normalizeFolderId(params?.parentId)
 
   if (!nameRaw) {
-    throw createError({ statusCode: 400, statusMessage: '文件夹名称不能为空' })
+    throw createError({ statusCode: 400, message: '文件夹名称不能为空' })
   }
   if (nameRaw.length > 255) {
-    throw createError({ statusCode: 400, statusMessage: '文件夹名称过长（最多255字符）' })
+    throw createError({ statusCode: 400, message: '文件夹名称过长（最多255字符）' })
   }
 
   await assertParent(db, userId, parentId)
@@ -112,7 +112,7 @@ export async function createFolder(
     }
   }
 
-  throw createError({ statusCode: 409, statusMessage: '在并发情况下无法生成唯一文件夹名，请稍后重试' })
+  throw createError({ statusCode: 409, message: '在并发情况下无法生成唯一文件夹名，请稍后重试' })
 }
 
 /**

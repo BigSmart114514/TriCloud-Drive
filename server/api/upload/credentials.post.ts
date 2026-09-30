@@ -57,7 +57,7 @@ export default defineEventHandler(async (event) => {
     }
     const n = Number(input)
     if (!Number.isInteger(n) || n < 1) {
-      throw createError({ statusCode: 400, statusMessage: '非法的 folderId' })
+      throw createError({ statusCode: 400, message: '非法的 folderId' })
     }
     return n
   }
@@ -70,7 +70,7 @@ export default defineEventHandler(async (event) => {
     
 
     if (!db) {
-      throw createError({ statusCode: 500, statusMessage: '数据库连接失败' })
+      throw createError({ statusCode: 500, message: '数据库连接失败' })
     }
     const userService = new UserService(db)
     const fileService = new FileService(db)
@@ -83,16 +83,16 @@ export default defineEventHandler(async (event) => {
 
     if (overwrite === true && skipIfExist === true)
     {
-      throw createError({ statusCode: 400, statusMessage: '不能既覆盖又跳过文件'})
+      throw createError({ statusCode: 400, message: '不能既覆盖又跳过文件'})
     }
 
     if (!filename) {
-      throw createError({ statusCode: 400, statusMessage: '文件名不能为空' })
+      throw createError({ statusCode: 400, message: '文件名不能为空' })
     }
 
     const size = Number(fileSize)
     if (!Number.isFinite(size) || size < 0) {
-      throw createError({ statusCode: 400, statusMessage: 'fileSize 参数无效' })
+      throw createError({ statusCode: 400, message: 'fileSize 参数无效' })
     }
 
     /**
@@ -114,10 +114,10 @@ export default defineEventHandler(async (event) => {
     const user = await userService.getUserById(userId)
     if (!user)
     {
-      throw createError({ statusCode: 404, statusMessage: '用户不存在或已被删除' })
+      throw createError({ statusCode: 404, message: '用户不存在或已被删除' })
     }
     if (isExpired(user.expire_at)) {
-      throw createError({ statusCode: 403, statusMessage: '账号已过期，禁止上传' })
+      throw createError({ statusCode: 403, message: '账号已过期，禁止上传' })
     }
 
     const usedStorage = Number(user.usedStorage ?? 0) || 0
@@ -135,7 +135,7 @@ export default defineEventHandler(async (event) => {
     }
 
     if (maxStorage > 0 && usedForCheck + size > maxStorage) {
-      throw createError({ statusCode: 403, statusMessage: '存储空间不足，上传该文件将超出配额' })
+      throw createError({ statusCode: 403, message: '存储空间不足，上传该文件将超出配额' })
     }
 
     // 目标目录归属校验（放在配额判断之后，与原逻辑保持一致）
@@ -195,7 +195,7 @@ export default defineEventHandler(async (event) => {
     const response = await client.GetFederationToken(params)
     const credentials = response.Credentials
     if (!credentials) {
-      throw createError({ statusCode: 500, statusMessage: '获取临时密钥失败' })
+      throw createError({ statusCode: 500, message: '获取临时密钥失败' })
     }
 
     return {
@@ -220,6 +220,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Generate upload credentials error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '生成上传凭证失败' })
+    throw createError({ statusCode: 500, message: '生成上传凭证失败' })
   }
 })

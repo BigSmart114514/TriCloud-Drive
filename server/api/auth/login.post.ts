@@ -16,14 +16,14 @@ export default defineEventHandler(async (event) => {
     if (!password || !username) {
       throw createError({
         statusCode: 400,
-        statusMessage: '用户名和密码都是必填项'
+        message: '用户名和密码都是必填项'
       })
     }
 
     if (!validateUsername(username)) {
       throw createError({
         statusCode: 400,
-        statusMessage: '用户名格式不正确'
+        message: '用户名格式不正确'
       })
     }
 
@@ -33,7 +33,7 @@ export default defineEventHandler(async (event) => {
     if (!db) {
       throw createError({
         statusCode: 500,
-        statusMessage: '数据库连接失败'
+        message: '数据库连接失败'
       })
     }
 
@@ -44,7 +44,7 @@ export default defineEventHandler(async (event) => {
     if (!user) {
       throw createError({
         statusCode: 401,
-        statusMessage: '用户名或密码错误'
+        message: '用户名或密码错误'
       })
     }
 
@@ -53,7 +53,7 @@ export default defineEventHandler(async (event) => {
     if (!isValidPassword) {
       throw createError({
         statusCode: 401,
-        statusMessage: '用户名或密码错误'
+        message: '用户名或密码错误'
       })
     }
 
@@ -87,7 +87,7 @@ export default defineEventHandler(async (event) => {
     console.error('Login error:', error)
     throw createError({
       statusCode: 500,
-      statusMessage: '服务器内部错误'
+      message: '服务器内部错误'
     })
   }
 })

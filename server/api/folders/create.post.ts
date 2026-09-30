@@ -34,6 +34,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Create folder error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '创建文件夹失败' })
+    throw createError({ statusCode: 500, message: '创建文件夹失败' })
   }
 })

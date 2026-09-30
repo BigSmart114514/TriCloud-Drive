@@ -25,13 +25,13 @@ export default defineEventHandler(async (event) => {
   const newName = (body?.newName || '').trim()
 
   if (!fileId || !newName) {
-    throw createError({ statusCode: 400, statusMessage: 'fileId/newName 缺失' })
+    throw createError({ statusCode: 400, message: 'fileId/newName 缺失' })
   }
   if (newName.length > 255) {
-    throw createError({ statusCode: 400, statusMessage: '名称过长（最多255字符）' })
+    throw createError({ statusCode: 400, message: '名称过长（最多255字符）' })
   }
   if (/[\\\/]/.test(newName)) {
-    throw createError({ statusCode: 400, statusMessage: '文件名不可包含斜杠/反斜杠' })
+    throw createError({ statusCode: 400, message: '文件名不可包含斜杠/反斜杠' })
   }
 
   const fileService = new FileService(db)
@@ -45,7 +45,7 @@ export default defineEventHandler(async (event) => {
     return { success: true }
   } catch (err: any) {
     if (isUniqueError(err)) {
-      throw createError({ statusCode: 409, statusMessage: '当前文件夹内已存在同名文件' })
+      throw createError({ statusCode: 409, message: '当前文件夹内已存在同名文件' })
     }
     throw createError({ statusCode: 500, statusMessage: err?.message || '重命名失败' })
   }

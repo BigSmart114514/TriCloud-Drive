@@ -61,6 +61,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Share candidates error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '搜索用户失败' })
+    throw createError({ statusCode: 500, message: '搜索用户失败' })
   }
 })

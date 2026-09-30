@@ -62,6 +62,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Share list error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '获取分享列表失败' })
+    throw createError({ statusCode: 500, message: '获取分享列表失败' })
   }
 })

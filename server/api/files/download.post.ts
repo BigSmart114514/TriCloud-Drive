@@ -48,7 +48,7 @@ export default defineEventHandler(async (event) => {
     const { fileKey, filename } = await readBody(event)
 
     if (!fileKey) {
-      throw createError({ statusCode: 400, statusMessage: '文件路径不能为空' })
+      throw createError({ statusCode: 400, message: '文件路径不能为空' })
     }
 
     const config = useRuntimeConfig()
@@ -82,7 +82,7 @@ export default defineEventHandler(async (event) => {
     if (!reserved) {
       throw createError({
         statusCode: 403,
-        statusMessage: '下载额度不足：下载该文件将超过您的下载流量上限'
+        message: '下载额度不足：下载该文件将超过您的下载流量上限'
       })
     }
     // ========== 原子预占结束 ==========
@@ -142,6 +142,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Generate download signature error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '生成下载签名失败' })
+    throw createError({ statusCode: 500, message: '生成下载签名失败' })
   }
 })

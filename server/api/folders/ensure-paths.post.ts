@@ -32,6 +32,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Ensure paths error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '确保目录失败' })
+    throw createError({ statusCode: 500, message: '确保目录失败' })
   }
 })

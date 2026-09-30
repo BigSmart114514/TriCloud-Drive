@@ -11,7 +11,7 @@ export default defineEventHandler(async (event) => {
   const folderId = Number(q.folderId)
 
   if (!Number.isFinite(folderId)) {
-    throw createError({ statusCode: 400, statusMessage: 'folderId 无效' })
+    throw createError({ statusCode: 400, message: 'folderId 无效' })
   }
 
   const db = getDb(event)

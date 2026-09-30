@@ -50,7 +50,7 @@ export default defineEventHandler(async (event) => {
   function normalizeFolderId(input: any): number | null {
     if (input === undefined || input === null || input === '' || input === 'root' || input === '0' || input === 0) return null
     const n = Number(input)
-    if (!Number.isInteger(n) || n < 1) throw createError({ statusCode: 400, statusMessage: '非法的 folderId' })
+    if (!Number.isInteger(n) || n < 1) throw createError({ statusCode: 400, message: '非法的 folderId' })
     return n
   }
 
@@ -69,10 +69,10 @@ export default defineEventHandler(async (event) => {
     const { filename, safeFilename, fileKey, fileSize, fileUrl, contentType, overwrite } = body || {}
     const folderId = normalizeFolderId(body?.folderId ?? (event as any)?.context?.folderId)
 
-    if (!filename || !fileKey || !fileUrl) throw createError({ statusCode: 400, statusMessage: '缺少必要的文件信息' })
+    if (!filename || !fileKey || !fileUrl) throw createError({ statusCode: 400, message: '缺少必要的文件信息' })
 
     const size = Number(fileSize)
-    if (!Number.isFinite(size) || size < 0) throw createError({ statusCode: 400, statusMessage: 'fileSize 参数无效' })
+    if (!Number.isFinite(size) || size < 0) throw createError({ statusCode: 400, message: 'fileSize 参数无效' })
 
     const db = getDb(event)
     if (!db) throw dbConnectionError
@@ -180,7 +180,7 @@ export default defineEventHandler(async (event) => {
       if (!file) {
         await db.prepare('ROLLBACK TO upload_tx').bind().run()
         await db.prepare('RELEASE upload_tx').bind().run()
-        throw createError({ statusCode: 500, statusMessage: '保存失败：重名重试次数过多' })
+        throw createError({ statusCode: 500, message: '保存失败：重名重试次数过多' })
       }
 
       await db.prepare('RELEASE upload_tx').bind().run()
@@ -192,6 +192,6 @@ export default defineEventHandler(async (event) => {
   } catch (error: any) {
     console.error('Save file record error:', error)
     if (error.statusCode) throw error
-    throw createError({ statusCode: 500, statusMessage: '保存文件记录失败' })
+    throw createError({ statusCode: 500, message: '保存文件记录失败' })
   }
 })

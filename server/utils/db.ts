@@ -345,7 +345,7 @@ export class FolderService {
     const access = await this.resolveAccess(userId, folderId)
     if (access.mask === 0) throw folderNotFindError
     if (!hasPermission(access.mask, need)) {
-      throw createError({ statusCode: 403, statusMessage: '该文件夹的权限不足' })
+      throw createError({ statusCode: 403, message: '该文件夹的权限不足' })
     }
     // 属主信息从库里反查：这里返回的 row 一定属于别人
     return (await this.findOwnedById((await this.getOwnerId(folderId))!, folderId))!
@@ -730,7 +730,7 @@ export class FileService {
     const resolved = await this.resolveAccessForFile(userId, file)
     if (resolved.mask === 0) throw fileNotFoundError
     if (!hasPermission(resolved.mask, need)) {
-      throw createError({ statusCode: 403, statusMessage: '该文件的权限不足' })
+      throw createError({ statusCode: 403, message: '该文件的权限不足' })
     }
     return file
   }

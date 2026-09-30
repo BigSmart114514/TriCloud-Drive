@@ -30,11 +30,11 @@ export default defineEventHandler(async (event) => {
     } = body || {}
 
     if (!id && id !== 0) {
-      throw createError({ statusCode: 400, statusMessage: '缺少用户ID' })
+      throw createError({ statusCode: 400, message: '缺少用户ID' })
     }
 
     const db = getDb(event)
-    if (!db) throw createError({ statusCode: 500, statusMessage: '数据库连接失败' })
+    if (!db) throw createError({ statusCode: 500, message: '数据库连接失败' })
 
     // 角色校验。原来这里只有 requireAdmin，然后直接 UPDATE，**不看目标是谁、
     // 也不看请求想把谁变成什么角色**，于是有两个提权口：
@@ -47,7 +47,7 @@ export default defineEventHandler(async (event) => {
       .bind(id)
       .first()
     if (!target) {
-      throw createError({ statusCode: 404, statusMessage: '用户不存在' })
+      throw createError({ statusCode: 404, message: '用户不存在' })
     }
     const targetIsAdmin = toBool(target.IsAdmin)
     const targetIsSuperAdmin = toBool(target.IsSuperAdmin)
@@ -55,14 +55,14 @@ export default defineEventHandler(async (event) => {
     if (!me.isSuperAdmin) {
       // 规则一：普通管理员只能改普通用户（与 deleteUser 一致）
       if (targetIsAdmin || targetIsSuperAdmin) {
-        throw createError({ statusCode: 403, statusMessage: '普通管理员不能修改管理员或超级管理员' })
+        throw createError({ statusCode: 403, message: '普通管理员不能修改管理员或超级管理员' })
       }
       // 规则二：普通管理员不能授予超管。否则他能造出一个自己按 deleteUser
       // 规则无权删除的超管，等于绕过整个模型把自己人抬上去。
       // 授 IsAdmin 仍然允许（目标本来是普通用户，改完是管理员，
       // 与 deleteUser 的不对称是刻意的：要收紧就一起改 deleteUser）
       if (toBool(IsSuperAdmin)) {
-        throw createError({ statusCode: 403, statusMessage: '普通管理员不能授予超级管理员' })
+        throw createError({ statusCode: 403, message: '普通管理员不能授予超级管理员' })
       }
     }
 

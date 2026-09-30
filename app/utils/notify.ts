@@ -108,18 +108,27 @@ function escapeHtml(str: string) {
  * 从 $fetch / FetchError 里取出服务端给的中文提示。
  *
  * ofetch 抛出的 e.message 形如 "[POST] http://host/api/x 403"，对用户没有意义，
- * 所以优先取 h3 错误体里的 statusMessage，噪音一律丢掉换成 fallback。
- * 注意 h3 的错误体是 { error, url, statusCode, statusMessage, message, stack }，
- * statusMessage 和 message 都在且通常同值；statusMessage 优先，message 兜底
- * （有些内部错误只填 message）。
+ * 所以从 h3 错误体里取，噪音一律丢掉换成 fallback。
+ *
+ * **必须 message 优先**，不能反过来。h3 错误体是
+ * { error, url, statusCode, statusMessage, message, stack }，两个字段都在：
+ *
+ *   - 我们的 createError({ statusCode, message: '中文' })：message=中文，
+ *     而 statusMessage 因为没填会被 h3 设成空串、Node 再兜底成 'Server Error'。
+ *     statusMessage 优先的话用户会看到 "Server Error"。
+ *   - 少数保留 ASCII statusMessage 的（Method not allowed / Internal Server Error）：
+ *     h3 会把 statusMessage 同步写进 message，两者同值，取哪个都一样。
+ *
+ * 这也是 h3 自己的建议 —— 中文/长文本属于 message，statusMessage 只放短 ASCII
+ * 原因短语，否则会被 sanitize 成空串。
  */
 export function toMessage(e: any, fallback = '操作失败'): string {
   const fromBody = [
+    e?.data?.message,
+    e?.response?._data?.message,
     e?.data?.statusMessage,
     e?.statusMessage,
-    e?.response?._data?.statusMessage,
-    e?.data?.message,
-    e?.response?._data?.message
+    e?.response?._data?.statusMessage
   ]
   for (const c of fromBody) {
     if (typeof c === 'string' && c.trim()) return c.trim()
