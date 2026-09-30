@@ -10,6 +10,8 @@ import assert from 'node:assert/strict'
 
 import {
   resolveShareBadge,
+  shouldShowPresetDot,
+  PRESET_DOT_TITLE,
   SHARE_BADGE_LABELS,
   SHARE_NONE,
   SHARE_SHARED,
@@ -101,6 +103,78 @@ describe('resolveShareBadge —— 文件夹图标的分享角标', () => {
       assert.equal(typeof SHARE_BADGE_LABELS[badge], 'string')
       assert.ok(SHARE_BADGE_LABELS[badge].length > 0, `${badge} 缺文案`)
     }
+  })
+})
+
+describe('shouldShowPresetDot —— 「设了但没生效」的红点', () => {
+  // 三个条件：继承态 + 设过东西（人员或公开） + presetActive === false
+  test('继承 + 有人 + 没生效 → 点', () => {
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_INHERIT, grantCount: 1, presetActive: false
+    }), true)
+  })
+
+  test('继承 + 公开 + 没生效 → 点', () => {
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_INHERIT, IsPublic: true, presetActive: false
+    }), true)
+  })
+
+  test('继承 + 有人 + 公开 + 没生效 → 点（一条就够）', () => {
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_INHERIT, IsPublic: true, grantCount: 3, presetActive: false
+    }), true)
+  })
+
+  // 条件 3 的两个反面
+  test('继承 + 设了但生效 → 不点', () => {
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_INHERIT, grantCount: 1, presetActive: true
+    }), false)
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_INHERIT, IsPublic: true, presetActive: true
+    }), false)
+  })
+
+  // presetActive 缺失 → 不点。宁可漏提示也不要给一份正常的分享挂「没生效」。
+  test('presetActive 缺失时不点（数据没经过判定）', () => {
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_INHERIT, grantCount: 1
+    }), false)
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_INHERIT, grantCount: 1, presetActive: null
+    }), false)
+  })
+
+  // 条件 2 的反面：什么都没设，就没有「没生效」这回事
+  test('继承 + 什么都没设 → 不点', () => {
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_INHERIT, IsPublic: false, grantCount: 0, presetActive: false
+    }), false)
+  })
+
+  // 条件 1 的反面：非继承态不存在「预设」
+  test('不分享 / 分享 + 没生效 → 不点（没有预设这回事）', () => {
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_NONE, grantCount: 1, presetActive: false
+    }), false)
+    assert.equal(shouldShowPresetDot({
+      Shared: SHARE_SHARED, IsPublic: true, presetActive: false
+    }), false)
+  })
+
+  test('Shared 脏值按继承处理，此时照样参与判定', () => {
+    assert.equal(shouldShowPresetDot({
+      Shared: null, grantCount: 1, presetActive: false
+    }), true)
+    assert.equal(shouldShowPresetDot({
+      Shared: [], grantCount: 1, presetActive: false
+    }), true, '空数组曾被误判成不分享，现在不会了')
+  })
+
+  test('红点有说明文案', () => {
+    assert.equal(typeof PRESET_DOT_TITLE, 'string')
+    assert.ok(PRESET_DOT_TITLE.length > 0)
   })
 })
 

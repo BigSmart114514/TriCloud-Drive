@@ -115,6 +115,11 @@ export interface OwnedFolder {
   IsPublic: boolean
   /** 我授权了多少人（folder_access 行数）。继承态下角标靠它区分「共享中」和默认态 */
   grantCount: number
+  /**
+   * 继承态下自己设的名单/公开当前生效吗（列表接口挂，别的路径可能没有）。
+   * 没人拍板（含根目录自己）或最近边界是「不分享」时为 false。
+   */
+  presetActive?: boolean
 }
 
 export interface OwnedFile {
@@ -133,6 +138,10 @@ export interface OwnedFile {
   IsPublic: boolean
   /** 该文件的直接授权（不含从父文件夹继承的） */
   grants: AccessGrant[]
+  /** grants.length。列表页的红点判定要「有没有设过人员」，直接用数组长度即可 */
+  grantCount?: number
+  /** 同 OwnedFolder.presetActive */
+  presetActive?: boolean
 }
 
 /**
@@ -691,6 +700,44 @@ export class FolderService {
     )
   }
 
+  /**
+   * 这个目录「继承态的预设」当前生效吗？列表页红点用。
+   *
+   * 预设 = 继承态下自己设的名单和公开。它们只是**预设**：整条链没人拍板时
+   * （根目录也算没人拍板），或者最近边界是「不分享」这道墙，它们都不生效。
+   * 这时属主会看到自己设了却没人能进，所以要标红点提示。
+   *
+   * 与 resolveAccess 的区别：不 JOIN folder_access、不算具体权限，只问
+   * 「有没有拍板者、最近的那个是不是墙」。所以跟访问者身份无关，属主视角也能用。
+   */
+  async isPresetActive(folderId: number): Promise<boolean> {
+    const res = await this.db
+      .prepare(`
+        WITH RECURSIVE up(id, parent_id, shared, depth) AS (
+          SELECT id, parent_id, Shared, 0 FROM folders WHERE id = ?
+          UNION ALL
+          SELECT f.id, f.parent_id, f.Shared, up.depth + 1
+          FROM folders f JOIN up ON f.id = up.parent_id
+        )
+        SELECT shared, depth FROM up ORDER BY depth ASC
+      `)
+      .bind(folderId)
+      .all()
+      .catch(() => ({ results: [] }))
+
+    const rows = res?.results || []
+    if (!rows.length) return false
+
+    // 没人拍板：整条链（含根目录自己）没有一个 Shared IN (0,1)
+    const boundary = rows.find(
+      (r: any) => Number(r.depth) > 0 && (Number(r.shared) === 0 || Number(r.shared) === 1)
+    )
+    if (!boundary) return false
+
+    // 最近的那个拍板者是「不分享」→ 墙 → 预设被挡住
+    return Number(boundary.shared) !== 0
+  }
+
   /** 该目录被授权给哪些人（展示用，位掩码已归一化） */
   async listGrants(folderId: number): Promise<AccessGrant[]> {
     const res = await this.db
@@ -766,8 +813,27 @@ export class FileService {
       list.push({ userId: Number(row.userId), permission: normalizePermission(row.permission) })
       map.set(id, list)
     }
-    for (const file of files) file.grants = map.get(file.id) || []
+    for (const file of files) {
+      const grants = map.get(file.id) || []
+      file.grants = grants
+      file.grantCount = grants.length
+    }
     return files
+  }
+
+  /**
+   * 这个文件「继承态的预设」当前生效吗？列表页红点用，语义见
+   * FolderService.isPresetActive。
+   *
+   * 文件不是树上的节点（不在 folders 表里），它的祖先链就是所在目录的链 ——
+   * 文件自己顶多算链的末端。所以直接委托给目录。
+   *
+   * folderId === null（根层文件）→ 上面什么都没有 = 没人拍板 = 预设不生效。
+   * 文件自己若是 Shared=1 那是明确表态，不依赖祖先，由调用方另行判定。
+   */
+  async isPresetActiveForFile(file: OwnedFile): Promise<boolean> {
+    if (file.folderId === null || file.folderId === undefined) return false
+    return this.folders.isPresetActive(Number(file.folderId))
   }
 
   /**

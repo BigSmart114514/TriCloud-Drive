@@ -65,6 +65,32 @@ export const SHARE_BADGE_LABELS: Record<ShareBadge, string> = {
   share: '已分享（按授权名单）'
 }
 
+/**
+ * 要不要在图标右下角点一个红点 —— 提示「你设的分享当前没生效」。
+ *
+ * 三个条件同时成立才点：
+ *   1. 继承态（只有继承态才存在「预设」这回事）
+ *   2. 确实设过东西（授权名单非空，或开了公开）—— 什么都没设就没有「没生效」
+ *   3. 预设没生效（`presetActive === false`）：整条链没人拍板，含根目录自己；
+ *      或者最近的那道边界是「不分享」，把它挡住了
+ *
+ * `presetActive` 缺失（undefined）时**不点**：那说明这条数据没经过判定
+ * （部分接口不返回它），宁可漏提示也不要给一份正常的分享挂个「没生效」。
+ */
+export function shouldShowPresetDot(input: {
+  Shared?: number | null
+  IsPublic?: boolean | null
+  grantCount?: number | null
+  presetActive?: boolean | null
+}): boolean {
+  if (normalizeShareMode(input.Shared) !== SHARE_INHERIT) return false
+  const hasSetting = input.IsPublic === true || Number(input.grantCount ?? 0) > 0
+  if (!hasSetting) return false
+  return input.presetActive === false
+}
+
+export const PRESET_DOT_TITLE = '已设置的分享当前未生效：上方没有「分享」节点，或被「不分享」挡住了'
+
 export const SHARE_MODE_LABELS: Record<number, string> = {
   [SHARE_NONE]: '不分享',
   [SHARE_SHARED]: '分享',

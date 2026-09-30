@@ -145,6 +145,26 @@ async function reset() {
   await sql.run('DELETE FROM folders')
 }
 
+/** db.ts FolderService.isPresetActive（db.ts:696）：只问「有没有拍板者、是不是墙」 */
+async function isPresetActive(folderId) {
+  const rows = await sql.all(
+    `WITH RECURSIVE up(id, parent_id, shared, depth) AS (
+       SELECT id, parent_id, Shared, 0 FROM folders WHERE id = ?
+       UNION ALL
+       SELECT f.id, f.parent_id, f.Shared, up.depth + 1
+       FROM folders f JOIN up ON f.id = up.parent_id
+     )
+     SELECT shared, depth FROM up ORDER BY depth ASC`,
+    [folderId]
+  )
+  if (!rows.length) return false
+  const boundary = rows.find(
+    (r) => Number(r.depth) > 0 && (Number(r.shared) === 0 || Number(r.shared) === 1)
+  )
+  if (!boundary) return false
+  return Number(boundary.shared) !== 0
+}
+
 /** db.ts resolveAccess（db.ts:511）的真实 SQL + 合并逻辑 */
 async function resolveAccess(userId, folderId) {
   const rows = await sql.all(
@@ -327,5 +347,82 @@ describe('继承态（Shared=2）—— 预设语义', () => {
     await mkFolder(2, 1, SHARE_SHARED, 1)
     await mkFolder(3, 2, SHARE_INHERIT, 0)
     assert.equal((await resolveAccess(900, 3)).mask, PERM_READ, '最近的边界是 2，它公开了')
+  })
+})
+
+describe('isPresetActive —— 红点判定用的「预设生效了吗」', () => {
+  test('根目录 + 继承 → 没人拍板 → false（根目录算阻止）', async () => {
+    await reset()
+    await mkFolder(1, null, SHARE_INHERIT, 1)
+    assert.equal(await isPresetActive(1), false)
+  })
+
+  test('上游是「分享」→ 预设生效', async () => {
+    await reset()
+    await mkFolder(1, null, SHARE_SHARED, 1)
+    await mkFolder(2, 1, SHARE_INHERIT, 0)
+    assert.equal(await isPresetActive(2), true)
+  })
+
+  // 用户明确要求：上游的边界墙是阻止时红点要点。根目录自身算不算墙
+  // 由 depth > 0 排除，所以「根目录设不分享」不影响它自己和子项的判定
+  // —— 子项看的是「最近的那个祖先边界」。
+  test('上游是「不分享」→ 墙 → 预设不生效', async () => {
+    await reset()
+    await mkFolder(1, null, SHARE_NONE, 0)
+    await mkFolder(2, 1, SHARE_INHERIT, 0)
+    assert.equal(await isPresetActive(2), false)
+  })
+
+  test('取最近的边界：中间有「分享」时，远处那道墙不算数', async () => {
+    await reset()
+    await mkFolder(1, null, SHARE_NONE, 0) // 远处是墙
+    await mkFolder(2, 1, SHARE_SHARED, 1) // 但这里是分享，就以近的为准
+    await mkFolder(3, 2, SHARE_INHERIT, 0)
+    assert.equal(await isPresetActive(3), true, '最近的边界是 2（分享）')
+  })
+
+  test('节点自己是边界不影响它自己的判定（depth > 0 排除了自身）', async () => {
+    await reset()
+    await mkFolder(1, null, SHARE_SHARED, 0)
+    await mkFolder(2, 1, SHARE_SHARED, 1) // 自己就是边界
+    // 2 自己的祖先是 1（分享）→ 生效。虽然它是明确的表态、红点规则本来
+    // 也不会点它，但这个方法本身要给出正确的祖先判定。
+    assert.equal(await isPresetActive(2), true)
+  })
+
+  test('全继承多级 → 没人拍板 → false', async () => {
+    await reset()
+    await mkFolder(1, null, SHARE_INHERIT, 0)
+    await mkFolder(2, 1, SHARE_INHERIT, 0)
+    await mkFolder(3, 2, SHARE_INHERIT, 1)
+    assert.equal(await isPresetActive(3), false)
+  })
+
+  test('不存在的目录 → false（查不到就不打扰）', async () => {
+    await reset()
+    assert.equal(await isPresetActive(999999), false)
+  })
+
+  // 一致性：isPresetActive 为 false 时，resolveAccess 对继承态节点必须给 0。
+  // 两者是同一套判定的两种实现（一个轻量一个完整），不一致就会红点骗人。
+  test('与 resolveAccess 判定一致（继承态节点）', async () => {
+    const cases = [
+      { tree: [[1, null, SHARE_INHERIT, 1], [2, 1, SHARE_INHERIT, 0]], want: false },
+      { tree: [[1, null, SHARE_SHARED, 1], [2, 1, SHARE_INHERIT, 0]], want: true },
+      { tree: [[1, null, SHARE_NONE, 0], [2, 1, SHARE_INHERIT, 0]], want: false },
+      { tree: [[1, null, SHARE_SHARED, 0], [2, 1, SHARE_NONE, 0], [3, 2, SHARE_INHERIT, 0]], want: false }
+    ]
+    for (const c of cases) {
+      await reset()
+      for (const [id, parent, S, P] of c.tree) await mkFolder(id, parent, S, P)
+      const leaf = c.tree[c.tree.length - 1][0]
+      const active = await isPresetActive(leaf)
+      assert.equal(active, c.want, `目录 ${leaf} 的 presetActive 应为 ${c.want}`)
+      const r = await resolveAccess(900, leaf)
+      if (!c.want) {
+        assert.equal(r.mask, 0, `presetActive=false 时 mask 必须是 0（目录 ${leaf}）`)
+      }
+    }
   })
 })

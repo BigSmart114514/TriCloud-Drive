@@ -44,6 +44,16 @@
               <UsersIcon v-else-if="folderBadges.get(folder.id) === 'users'" class="h-3 w-3 text-emerald-500" />
               <ShareIcon v-else class="h-3 w-3 text-blue-500" />
             </span>
+            <!--
+              右下角红点：继承态下设了分享但没生效。
+              用右下角而不是右上角，右上角已经被角标占了，两个叠在一起会糊。
+            -->
+            <span
+              v-if="showPresetDot(folder)"
+              class="absolute -bottom-0.5 -right-0.5 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"
+              :title="PRESET_DOT_TITLE"
+              :aria-label="PRESET_DOT_TITLE"
+            />
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="emit('navigate-folder', folder)">
             <p class="text-sm sm:text-base font-medium text-gray-900 truncate">{{ folder.name }}</p>
@@ -144,8 +154,15 @@
             @click.stop
             :title="`选择文件：${file.filename}`"
           />
-          <div class="shrink-0">
+          <div class="shrink-0 relative">
             <FileIcon class="h-8 w-8 text-gray-400" :filename="file.filename" />
+            <!-- 同文件夹：继承态下设了分享但没生效 -->
+            <span
+              v-if="showPresetDot(file)"
+              class="absolute -bottom-0.5 -right-0.5 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"
+              :title="PRESET_DOT_TITLE"
+              :aria-label="PRESET_DOT_TITLE"
+            />
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="emit('preview-file', file)">
             <p class="text-sm sm:text-base font-medium text-gray-900 truncate">{{ file.filename }}</p>
@@ -325,7 +342,7 @@ import { formatFileSize } from '~/utils/format'
 import { formatDateTime } from '~/utils/time'
 import FileIcon from '~/components/FileIcon.vue'
 import type { FileListFile, FileListFolder, FileListId } from '~~/types/file-list'
-import { resolveShareBadge, SHARE_BADGE_LABELS } from '~~/types/share'
+import { resolveShareBadge, shouldShowPresetDot, PRESET_DOT_TITLE, SHARE_BADGE_LABELS } from '~~/types/share'
 import type { ShareBadge } from '~~/types/share'
 import {
   ArrowDownTrayIcon,
@@ -456,6 +473,22 @@ const folderBadges = computed(() => {
   for (const f of props.folders) map.set(f.id, folderBadge(f))
   return map
 })
+
+/**
+ * 图标右下角那个红点：提示「继承态下设的分享当前没生效」。
+ *
+ * 与 folderBadge 共用 showShareBadge 这个开关 —— 两者都是「只有属主才需要知道」
+ * 的信息，共享清单里那些是别人的目录，显示出来会误导。
+ * 判定规则见 types/share.ts 的 shouldShowPresetDot。
+ */
+const showPresetDot = (item: FileListFile | FileListFolder): boolean =>
+  props.showShareBadge
+  && shouldShowPresetDot({
+    Shared: item.Shared,
+    IsPublic: item.IsPublic,
+    grantCount: item.grantCount,
+    presetActive: item.presetActive
+  })
 
 /**
  * 悬停即出、移开即收；点击钉住，方便停留和复制文字。

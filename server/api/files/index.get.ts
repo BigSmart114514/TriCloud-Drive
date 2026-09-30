@@ -117,6 +117,23 @@ export default defineEventHandler(async (event) => {
     const childFolders = await folderService.listChildren(subtreeOwnerId, folderId)
     const allFiles = await fileService.listFolderContents(folderId, subtreeOwnerId)
 
+    /**
+     * presetActive = 「继承态下自己设的名单/公开」当前生效吗？
+     *
+     * 继承是预设：设了但整条链没人拍板（含根目录自己）、或最近边界是「不分享」
+     * 那道墙时，预设都不生效。属主这时看到的是「我设了却没人能进」，
+     * 前端据此在图标右下角点一个红点。
+     *
+     * 逐条查是因为每个子项的最近边界各不相同（子目录可能自己就是边界）。
+     * 与访问者身份无关，属主视角也查 —— 这正是属主最需要看到的场景。
+     */
+    const withPreset = async <T extends { id: number }>(rows: T[], check: (r: T) => Promise<boolean>) => {
+      for (const r of rows) (r as any).presetActive = await check(r)
+      return rows
+    }
+    await withPreset(childFolders, (f) => folderService.isPresetActive(f.id))
+    await withPreset(allFiles, (f) => fileService.isPresetActiveForFile(f))
+
     // 被授权人只看得到自己读得到的：
     // 文件按目录已解析出的权限位过滤；子文件夹逐个 resolveAccess（各自的边界不同）
     let folders = childFolders
