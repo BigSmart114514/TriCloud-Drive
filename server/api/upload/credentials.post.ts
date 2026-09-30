@@ -3,6 +3,7 @@ import { getDb } from '~~/server/utils/db-adapter'
 import crypto from 'crypto'
 import { UserService, FileService, FolderService } from '~~/server/utils/db'
 import { PERM_WRITE } from '~~/types/share'
+import { isExpired } from '~~/server/utils/time'
 
 export default defineEventHandler(async (event) => {
   // 处理 CORS 预检
@@ -21,36 +22,8 @@ export default defineEventHandler(async (event) => {
     'Access-Control-Allow-Headers': 'Content-Type, Authorization, X-Requested-With'
   })
 
-  function parseSqlDateTime(input: any): Date | null {
-    if (!input) return null
-    if (input instanceof Date) return input
-    if (typeof input === 'number') {
-      const d = new Date(input)
-      return isNaN(d.getTime()) ? null : d
-    }
-    const s = String(input).trim()
-    if (!s) return null
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/)
-    if (m) {
-      const y = parseInt(m[1], 10)
-      const mo = parseInt(m[2], 10)
-      const d = parseInt(m[3], 10)
-      const h = parseInt(m[4], 10)
-      const mi = parseInt(m[5], 10)
-      const se = parseInt(m[6], 10)
-      const dt = new Date(y, mo - 1, d, h, mi, se)
-      return isNaN(dt.getTime()) ? null : dt
-    }
-    const dt = new Date(s.replace(' ', 'T'))
-    return isNaN(dt.getTime()) ? null : dt
-  }
-
-  function isExpired(expireAt: any): boolean {
-    const dt = parseSqlDateTime(expireAt)
-    if (!dt) return false
-    return Date.now() >= dt.getTime()
-  }
-
+  // parseSqlDateTime / isExpired 都搬到 server/utils/time.ts 了（原来在这
+  // 和 save.post.ts 各抄一份，都用本地时区方法，与 DB 的 UTC 存法不同源）。
   function normalizeFolderId(input: any): number | null {
     if (input === undefined || input === null || input === '' || input === 'root' || input === '0' || input === 0) {
       return null
@@ -145,8 +118,12 @@ export default defineEventHandler(async (event) => {
     const uuid = crypto.randomUUID()
     const fileExtension = filename.includes('.') ? filename.substring(filename.lastIndexOf('.')).toLowerCase() : ''
     const now = new Date()
-    const year = now.getFullYear()
-    const month = String(now.getMonth() + 1).padStart(2, '0')
+    // 用 UTC 而不是本地：服务器时区不是 UTC 时，月末/年末边界会把文件分到
+    // 相邻的月份桶里（本地 1/1 凌晨 = UTC 前一天），同一批文件散到两个目录。
+    // 注意这只影响**新**文件，已有对象的路径不变（路径里本来就带 uuid，
+    // 不会撞车），也不会去动 COS 上的存量数据。
+    const year = now.getUTCFullYear()
+    const month = String(now.getUTCMonth() + 1).padStart(2, '0')
     const safeFilename = `${uuid}${fileExtension}`
     const fileKey = `users/${user.id}/${year}${month}/${safeFilename}`
 

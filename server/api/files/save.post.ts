@@ -4,48 +4,12 @@ import { FileService, FolderService } from '~~/server/utils/db'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { userExpiredError, userNotFindError, dbConnectionError, upload403Error } from '~~/types/error'
 import { DEFAULT_SHARE_MODE, PERM_WRITE } from '~~/types/share'
+import { isExpired, nowSqlString } from '~~/server/utils/time'
 
 export default defineEventHandler(async (event) => {
-  function parseSqlDateTime(input: any): Date | null {
-    if (!input) return null
-    if (input instanceof Date) return input
-    if (typeof input === 'number') {
-      const d = new Date(input)
-      return isNaN(d.getTime()) ? null : d
-    }
-    const s = String(input).trim()
-    if (!s) return null
-    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2}):(\d{2})$/)
-    if (m) {
-      const y = parseInt(m[1], 10)
-      const mo = parseInt(m[2], 10)
-      const d = parseInt(m[3], 10)
-      const h = parseInt(m[4], 10)
-      const mi = parseInt(m[5], 10)
-      const se = parseInt(m[6], 10)
-      const dt = new Date(y, mo - 1, d, h, mi, se)
-      return isNaN(dt.getTime()) ? null : dt
-    }
-    const dt = new Date(s.replace(' ', 'T'))
-    return isNaN(dt.getTime()) ? null : dt
-  }
-
-  function isExpired(expireAt: any): boolean {
-    const dt = parseSqlDateTime(expireAt)
-    if (!dt) return false
-    return Date.now() >= dt.getTime()
-  }
-
-  function nowSqlString(): string {
-    const now = new Date()
-    const Y = now.getFullYear()
-    const M = String(now.getMonth() + 1).padStart(2, '0')
-    const D = String(now.getDate()).padStart(2, '0')
-    const h = String(now.getHours()).padStart(2, '0')
-    const m = String(now.getMinutes()).padStart(2, '0')
-    const s = String(now.getSeconds()).padStart(2, '0')
-    return `${Y}-${M}-${D} ${h}:${m}:${s}`
-  }
+  // parseSqlDateTime / isExpired / nowSqlString 都搬到 server/utils/time.ts 了。
+  // 这里原来三个都用**本地时区**方法（new Date(y, mo-1, …)、getFullYear()），
+  // 两端一致所以过期判断自己看不出错，但和 DB 里其它 UTC 写入的数据不同源。
 
   function normalizeFolderId(input: any): number | null {
     if (input === undefined || input === null || input === '' || input === 'root' || input === '0' || input === 0) return null

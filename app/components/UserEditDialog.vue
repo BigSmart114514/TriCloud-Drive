@@ -257,7 +257,7 @@ import {
   XMarkIcon
 } from '@heroicons/vue/24/outline'
 import { formatBytes, parseBytes } from '~/utils/size'
-import { fromDatetimeLocal } from '~/utils/datetimeLocal'
+import { parseExpireAt } from '~/utils/datetimeLocal'
 
 type SizeKey = 'maxStorage' | 'usedStorage' | 'maxDownload' | 'usedDownload'
 
@@ -331,6 +331,18 @@ function normalizeSize(key: SizeKey) {
   draft.value[key] = formatBytes(parseBytes(draft.value[key] as string | number))
 }
 
+/**
+ * blur 时只做**格式校验 + 补秒**，不做时区转换。
+ *
+ * 以前这里调 fromDatetimeLocal 再把结果写回 v-model，于是用户输入的本地墙钟
+ * 被减掉 TimeZone 偏移后**直接显示在输入框里** —— 填「明天 9 点」，松手变成
+ * 「明天 1 点」。时区转换只在保存时做一次（父组件的 submit），输入框里始终
+ * 是用户填的本地时间。
+ *
+ * 秒位要先补再校验：datetime-local 在没碰秒的时候给的是 "2027-01-01T09:00"，
+ * 而 parseExpireAt 的正则要求 6 段（含秒）。不补就等于把用户刚填的值判成非法
+ * 然后清空 —— 表现就是「改了没反应」。
+ */
 function normalizeExpire() {
   if (!draft.value) return
   const raw = (draft.value.expire_at ?? '').toString().trim()
@@ -338,13 +350,13 @@ function normalizeExpire() {
     draft.value.expire_at = ''
     return
   }
-  const normalized = fromDatetimeLocal(raw)
-  if (!normalized) {
+  // 与 fromDatetimeLocal 同一套规则：补秒后再校验
+  const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(raw) ? `${raw}:00` : raw
+  if (!parseExpireAt(withSeconds)) {
     draft.value.expire_at = ''
     return
   }
-  // 保持为 datetime-local 需要的格式（带 T，含秒）
-  draft.value.expire_at = normalized.replace(' ', 'T')
+  draft.value.expire_at = withSeconds
 }
 </script>
 
