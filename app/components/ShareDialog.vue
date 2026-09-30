@@ -105,36 +105,58 @@
                 <li
                   v-for="g in grants"
                   :key="g.userId"
-                  class="flex items-center gap-2.5 rounded-lg border border-gray-100 px-2.5 py-2"
+                  class="rounded-lg border border-gray-100 px-2.5 py-2"
                 >
-                  <span
-                    class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-slate-400 to-slate-500 text-xs font-semibold text-white"
+                  <!-- 上行：头像 + 名字 + 移除 -->
+                  <div class="flex items-center gap-2.5">
+                    <span
+                      class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-slate-400 to-slate-500 text-xs font-semibold text-white"
+                    >
+                      {{ (g.user?.username || g.user?.email || 'U').slice(0, 1).toUpperCase() }}
+                    </span>
+                    <span class="min-w-0 flex-1">
+                      <span class="block truncate text-sm text-gray-900">{{ g.user?.username || '未知用户' }}</span>
+                      <span class="block truncate text-[11px] text-gray-500">{{ g.user?.email || '—' }}</span>
+                    </span>
+                    <button
+                      type="button"
+                      class="shrink-0 rounded-md p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                      :disabled="busy"
+                      :aria-label="`移除 ${g.user?.username}`"
+                      title="移除"
+                      @click="removeGrant(g.userId)"
+                    >
+                      <XMarkIcon class="h-4 w-4" />
+                    </button>
+                  </div>
+                  <!--
+                    下行：四个权限位独立勾选。原来是一个三档 <select>，
+                    加了 download 之后 16 种组合下拉表达不了（read ⊂ write ⊂ delete
+                    那条单轴也已被打破），所以改成按位复选。
+                  -->
+                  <div
+                    class="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 pl-10"
+                    role="group"
+                    :aria-label="`${g.user?.username} 的权限`"
                   >
-                    {{ (g.user?.username || g.user?.email || 'U').slice(0, 1).toUpperCase() }}
-                  </span>
-                  <span class="min-w-0 flex-1">
-                    <span class="block truncate text-sm text-gray-900">{{ g.user?.username || '未知用户' }}</span>
-                    <span class="block truncate text-[11px] text-gray-500">{{ g.user?.email || '—' }}</span>
-                  </span>
-                  <select
-                    class="shrink-0 rounded-md border border-gray-200 bg-white px-1.5 py-1 text-xs text-gray-700 focus:border-indigo-400 focus:outline-none"
-                    :value="g.permission"
-                    :disabled="busy"
-                    :aria-label="`修改 ${g.user?.username} 的权限`"
-                    @change="changePermission(g.userId, ($event.target as HTMLSelectElement).value)"
-                  >
-                    <option v-for="p in PERM_OPTIONS" :key="p.value" :value="p.value">{{ p.label }}</option>
-                  </select>
-                  <button
-                    type="button"
-                    class="shrink-0 rounded-md p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
-                    :disabled="busy"
-                    :aria-label="`移除 ${g.user?.username}`"
-                    title="移除"
-                    @click="removeGrant(g.userId)"
-                  >
-                    <XMarkIcon class="h-4 w-4" />
-                  </button>
+                    <label
+                      v-for="p in PERM_BIT_OPTIONS"
+                      :key="p.value"
+                      class="inline-flex cursor-pointer items-center gap-1 text-[11px] text-gray-600 select-none"
+                      :class="busy ? 'opacity-50' : ''"
+                      :title="p.hint"
+                    >
+                      <input
+                        type="checkbox"
+                        class="h-3.5 w-3.5 rounded border-gray-300 text-indigo-600"
+                        :checked="(g.permission & p.value) !== 0"
+                        :disabled="busy"
+                        @change="togglePermission(g.userId, p.value, ($event.target as HTMLInputElement).checked)"
+                      />
+                      {{ p.label }}
+                    </label>
+                    <span class="ml-auto text-[11px] text-gray-400">{{ formatPermission(g.permission) }}</span>
+                  </div>
                 </li>
               </ul>
             </div>
@@ -203,7 +225,10 @@ import { ShareService } from '~/services/share.service'
 import type { ShareCandidate, ShareGrant, ShareTargetType } from '~/services/share.service'
 import { notify, notifyError } from '~/utils/notify'
 import {
-  PERM_ALL,
+  formatPermission,
+  normalizePermission,
+  PERM_DELETE,
+  PERM_DOWNLOAD,
   PERM_READ,
   PERM_WRITE,
   SHARE_INHERIT,
@@ -241,10 +266,18 @@ const MODE_OPTIONS = [
   { value: SHARE_INHERIT, label: '继承' }
 ]
 
-const PERM_OPTIONS = [
-  { value: PERM_READ, label: '只读' },
-  { value: PERM_READ | PERM_WRITE, label: '读写' },
-  { value: PERM_ALL, label: '读写删' }
+/**
+ * 权限位复选框。四个位**相互独立**，所以是复选框而不是三档下拉 ——
+ * 「能看能改但不许下载」这类组合下拉表达不了。
+ *
+ * 下载那一项的 hint 要点明预览也走它：预览调的是 /api/files/download，
+ * 一样扣下载流量，所以两者由同一个位管。
+ */
+const PERM_BIT_OPTIONS = [
+  { value: PERM_READ, label: '查看', hint: '列目录、看文件信息' },
+  { value: PERM_WRITE, label: '编辑', hint: '上传、重命名、移动' },
+  { value: PERM_DELETE, label: '删除', hint: '删除文件或文件夹' },
+  { value: PERM_DOWNLOAD, label: '下载', hint: '下载文件；预览也走这里，一样消耗下载流量' }
 ]
 
 const mode = ref<number>(SHARE_INHERIT)
@@ -374,14 +407,43 @@ async function submitGrants(next: ShareGrant[], okMessage: string) {
   return false
 }
 
-async function changePermission(userId: number, value: string) {
-  const permission = Number(value)
+/**
+ * 勾/取消某一个权限位。
+ *
+ * 每次只改一位、立刻提交（而不是「攒一串改动再一起存」），和原来的下拉
+ * 行为一致 —— 用户点一下就该看到服务端确认的权威值。
+ *
+ * 「全权但不许下载」这个组合**表达不了**：15 去掉 download 位正好是 7，
+ * 而 7 是存量数据的「全权」编码，normalizePermission 会把它补回 15
+ * （见 types/share.ts 的 LEGACY_FULL_MASK）。所以从全权状态单独取消
+ * 「下载」会被拒绝，提示用户先去掉查看/编辑/删除中的任意一项 ——
+ * 那才是「不给下载」的真实意图。
+ *
+ * 提交前过一遍 normalizePermission：剔除未定义的位，避免脏掩码落库。
+ */
+async function togglePermission(userId: number, bit: number, on: boolean) {
+  const target = grants.value.find((g) => g.userId === userId)
+  if (!target) return
+
+  if (!on && bit === PERM_DOWNLOAD) {
+    const others = PERM_READ | PERM_WRITE | PERM_DELETE
+    if ((target.permission & others) === others) {
+      notify('「全权但不许下载」这个组合无法表示（它与「读写删」的编码相同）。请先取消查看、编辑或删除中的一项。', 'error')
+      return
+    }
+  }
+
+  const raw = on ? target.permission | bit : target.permission & ~bit
+  const permission = normalizePermission(raw)
   const next = grants.value.map((g) => (g.userId === userId ? { ...g, permission } : g))
   await submitGrants(next, '权限已更新')
 }
 
 async function addGrant(c: ShareCandidate) {
-  const permission = PERM_READ | PERM_WRITE
+  // 默认给「查看 + 编辑 + 下载」，不含删除。加进来就能正常用（能看能预览能改），
+  // 但删不了 —— 删除是不可逆的，留给属主显式勾。要下载是因为预览走下载接口，
+  // 不给的话对方连预览都做不到，等于只给了个目录浏览。
+  const permission = PERM_READ | PERM_WRITE | PERM_DOWNLOAD
   const next = [...grants.value, { userId: c.id, permission, user: { username: c.username, email: c.email } }]
   if (await submitGrants(next, `已授权给 ${c.username}`)) {
     candidates.value = candidates.value.filter((x) => x.id !== c.id)

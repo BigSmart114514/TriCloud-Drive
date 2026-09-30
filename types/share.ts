@@ -120,26 +120,68 @@ export function normalizeShareMode(value: any): ShareMode {
   return SHARE_INHERIT
 }
 
-// 权限位掩码。包含关系 read ⊂ write ⊂ delete
-// 存库时一律用 normalizePermission 归一化，勾了 delete 就写 7 而不是 4
-export const PERM_READ = 1
-export const PERM_WRITE = 2
-export const PERM_DELETE = 4
-export const PERM_ALL = PERM_READ | PERM_WRITE | PERM_DELETE
+// 权限位掩码。四个**相互独立**的位，不再是 read ⊂ write ⊂ delete 那条单轴。
+//
+// 为什么独立：download 是正交的。「能看但不许下载」是真实存在的需求 ——
+// 预览走的就是 /api/files/download（会扣下载流量），所以能不能预览由
+// download 位决定，而能不能看由 read 位决定。两者要能分开配。
+//
+// 单轴模型（勾了 delete 就等于全部）表达不了这种组合，所以
+// normalizePermission 不再压档，见下面的说明。
+export const PERM_READ = 1      // 看：列目录、读元信息
+export const PERM_WRITE = 2     // 写：上传、重命名、移动
+export const PERM_DELETE = 4    // 删：删文件/目录
+export const PERM_DOWNLOAD = 8  // 下载：/api/files/download，**预览也走它**（会扣下载流量）
 
-export type SharePermission = typeof PERM_READ | typeof PERM_WRITE | typeof PERM_DELETE
+export const PERM_ALL = PERM_READ | PERM_WRITE | PERM_DELETE | PERM_DOWNLOAD
+
+/**
+ * 加 download 位之前的「全权」，值 7。
+ *
+ * 存量授权名单存的都是 1/3/7，不含 download 位。加了新位之后这些行按字面
+ * 解释会变成「不能下载」，等于存量被授权人突然既下不了也预览不了。所以读端
+ * 兼容：只要勾了 delete（旧模型里的「全权」），就补上 download 位。
+ *
+ * 数据库不用动（schema 的 CHECK 是 permission >= 0，加位无需重建表），
+ * 也没有写迁移 —— 一旦某个名单被重新保存，它就会按新语义落库。
+ */
+const LEGACY_FULL_MASK = PERM_READ | PERM_WRITE | PERM_DELETE
+
+/** 新增位。给旧数据补位时用，UI 提交时不要走这里 */
+export const PERM_BITS = [PERM_READ, PERM_WRITE, PERM_DELETE, PERM_DOWNLOAD] as const
+
+export type SharePermission = typeof PERM_READ | typeof PERM_WRITE | typeof PERM_DELETE | typeof PERM_DOWNLOAD
 
 export interface AccessGrant {
   userId: number
   permission: number
 }
 
+/**
+ * 归一化权限位：**按位独立**，不再压成「只读/读写/读写删」三档。
+ *
+ * 以前是单轴的（勾了 delete 就返回 PERM_ALL），那套逻辑会把「可读+可下载
+ * 但不能写」压成只读，download 位直接被丢掉。现在只做两件事：
+ *   1. 丢掉未定义的位（挡住脏数据）
+ *   2. 给旧数据补 download 位（见 LEGACY_FULL_MASK）
+ */
 export function normalizePermission(mask: number): number {
   const m = Number(mask) || 0
-  if (m & PERM_DELETE) return PERM_ALL
-  if (m & PERM_WRITE) return PERM_READ | PERM_WRITE
-  if (m & PERM_READ) return PERM_READ
-  return 0
+  if (!Number.isFinite(m) || m <= 0) return 0
+
+  let out = 0
+  for (const bit of PERM_BITS) if (m & bit) out |= bit
+
+  // 旧数据兼容：旧模型的「全权」是 7，含义上等价于新模型的全权 15。
+  // 判定条件是「三个旧位全勾」—— 旧模型里 delete 那档写的就是 7，
+  // 只读(1)/读写(3) 明确不含下载意图，保持原样。
+  //
+  // 由此带来一个已知取舍：新 UI 里主动配出 7（可读可写可删但不许下载）也会被
+  // 补上 download 位。位掩码本身区分不了「存量 7」和「新配 7」，要区分得加
+  // 版本位或独立列 —— 对这个组合的实用价值来说属于过度设计，需要时再加。
+  if (out === LEGACY_FULL_MASK) out |= PERM_DOWNLOAD
+
+  return out
 }
 
 export function hasPermission(mask: number, need: number): boolean {
@@ -152,10 +194,43 @@ export function readOnly(mask: number): boolean {
   return hasPermission(mask, PERM_READ) && !hasPermission(mask, PERM_WRITE)
 }
 
+/**
+ * 权限位的标签，以及把掩码渲染成一句中文。
+ *
+ * PERMISSION_LABELS 保留是为了兼容 share/list.get.ts（它按掩码查标签返回），
+ * 但四位独立后掩码有 16 种，穷举不现实 —— 新代码用 formatPermission()。
+ */
 export const PERMISSION_LABELS: Record<number, string> = {
   [PERM_READ]: '只读',
   [PERM_READ | PERM_WRITE]: '读写',
-  [PERM_ALL]: '读写删'
+  [PERM_READ | PERM_WRITE | PERM_DELETE]: '读写删',
+  [PERM_ALL]: '读写删+下载'
+}
+
+/** 单个位的中文名。UI 的复选框和权限摘要都用它 */
+export const PERM_BIT_LABELS: Record<number, string> = {
+  [PERM_READ]: '查看',
+  [PERM_WRITE]: '编辑',
+  [PERM_DELETE]: '删除',
+  [PERM_DOWNLOAD]: '下载'
+}
+
+/**
+ * 掩码 → 中文摘要。
+ *
+ * 顺序固定为 查看/编辑/删除/下载，与 UI 复选框的排列一致。
+ * 四位全勾显示「全部」，其余逐位拼。
+ *
+ * 「下载」这一项要连预览一起管：预览走的就是 /api/files/download，
+ * 会扣下载流量，所以两者用同一个位。
+ */
+export function formatPermission(mask: number): string {
+  const m = normalizePermission(mask)
+  if (m === 0) return '无权限'
+  if (m === PERM_ALL) return '全部权限'
+  return PERM_BITS.map((bit) => (m & bit ? PERM_BIT_LABELS[bit] : null))
+    .filter(Boolean)
+    .join(' / ')
 }
 
 /**

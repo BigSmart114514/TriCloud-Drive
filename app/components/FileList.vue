@@ -342,7 +342,13 @@ import { formatFileSize } from '~/utils/format'
 import { formatDateTime } from '~/utils/time'
 import FileIcon from '~/components/FileIcon.vue'
 import type { FileListFile, FileListFolder, FileListId } from '~~/types/file-list'
-import { resolveShareBadge, shouldShowPresetDot, PRESET_DOT_TITLE, SHARE_BADGE_LABELS } from '~~/types/share'
+import {
+  formatPermission,
+  resolveShareBadge,
+  shouldShowPresetDot,
+  PRESET_DOT_TITLE,
+  SHARE_BADGE_LABELS
+} from '~~/types/share'
 import type { ShareBadge } from '~~/types/share'
 import {
   ArrowDownTrayIcon,
@@ -428,12 +434,6 @@ const shareActionOf = (item: FileListFile | FileListFolder) => props.shareAction
 
 /* ---------- 「你对这个条目所有的权限」 ---------- */
 
-const PERM_LABELS: { key: string; label: string }[] = [
-  { key: 'read', label: '读' },
-  { key: 'write', label: '写' },
-  { key: 'delete', label: '删' }
-]
-
 const SOURCE_LABELS: Record<string, string> = {
   owner: '我是属主',
   self: '直接授权给我',
@@ -452,10 +452,10 @@ const permInfo = (item: FileListFile | FileListFolder) => {
     isPublicSource: src === 'public'
   }
 }
-const permLabel = (mask: number) => (mask === 0 ? '无权限' : PERM_LABELS.map(p => {
-  const bit = p.key === 'read' ? 1 : p.key === 'write' ? 2 : 4
-  return mask & bit ? p.label : ''
-}).filter(Boolean).join(' / '))
+// 原来这里用三元表达式把 'read'→1、'write'→2、'delete'→4 硬编码出来，
+// 加 download 位时就会漏掉。现在直接用 types/share 的位常量和格式化函数，
+// 位定义改一处这里自动跟上。
+const permLabel = (mask: number) => formatPermission(mask)
 const sourceLabel = (src: string) => SOURCE_LABELS[src] ?? '未知'
 
 /**

@@ -871,11 +871,16 @@ export class FileService {
    * 错误口径：完全没有访问权 → 404（与不存在相同，避免探测）；
    *           有访问权但权限不够 → 403。
    */
-  async findAccessibleByKey(userId: number, fileKey: string, need: number): Promise<OwnedFile> {
+  async findAccessibleByKey(
+    userId: number,
+    fileKey: string,
+    need: number,
+    deniedMessage?: string
+  ): Promise<OwnedFile> {
     const row = await this.db.prepare('SELECT * FROM files WHERE file_key = ?').bind(fileKey).first()
     if (!row) throw fileNotFoundError
     const [file] = await this.attachAccess([this.toOwned(row)])
-    return this.ensureAccess(userId, file!, need)
+    return this.ensureAccess(userId, file!, need, deniedMessage)
   }
 
   async findAccessibleById(userId: number, fileId: number, need: number): Promise<OwnedFile> {
@@ -895,12 +900,17 @@ export class FileService {
     return out
   }
 
-  private async ensureAccess(userId: number, file: OwnedFile, need: number): Promise<OwnedFile> {
+  private async ensureAccess(
+    userId: number,
+    file: OwnedFile,
+    need: number,
+    deniedMessage = '该文件的权限不足'
+  ): Promise<OwnedFile> {
     if (file.userId === userId) return file
     const resolved = await this.resolveAccessForFile(userId, file)
     if (resolved.mask === 0) throw fileNotFoundError
     if (!hasPermission(resolved.mask, need)) {
-      throw createError({ statusCode: 403, message: '该文件的权限不足' })
+      throw createError({ statusCode: 403, message: deniedMessage })
     }
     return file
   }

@@ -24,8 +24,12 @@ import {
   SHARE_MODE_LABELS,
   PERM_READ,
   PERM_WRITE,
+  PERM_DELETE,
+  PERM_DOWNLOAD,
   PERM_ALL,
-  PERMISSION_LABELS
+  PERM_BIT_LABELS,
+  PERMISSION_LABELS,
+  formatPermission
 } from '../types/share.ts'
 
 describe('resolveShareBadge —— 文件夹图标的分享角标', () => {
@@ -220,26 +224,87 @@ describe('isShareBoundary —— 只有继承不是边界', () => {
   })
 })
 
-describe('权限位掩码', () => {
-  test('normalizePermission 归一化成包含关系 read ⊂ write ⊂ delete', () => {
+describe('权限位掩码 —— 四个相互独立的位', () => {
+  test('位的值不冲突', () => {
+    assert.equal(PERM_READ, 1)
+    assert.equal(PERM_WRITE, 2)
+    assert.equal(PERM_DELETE, 4)
+    assert.equal(PERM_DOWNLOAD, 8)
+    assert.equal(PERM_ALL, 15)
+  })
+
+  // normalizePermission 从「单轴压档」改成「按位独立」。
+  // 旧实现是 if (m & DELETE) return PERM_ALL 那种，会把
+  // 「可读+可下载但不能写」压成只读，download 位直接丢掉 ——
+  // 这正是加独立第四位必须一起改的原因。
+  test('normalizePermission 按位独立，不再压成三档', () => {
     assert.equal(normalizePermission(PERM_READ), PERM_READ)
     assert.equal(normalizePermission(PERM_READ | PERM_WRITE), PERM_READ | PERM_WRITE)
     assert.equal(normalizePermission(PERM_ALL), PERM_ALL)
-    // 勾了 delete 就是全权，不是 4
-    assert.equal(normalizePermission(PERM_READ | 4), PERM_ALL)
     assert.equal(normalizePermission(0), 0)
     assert.equal(normalizePermission(null), 0)
     assert.equal(normalizePermission(NaN), 0)
+  })
+
+  test('「能看+能下载但不能写删」这种组合不再被压掉', () => {
+    const combo = PERM_READ | PERM_DOWNLOAD   // 9
+    assert.equal(normalizePermission(combo), combo, 'download 位必须保住')
+    assert.equal(hasPermission(combo, PERM_READ), true)
+    assert.equal(hasPermission(combo, PERM_DOWNLOAD), true)
+    assert.equal(hasPermission(combo, PERM_WRITE), false)
+    assert.equal(hasPermission(combo, PERM_DELETE), false)
+  })
+
+  test('「能改能删但不给看」也能表达（位独立才做得到）', () => {
+    const combo = PERM_WRITE | PERM_DELETE    // 6
+    assert.equal(normalizePermission(combo), combo)
+    assert.equal(hasPermission(combo, PERM_READ), false)
+    assert.equal(hasPermission(combo, PERM_WRITE), true)
+  })
+
+  // 存量兼容：DB 里现存的名单是 1/3/7，不含 download 位。
+  // 7 在旧模型里是「全权」，语义上等价于新模型的全权 15，读端补位。
+  // 不迁数据 —— schema 的 CHECK 是 permission >= 0，加位无需重建表。
+  test('存量 7 被读成全权 15（不迁数据）', () => {
+    assert.equal(normalizePermission(7), 15)
+  })
+
+  test('存量的 1 和 3 不补位（明确不含下载意图）', () => {
+    assert.equal(normalizePermission(1), 1, '只读 → 仍不能下载')
+    assert.equal(normalizePermission(3), 3, '读写 → 仍不能下载')
+    assert.equal(hasPermission(3, PERM_DOWNLOAD), false)
+  })
+
+  test('已含 download 位的 15 不受影响', () => {
+    assert.equal(normalizePermission(15), 15)
+  })
+
+  test('未定义的位被剔除', () => {
+    assert.equal(normalizePermission(PERM_READ | 16), PERM_READ)
+    assert.equal(normalizePermission(16), 0)
+    assert.equal(normalizePermission(PERM_ALL | 256), PERM_ALL)
   })
 
   test('hasPermission 用包含判断，不是相等判断', () => {
     assert.equal(hasPermission(PERM_ALL, PERM_READ), true)
     assert.equal(hasPermission(PERM_ALL, PERM_ALL), true)
     assert.equal(hasPermission(PERM_READ | PERM_WRITE, PERM_READ), true)
-    // 有写但没删，不能满足 delete
     assert.equal(hasPermission(PERM_READ | PERM_WRITE, PERM_ALL), false)
     assert.equal(hasPermission(PERM_READ, PERM_READ | PERM_WRITE), false)
     assert.equal(hasPermission(0, PERM_READ), false)
+    // 下载与其它位互不蕴含
+    assert.equal(hasPermission(PERM_READ, PERM_DOWNLOAD), false)
+    assert.equal(hasPermission(PERM_READ | PERM_WRITE, PERM_DOWNLOAD), false)
+  })
+
+  // 「全权但不许下载」= 15 去掉 8 = 7，而这个 7 会被当成存量全权补回 download。
+  // 也就是说这个组合在当前编码下**无法表达** —— ShareDialog 因此禁止从全权
+  // 里单独取消「下载」（要取消得同时去掉 read/write/delete 中的任意一项）。
+  // 这条测试把这个已知限制钉住，避免以后有人误以为它能用。
+  test('已知限制：7 被读成全权，「全权但不许下载」表达不了', () => {
+    assert.equal(PERM_ALL ^ PERM_DOWNLOAD, 7)
+    assert.equal(normalizePermission(7), PERM_ALL)
+    assert.equal(hasPermission(PERM_ALL ^ PERM_DOWNLOAD, PERM_DOWNLOAD), true, '7 会补回 download')
   })
 
   test('readOnly：只读 = 有读且无写', () => {
@@ -247,10 +312,36 @@ describe('权限位掩码', () => {
     assert.equal(readOnly(PERM_READ | PERM_WRITE), false)
     assert.equal(readOnly(PERM_ALL), false)
     assert.equal(readOnly(0), false)
+    // 可读+可下载但不能写，仍然算「只读」范畴
+    assert.equal(readOnly(PERM_READ | PERM_DOWNLOAD), true)
   })
 
-  test('PERMISSION_LABELS 覆盖所有归一化后的掩码', () => {
-    for (const mask of [PERM_READ, PERM_READ | PERM_WRITE, PERM_ALL]) {
+  test('formatPermission 渲染四种位', () => {
+    assert.equal(formatPermission(0), '无权限')
+    assert.equal(formatPermission(PERM_ALL), '全部权限')
+    assert.equal(formatPermission(PERM_READ), '查看')
+    assert.equal(formatPermission(PERM_READ | PERM_WRITE), '查看 / 编辑')
+    assert.equal(formatPermission(PERM_DOWNLOAD), '下载')
+    assert.equal(formatPermission(PERM_READ | PERM_DOWNLOAD), '查看 / 下载')
+  })
+
+  test('formatPermission 按固定顺序渲染（位顺序在 UI 上是约定）', () => {
+    // 掩码里的位序不影响显示顺序
+    assert.equal(
+      formatPermission(PERM_DOWNLOAD | PERM_DELETE | PERM_WRITE | PERM_READ),
+      formatPermission(PERM_READ | PERM_WRITE | PERM_DELETE | PERM_DOWNLOAD)
+    )
+  })
+
+  test('PERM_BIT_LABELS 四个位都有名字', () => {
+    for (const bit of [PERM_READ, PERM_WRITE, PERM_DELETE, PERM_DOWNLOAD]) {
+      assert.equal(typeof PERM_BIT_LABELS[bit], 'string')
+      assert.ok(PERM_BIT_LABELS[bit].length > 0)
+    }
+  })
+
+  test('PERMISSION_LABELS 至少覆盖旧的三档（share/list.get.ts 还在用）', () => {
+    for (const mask of [PERM_READ, PERM_READ | PERM_WRITE, PERM_READ | PERM_WRITE | PERM_DELETE, PERM_ALL]) {
       assert.ok(PERMISSION_LABELS[mask], `掩码 ${mask} 缺标签`)
     }
   })

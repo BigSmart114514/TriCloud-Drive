@@ -3,7 +3,7 @@ import crypto from 'crypto'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
 import { dbConnectionError } from '~~/types/error'
-import { PERM_READ } from '~~/types/share'
+import { PERM_DOWNLOAD } from '~~/types/share'
 
 // 生成 CDN 鉴权 URL (TypeA)
 const generateCDNUrl = (
@@ -88,7 +88,19 @@ export default defineEventHandler(async (event) => {
     const fileService = new FileService(db)
 
     // 归属或授权：所有者、被授权人（含从父文件夹继承的）都可下载
-    const fileRecord = await fileService.findAccessibleByKey(userId, fileKey, PERM_READ)
+    //
+    // 要的是 PERM_DOWNLOAD 而不是 PERM_READ：预览走的就是这个接口（前端
+    // FilePreviewer 调 FilesService.downloadSign 拿签名），一样扣下载流量，
+    // 所以「能预览」和「能下载」是同一件事，由同一个位管。
+    // 只想控制「能不能取走内容」而允许在线看，是做不到的 —— 那也是流量。
+    const fileRecord = await fileService.findAccessibleByKey(
+      userId,
+      fileKey,
+      PERM_DOWNLOAD,
+      // 默认文案是「该文件的权限不足」，在下载场景会让人困惑（明明能看）。
+      // 说清楚是下载/预览这一项没给。
+      '无权下载该文件：预览也走下载接口（会消耗下载流量），需要「下载」权限'
+    )
 
     const fileSize = fileRecord.fileSize
 
