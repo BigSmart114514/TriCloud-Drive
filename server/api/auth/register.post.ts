@@ -81,7 +81,7 @@ export default defineEventHandler(async (event) => {
 
     return {
       success: true,
-      message: '注册成功',
+      statusMessage: '注册成功',
       user: {
         id: newUser.id,
         email: newUser.email,

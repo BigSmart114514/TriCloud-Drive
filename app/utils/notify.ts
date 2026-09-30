@@ -108,14 +108,17 @@ function escapeHtml(str: string) {
  * 从 $fetch / FetchError 里取出服务端给的中文提示。
  *
  * ofetch 抛出的 e.message 形如 "[POST] http://host/api/x 403"，对用户没有意义，
- * 所以优先取 h3 错误体里的 statusMessage / message，噪音一律丢掉换成 fallback。
+ * 所以优先取 h3 错误体里的 statusMessage，噪音一律丢掉换成 fallback。
+ * 注意 h3 的错误体是 { error, url, statusCode, statusMessage, message, stack }，
+ * statusMessage 和 message 都在且通常同值；statusMessage 优先，message 兜底
+ * （有些内部错误只填 message）。
  */
 export function toMessage(e: any, fallback = '操作失败'): string {
   const fromBody = [
     e?.data?.statusMessage,
-    e?.data?.message,
     e?.statusMessage,
     e?.response?._data?.statusMessage,
+    e?.data?.message,
     e?.response?._data?.message
   ]
   for (const c of fromBody) {

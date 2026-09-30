@@ -200,7 +200,7 @@ const handleChangePassword = async () => {
     await useAuth().logout()
     setTimeout(() => navigateTo("/login"), 1000)
   } catch (err: any) {
-    error.value = err?.data?.message || err?.message || '修改失败，请重试'
+    error.value = err?.data?.statusMessage || err?.message || '修改失败，请重试'
   } finally {
     loading.value = false
   }

@@ -324,7 +324,7 @@ async function applyMode(value: number) {
   )
   if (res) {
     isPublic.value = res.IsPublic
-    notify(res.message, 'success')
+    notify(res.statusMessage, 'success')
     emit('changed')
   } else {
     mode.value = prev
@@ -341,7 +341,7 @@ async function applyPublic(next: boolean) {
   if (res) {
     isPublic.value = res.IsPublic
     mode.value = res.mode
-    notify(res.message, 'success')
+    notify(res.statusMessage, 'success')
     emit('changed')
   } else {
     isPublic.value = prev
@@ -366,7 +366,7 @@ async function submitGrants(next: ShareGrant[], okMessage: string) {
   if (res) {
     // 服务端回传的是权威值（标签、用户名可能已变），用它覆盖本地
     if (Array.isArray(res.grants)) grants.value = res.grants
-    notify(res.message || okMessage, 'success')
+    notify(res.statusMessage || okMessage, 'success')
     emit('changed')
     return true
   }

@@ -95,7 +95,7 @@ export default defineEventHandler(async (event) => {
 
     return {
       success: true,
-      message: cosDeleteSuccess ? '文件删除成功' : '文件记录已删除，但COS文件删除可能失败',
+      statusMessage: cosDeleteSuccess ? '文件删除成功' : '文件记录已删除，但COS文件删除可能失败',
       cosDeleted: cosDeleteSuccess,
       deletedFile: {
         id: fileRecord.id,

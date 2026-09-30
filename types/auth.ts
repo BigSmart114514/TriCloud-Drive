@@ -15,7 +15,7 @@ export interface User {
 
 export interface AuthResponse {
   success: boolean
-  message: string
+  statusMessage: string
   user?: User
 }
 
@@ -37,7 +37,7 @@ export interface ApiError {
 
 export interface GeneralResponse{
   success: boolean
-  message?: string | null | undefined
+  statusMessage?: string | null | undefined
 }
 
 declare global {

@@ -130,7 +130,7 @@ export default defineEventHandler(async (event) => {
       if (row && overwrite === true) {
         usedForCheck = Math.max(0, usedStorage - row.fileSize)
       } else if (row && skipIfExist === true) {
-        return { success: false, message: '当前目录下已存在该文件' }
+        return { success: false, statusMessage: '当前目录下已存在该文件' }
       }
     }
 
@@ -154,7 +154,7 @@ export default defineEventHandler(async (event) => {
     if (!config.tencentSecretId || !config.tencentSecretKey ) {
       return {
         statusCode: 500,
-        body: JSON.stringify({ success: false, message: '腾讯云密钥未配置' })
+        body: JSON.stringify({ success: false, statusMessage: '腾讯云密钥未配置' })
       }
     }
 

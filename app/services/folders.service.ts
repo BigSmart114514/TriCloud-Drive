@@ -5,7 +5,7 @@ export const FoldersService = {
     const body: any = { name, parentId }
     if (targetUserId) body.targetUserId = targetUserId
     if (useAdmin) body.useAdmin = 1
-    return await $fetch<{ success: boolean; folder?: FolderRecord; message?: string }>(
+    return await $fetch<{ success: boolean; folder?: FolderRecord; statusMessage?: string }>(
       '/api/folders/create',
       { method: 'POST', body }
     )
@@ -15,7 +15,7 @@ export const FoldersService = {
     const body: any = { folderId: id }
     if (targetUserId) body.targetUserId = targetUserId
     if (useAdmin) body.useAdmin = 1
-    return await $fetch<{ success: boolean; message?: string }>('/api/folders/delete', {
+    return await $fetch<{ success: boolean; statusMessage?: string }>('/api/folders/delete', {
       method: 'POST',
       body
     })
@@ -25,7 +25,7 @@ export const FoldersService = {
     const body: any = { folderId: id, newName }
     if (targetUserId) body.targetUserId = targetUserId
     if (useAdmin) body.useAdmin = 1
-    return await $fetch<{ success: boolean; folder?: FolderRecord; message?: string }>(
+    return await $fetch<{ success: boolean; folder?: FolderRecord; statusMessage?: string }>(
       '/api/folders/rename',
       { method: 'POST', body }
     )

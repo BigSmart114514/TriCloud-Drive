@@ -32,7 +32,7 @@ export default defineEventHandler(async (event) => {
     const ids = await folderService.listDescendantIds(userId, id)
     if (ids.length === 0) {
       // 理论上不会发生：至少包含自身
-      return { success: true, message: '无需删除' }
+      return { success: true, statusMessage: '无需删除' }
     }
 
     // 在删除数据库前，先查出待删文件（用于COS删除）
@@ -102,12 +102,12 @@ export default defineEventHandler(async (event) => {
     // 重算用户存储用量
     await fileService.recalculateUsedStorage(userId)
 
-    let message = '文件夹及其内容已删除'
+    let statusMessage = '文件夹及其内容已删除'
     if (cosAttempted && !cosDeleteAll) {
-      message = '文件夹及其内容已删除，但COS文件删除可能失败'
+      statusMessage = '文件夹及其内容已删除，但COS文件删除可能失败'
     }
 
-    return { success: true, message }
+    return { success: true, statusMessage }
   } catch (error: any) {
     console.error('Delete folder error:', error)
     if (error.statusCode) throw error

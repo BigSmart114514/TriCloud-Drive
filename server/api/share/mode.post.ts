@@ -75,7 +75,7 @@ export default defineEventHandler(async (event) => {
 
     return {
       success: true,
-      message: mode !== null
+      statusMessage: mode !== null
         ? `已设为「${SHARE_MODE_LABELS[state.mode]}」`
         : '分享设置已更新',
       targetType: type,

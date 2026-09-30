@@ -15,7 +15,7 @@ export const useAuth = () => {
   })
 
   const login = async (username: string, password: string) => {
-    const data = await $fetch<{ success: boolean; user: User; message: string }>('/api/auth/login', {
+    const data = await $fetch<{ success: boolean; user: User; statusMessage: string }>('/api/auth/login', {
       method: 'POST',
       body: { username, password },
       credentials: 'include'
@@ -25,7 +25,7 @@ export const useAuth = () => {
   }
 
   const register = async (email: string, username: string, password: string) => {
-    const data = await $fetch<{ success: boolean; user: User; message: string }>('/api/auth/register', {
+    const data = await $fetch<{ success: boolean; user: User; statusMessage: string }>('/api/auth/register', {
       method: 'POST',
       body: { email, username, password },
       credentials: 'include'

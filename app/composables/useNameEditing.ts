@@ -43,7 +43,7 @@ export function useNameEditing(
     try {
       const res = await FoldersService.create(name, currentFolderId.value ?? null, tRef?.value ?? null, admin())
       if (res.success) await fetchFiles()
-      else notify(res.message || '创建失败', 'error')
+      else notify(res.statusMessage || '创建失败', 'error')
     } catch (e) {
       notifyError(e, '创建文件夹失败')
     }
@@ -58,7 +58,7 @@ export function useNameEditing(
     if (newName === folder.name) return
     try {
       const res = await FoldersService.rename(folder.id, newName, tRef?.value ?? null, admin())
-      if (!res.success) return notify(res.message || '重命名失败', 'error')
+      if (!res.success) return notify(res.statusMessage || '重命名失败', 'error')
 
       const idx = folders.value.findIndex(f => f.id === folder.id)
       if (idx >= 0) folders.value[idx].name = newName
@@ -77,7 +77,7 @@ export function useNameEditing(
     if (finalName === file.filename) return
     try {
       const res = await FilesService.rename(file.id, finalName, tRef?.value ?? null, admin())
-      if (!res.success) return notify(res.message || '重命名失败', 'error')
+      if (!res.success) return notify(res.statusMessage || '重命名失败', 'error')
       const idx = files.value.findIndex(f => f.id === file.id)
       if (idx >= 0) files.value[idx].filename = finalName
     } catch (e) {

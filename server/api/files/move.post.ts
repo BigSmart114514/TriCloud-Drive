@@ -33,7 +33,7 @@ export default defineEventHandler(async (event) => {
   const fileIds = uniqPositiveInts(body?.fileIds || [])
 
   if (!folderIds.length && !fileIds.length) {
-    return { success: true, moved: { folders: 0, files: 0 }, skipped: 0, failed: 0, message: '无移动项' }
+    return { success: true, moved: { folders: 0, files: 0 }, skipped: 0, failed: 0, statusMessage: '无移动项' }
   }
 
   const fileService = new FileService(db)
@@ -47,7 +47,7 @@ export default defineEventHandler(async (event) => {
     movedFolders = await folderService.findAccessibleMany(authId, folderIds, PERM_WRITE)
     movedFiles = await fileService.findAccessibleMany(authId, fileIds, PERM_WRITE)
   } catch (e: any) {
-    return { success: false, message: e?.statusMessage || e?.message || '无权限移动所选内容' }
+    return { success: false, statusMessage: e?.statusMessage || e?.message || '无权限移动所选内容' }
   }
 
   // 目标目录同样要 write。根层（null）不校验 —— 它属于自己的根
@@ -61,7 +61,7 @@ export default defineEventHandler(async (event) => {
       const dest = await folderService.findAccessibleById(authId, targetFolderId, PERM_WRITE)
       destOwnerId = dest.userId
     } catch (e: any) {
-      return { success: false, message: e?.statusMessage || '目标文件夹不存在或无权限' }
+      return { success: false, statusMessage: e?.statusMessage || '目标文件夹不存在或无权限' }
     }
   }
 
@@ -78,7 +78,7 @@ export default defineEventHandler(async (event) => {
   ])
   if (destOwnerId !== null) owners.add(destOwnerId)
   if (owners.size > 1) {
-    return { success: false, message: '不能跨用户移动内容' }
+    return { success: false, statusMessage: '不能跨用户移动内容' }
   }
   const userId = owners.size === 1 ? [...owners][0]! : authId
 
@@ -101,11 +101,11 @@ export default defineEventHandler(async (event) => {
   if (targetFolderId !== null) {
     for (const f of movedFolders) {
       if (f.id === targetFolderId) {
-        return { success: false, message: `不能将文件夹 "${f.name}" 移动到其自身` }
+        return { success: false, statusMessage: `不能将文件夹 "${f.name}" 移动到其自身` }
       }
       const cyclic = await isTargetInsideFolder(f.id, targetFolderId)
       if (cyclic) {
-        return { success: false, message: `不能将文件夹 "${f.name}" 移动到其子孙文件夹中` }
+        return { success: false, statusMessage: `不能将文件夹 "${f.name}" 移动到其子孙文件夹中` }
       }
     }
   }
@@ -250,13 +250,13 @@ export default defineEventHandler(async (event) => {
       moved: { folders: folderIds.length, files: moved },
       skipped,
       failed,
-      message: '移动完成',
+      statusMessage: '移动完成',
     }
   } catch (e: any) {
     try {
       await db.prepare('ROLLBACK TO move_tx').bind().run()
       await db.prepare('RELEASE move_tx').bind().run()
     } catch { }
-    return { success: false, moved: { folders: 0, files: 0 }, skipped, failed: plan.length - moved - skipped, message: e?.message || '移动失败' }
+    return { success: false, moved: { folders: 0, files: 0 }, skipped, failed: plan.length - moved - skipped, statusMessage: e?.message || '移动失败' }
   }
 })

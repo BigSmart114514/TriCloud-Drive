@@ -160,7 +160,7 @@ const handleRegister = async () => {
       }, 3000)
     }
   } catch (err: any) {
-    error.value = err.data?.message || '注册失败，请重试'
+    error.value = err.data?.statusMessage || '注册失败，请重试'
   } finally {
     loading.value = false
   }

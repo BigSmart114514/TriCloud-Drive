@@ -67,7 +67,7 @@ export const ShareService = {
     target: ShareTargetType,
     payload: { mode?: ShareMode; isPublic?: boolean; grants?: Array<{ userId: number; permission: number }> }
   ) {
-    return await $fetch<ShareState & { success: boolean; message: string }>('/api/share/mode', {
+    return await $fetch<ShareState & { success: boolean; statusMessage: string }>('/api/share/mode', {
       method: 'POST',
       body: { ...scopeParams(target), ...payload }
     })

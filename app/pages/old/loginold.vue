@@ -104,7 +104,7 @@ const handleLogin = async () => {
       await navigateTo('/')
     }
   } catch (err: any) {
-    error.value = err.data?.message || '登录失败，请重试'
+    error.value = err.data?.statusMessage || '登录失败，请重试'
   } finally {
     loading.value = false
   }

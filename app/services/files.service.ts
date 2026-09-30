@@ -35,7 +35,7 @@ export const FilesService = {
     const body: any = { fileId: id }
     if (targetUserId) body.targetUserId = targetUserId
     if (useAdmin) body.useAdmin = 1
-    return await $fetch<{ success: boolean; message?: string }>('/api/files/delete', {
+    return await $fetch<{ success: boolean; statusMessage?: string }>('/api/files/delete', {
       method: 'POST',
       body
     })
@@ -45,7 +45,7 @@ export const FilesService = {
     const body: any = { fileId: id, newName }
     if (targetUserId) body.targetUserId = targetUserId
     if (useAdmin) body.useAdmin = 1
-    return await $fetch<{ success: boolean; file?: FileRecord; message?: string }>('/api/files/rename', {
+    return await $fetch<{ success: boolean; file?: FileRecord; statusMessage?: string }>('/api/files/rename', {
       method: 'POST',
       body
     })

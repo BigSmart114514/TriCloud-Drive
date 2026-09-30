@@ -10,7 +10,7 @@ export const MoveService = {
       body
     }) as Promise<{
       success: boolean
-      message?: string
+      statusMessage?: string
       moved?: { folders: number; files: number }
       skipped:number
       failed: number

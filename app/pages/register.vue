@@ -138,7 +138,7 @@ async function handleRegister() {
     }
   } catch (e : any) {
     console.error(e)
-    showNotification('注册失败，' + e.data?.message || '请重试', 'error')
+    showNotification('注册失败，' + e.data?.statusMessage || '请重试', 'error')
   } finally {
     loading.value = false
   }

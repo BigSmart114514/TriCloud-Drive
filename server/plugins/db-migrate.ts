@@ -176,36 +176,25 @@ export default defineNitroPlugin(async () => {
       }
     }
 
-    // 4) 共享模式三态化：BOOLEAN 存的就是整数，列不用重建，只回填数据。
-    //    旧语义 Shared=1 ⟺ 有授权行。据此搬运可完整保留当前访问结果：
-    //      有授权行 → 1(分享，仍是边界)；无授权行 → 2(继承，非边界)
-    //    旧语义下 Shared=0 本来就是「不是边界，往上找」，映射成继承是一致的。
-    //    末尾的 Shared <> CASE 让已经是目标值的行不再被写入，重复启动 0 改动。
-    for (const [table, accessTable, column] of [
-      ['files', 'file_access', 'file_id'],
-      ['folders', 'folder_access', 'folder_id']
-    ]) {
-      if (!(await tableExists(db, accessTable))) continue
-      if (await columnExists(db, table, 'Shared')) {
-        const backfilled = await db
-          .prepare(
-            `UPDATE ${table}
-             SET Shared = CASE
-               WHEN EXISTS (SELECT 1 FROM ${accessTable} a WHERE a.${column} = ${table}.id) THEN 1
-               ELSE 2
-             END
-             WHERE Shared IN (0, 1)
-               AND Shared <> CASE
-                 WHEN EXISTS (SELECT 1 FROM ${accessTable} a WHERE a.${column} = ${table}.id) THEN 1
-                 ELSE 2
-               END`
-          )
-          .bind()
-          .run()
-        const n = Number(backfilled?.meta?.changes ?? 0)
-        if (n) console.log(`[db-migrate] ${table}.Shared 三态化，回填 ${n} 行`)
-      }
-    }
+    // 4) 共享模式三态化：**这里原本有一段数据回填，已于 2026-09-29 整段删除，不要再加回来。**
+    //
+    //    删掉的原因（踩过的坑，记下来免得重犯）：
+    //    那段回填的前提是「旧两态语义下 Shared=1 ⟺ folder_access 里有授权行」，
+    //    于是把 `WHERE Shared IN (0,1)` 的行按「有无授权行」改写成 1 或 2。
+    //    但三态化之后这两个字段是**互不干涉**的（见 folders 表的列注释）：
+    //    Shared 只决定要不要切断继承，名单在 folder_access 里。
+    //    0=不分享 / 1=分享 都是「边界」，名单为空完全合法：
+    //      「此目录不对任何人开放，但也不继承上级」就是 1 + 空名单。
+    //
+    //    插件里没有迁移版本表，所以 `Shared IN (0,1)` 分不清
+    //    「还没迁移的旧行」和「迁移早已跑过、用户后来又设成的行」，
+    //    于是每次启动都会把后者当成前者，静默把边界降级成继承 ——
+    //    上级授权就此漏进来，属于放大权限。IsPublic 不动，界面上还看不出异常。
+    //    这段「天然幂等」的自我评价对它是错的。
+    //
+    //    生产库当时还没有任何分享数据，没有可保留的旧语义，直接不迁移即可。
+    //    新库的 folders.Shared 建表就是 DEFAULT 2 且带 CHECK (Shared IN (0,1,2))，
+    //    见下面 columnExists 那段与建表 SQL，不需要任何数据搬运。
   } catch (error: any) {
     console.error('[db-migrate] failed:', error?.message || error)
   }

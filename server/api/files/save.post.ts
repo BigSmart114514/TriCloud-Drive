@@ -125,7 +125,7 @@ export default defineEventHandler(async (event) => {
 
           const file = await fileService.findOwnedById(userId, exist.id)
           await db.prepare('RELEASE upload_tx').bind().run()
-          return { success: true, message: '文件覆盖成功', file }
+          return { success: true, statusMessage: '文件覆盖成功', file }
         }
       }
 
@@ -184,7 +184,7 @@ export default defineEventHandler(async (event) => {
       }
 
       await db.prepare('RELEASE upload_tx').bind().run()
-      return { success: true, message: '文件记录保存成功', file }
+      return { success: true, statusMessage: '文件记录保存成功', file }
     } catch (txErr) {
       try { await db.prepare('ROLLBACK TO upload_tx').bind().run(); await db.prepare('RELEASE upload_tx').bind().run() } catch {}
       throw txErr

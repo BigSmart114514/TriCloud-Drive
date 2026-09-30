@@ -141,7 +141,7 @@ export default defineEventHandler(async (event) => {
 
   return {
     success: true,
-    message:
+    statusMessage:
       cosAttempted && !cosDeleteAll
         ? '用户已删除，但 COS 文件删除可能失败'
         : '用户及其 COS 文件已删除',

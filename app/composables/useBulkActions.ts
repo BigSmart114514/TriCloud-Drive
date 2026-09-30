@@ -29,7 +29,7 @@ export function useBulkActions(
       const res = await FilesService.downloadSign({ fileKey: file.fileKey, filename: file.filename }, tRef?.value ?? null, admin())
       if (res.success) triggerDownload(res.data.downloadUrl, res.data.filename)
       else {
-        notify(res?.message || '下载文件失败','error')
+        notify(res?.statusMessage || '下载文件失败','error')
       }
     } catch (e) {
       notifyError(e, '下载文件失败')
@@ -46,7 +46,7 @@ export function useBulkActions(
         selectedFileIds.value.delete(file.id)
         notify('文件删除成功', 'success')
       } else {
-        notify(res.message || '删除失败', 'error')
+        notify(res.statusMessage || '删除失败', 'error')
       }
     } catch (e) {
       notifyError(e, '删除文件失败')
@@ -63,7 +63,7 @@ export function useBulkActions(
         selectedFolderIds.value.delete(folder.id)
         notify('文件夹删除成功','success')
       } else {
-        notify(res.message || '删除失败', 'error')
+        notify(res.statusMessage || '删除失败', 'error')
       }
     } catch (e) {
       notifyError(e, '删除文件夹失败')
@@ -86,8 +86,8 @@ export function useBulkActions(
       const t = tRef?.value ?? null
       const a = admin()
       const tasks = [
-        ...fileIds.map(id => FilesService.delete(id, t, a).then(r => ({ ok: r.success, id, type: 'file', message: r.message })).catch(e => ({ ok: false, id, type: 'file', message: toMessage(e, '删除失败') }))),
-        ...folderIds.map(id => FoldersService.delete(id, t, a).then(r => ({ ok: r.success, id, type: 'folder', message: r.message })).catch(e => ({ ok: false, id, type: 'folder', message: toMessage(e, '删除失败') })))
+        ...fileIds.map(id => FilesService.delete(id, t, a).then(r => ({ ok: r.success, id, type: 'file', statusMessage: r.statusMessage })).catch(e => ({ ok: false, id, type: 'file', statusMessage: toMessage(e, '删除失败') }))),
+        ...folderIds.map(id => FoldersService.delete(id, t, a).then(r => ({ ok: r.success, id, type: 'folder', statusMessage: r.statusMessage })).catch(e => ({ ok: false, id, type: 'folder', statusMessage: toMessage(e, '删除失败') })))
       ]
       const results = await Promise.all(tasks)
       const okFiles = results.filter(r => r.ok && r.type === 'file').map(r => r.id as number)
@@ -101,7 +101,7 @@ export function useBulkActions(
       const failed = results.filter(r => !r.ok)
       if (failed.length) {
         notify(`部分删除失败：${failed.length} 项。\n` + failed.slice(0, 5).map(r =>
-          `${r.type === 'folder' ? '文件夹' : '文件'} #${r.id}: ${r.message || '失败'}`
+          `${r.type === 'folder' ? '文件夹' : '文件'} #${r.id}: ${r.statusMessage || '失败'}`
         ).join('\n'),'error')
       } else {
         notify('删除成功','success')

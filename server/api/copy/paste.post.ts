@@ -23,7 +23,7 @@ export default defineEventHandler(async (event) => {
   // 鉴权身份：判「我能不能读这些 / 能不能往那儿写」
   const authId = Number(authUserId)
   const db: any = getDb(event)
-  if (!db) return { success: false, message: '数据库连接失败' }
+  if (!db) return { success: false, statusMessage: '数据库连接失败' }
 
   const body = await readBody<{
     targetFolderId: number | null
@@ -40,7 +40,7 @@ export default defineEventHandler(async (event) => {
   const fileIds = uniqPositiveInts(body?.fileIds || [])
 
   if (!folderIds.length && !fileIds.length) {
-    return { success: true, copied: { folders: 0, files: 0 }, skipped: 0, failed: 0, message: '无复制项' }
+    return { success: true, copied: { folders: 0, files: 0 }, skipped: 0, failed: 0, statusMessage: '无复制项' }
   }
 
   const fileService = new FileService(db)
@@ -55,7 +55,7 @@ export default defineEventHandler(async (event) => {
     movedFolders = await folderService.findAccessibleMany(authId, folderIds, PERM_WRITE)
     movedFileRows = await fileService.findAccessibleMany(authId, fileIds, PERM_WRITE)
   } catch (e: any) {
-    return { success: false, message: e?.statusMessage || '部分内容不存在或无权限' }
+    return { success: false, statusMessage: e?.statusMessage || '部分内容不存在或无权限' }
   }
 
   // 目标目录：要 write。原来只有 findOwnedById(userId)，
@@ -66,7 +66,7 @@ export default defineEventHandler(async (event) => {
       const dest = await folderService.findAccessibleById(authId, targetFolderId, PERM_WRITE)
       destOwnerId = dest.userId
     } catch (e: any) {
-      return { success: false, message: e?.statusMessage || '目标文件夹不存在或无权限' }
+      return { success: false, statusMessage: e?.statusMessage || '目标文件夹不存在或无权限' }
     }
   } else {
     /**
@@ -106,7 +106,7 @@ export default defineEventHandler(async (event) => {
     contentType: r.contentType
   }))
   if (movedFiles.length !== fileIds.length) {
-    return { success: false, message: '部分文件不存在或无权限' }
+    return { success: false, statusMessage: '部分文件不存在或无权限' }
   }
 
   // 准备：收集 folder 子树的所有子目录与文件，并生成相对路径
@@ -270,7 +270,7 @@ export default defineEventHandler(async (event) => {
       .run()
     const changed = Number(res?.meta?.changes || res?.meta?.rows_affected || 0)
     if (!changed) {
-      return { success: false, message: '存储空间不足，无法完成复制' }
+      return { success: false, statusMessage: '存储空间不足，无法完成复制' }
     }
   }
 
@@ -408,6 +408,6 @@ export default defineEventHandler(async (event) => {
     copied: { folders: folderIds.length, files: copiedFiles },
     skipped,
     failed,
-    message: failed ? '部分文件复制失败' : '复制完成'
+    statusMessage: failed ? '部分文件复制失败' : '复制完成'
   }
 })

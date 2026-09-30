@@ -101,7 +101,7 @@ export function useClipboard(
         : await CopyService.paste(targetFolderId, c.folderIds, c.fileIds, t, options?.overwriteExisting?.value, options?.skipExisting?.value, admin)
 
       if (!res?.success) {
-        notify(res?.message || (c.mode === 'cut' ? '移动失败' : '复制失败'), 'error')
+        notify(res?.statusMessage || (c.mode === 'cut' ? '移动失败' : '复制失败'), 'error')
         return
       }
       if (res.success && c.mode === 'cut')
