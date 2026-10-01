@@ -45,7 +45,9 @@
         >
           <ArrowLeftIcon class="h-5 w-5" />
         </button>
+        <!-- 删除：链接视角不给（服务端也没有 link 分支） -->
         <button
+          v-if="!linkMode"
           class="p-1 text-sm text-red-600 hover:text-red-500 disabled:opacity-50 hidden sm:inline-flex"
           :disabled="!canDeleteSelected || bulkDeleting"
           @click="deleteSelected"
@@ -63,7 +65,9 @@
         >
           <ArrowDownTrayIcon class="h-5 w-5" />
         </button>
+        <!-- 剪贴（移动）：链接视角不给 —— 移动就是写属主的树，链接只给只读 -->
         <button
+          v-if="!linkMode"
           class="p-1 text-sm text-indigo-600 hover:text-indigo-500 disabled:opacity-50 hidden sm:inline-flex"
           :disabled="!canCutSelected"
           @click="clipSelection"
@@ -81,6 +85,11 @@
         >
           <DocumentDuplicateIcon class="h-5 w-5" />
         </button>
+        <!--
+          粘贴：链接视角不给。链接的目录只读，粘不进去；
+          「从链接复制到自己的空间」是在**自己的**目录里点粘贴完成的
+          （剪贴板 payload 带着 link，服务端靠它证明能读源）。
+        -->
         <button
           v-if="showPaste"
           class="p-1 text-sm text-green-600 hover:text-green-500 disabled:opacity-50 hidden sm:inline-flex"
@@ -149,13 +158,13 @@
           <template v-if="mobileMoreOpen">
             <div class="fixed inset-0 z-10" @click="mobileMoreOpen = false" />
             <div class="absolute right-0 mt-2 w-48 z-20 bg-white border border-gray-200 rounded-md shadow-lg py-1">
-              <button class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="!canDeleteSelected || bulkDeleting" @click="deleteSelected(); mobileMoreOpen = false">
+              <button v-if="!linkMode" class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="!canDeleteSelected || bulkDeleting" @click="deleteSelected(); mobileMoreOpen = false">
                 <TrashIcon class="h-5 w-5 text-red-600" />删除所选
               </button>
               <button class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="selectedCount === 0 || bulkDownloading" @click="downloadSelected(); mobileMoreOpen = false">
                 <ArrowDownTrayIcon class="h-5 w-5 text-indigo-600" />下载所选
               </button>
-              <button class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="!canCutSelected" @click="clipSelection(); mobileMoreOpen = false">
+              <button v-if="!linkMode" class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="!canCutSelected" @click="clipSelection(); mobileMoreOpen = false">
                 <ScissorsIcon class="h-5 w-5 text-indigo-600" />剪贴所选
               </button>
               <button  class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="selectedCount === 0" @click="copySelection(); mobileMoreOpen = false">
@@ -220,9 +229,9 @@
         @download-folder="onDownloadFolder"
         @delete-folder="onDeleteFolder"
         @rename-folder="onRenameFolder"
-        :show-clip="true"
+        :show-clip="!linkMode"
         :share-action="shareAction"
-        :show-share-badge="isOwn"
+        :show-share-badge="isOwn && !linkMode"
         @clip-folder="onClipFolder"
         @copy-folder="onCopyFolder"
         @download-file="onDownloadFile"
@@ -252,13 +261,13 @@
         <div class="flex items-center justify-between">
           <span class="text-sm text-gray-700">已选 {{ selectedCount }} 项</span>
           <div class="flex items-center gap-3">
-            <button class="p-1 text-red-600 disabled:opacity-50" :disabled="bulkDeleting" @click="deleteSelected" title="删除" aria-label="删除">
+            <button v-if="!linkMode" class="p-1 text-red-600 disabled:opacity-50" :disabled="bulkDeleting" @click="deleteSelected" title="删除" aria-label="删除">
               <TrashIcon class="h-5 w-5" />
             </button>
             <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="bulkDownloading" @click="downloadSelected" title="下载" aria-label="下载">
               <ArrowDownTrayIcon class="h-5 w-5" />
             </button>
-            <button class="p-1 text-indigo-600 disabled:opacity-50" :disabled="!canCutSelected" @click="clipSelection" title="剪贴" aria-label="剪贴">
+            <button v-if="!linkMode" class="p-1 text-indigo-600 disabled:opacity-50" :disabled="!canCutSelected" @click="clipSelection" title="剪贴" aria-label="剪贴">
               <ScissorsIcon class="h-5 w-5" />
             </button>
             <button  class="p-1 text-indigo-600 disabled:opacity-50" :disabled="selectedCount === 0" @click="copySelection" title="复制" aria-label="复制">
@@ -287,6 +296,7 @@
       :file="previewingFile"
       :current-folder-id="currentFolderId"
       :target-user-id="targetUserIdRef"
+      :link="activeLink"
       @close="closePreview"
       @saved="fetchFiles"
     />
@@ -350,22 +360,56 @@ const props = withDefaults(
     title?: string
     /** 铺满父容器高度并让列表内部滚动（配合 SidePanelLayout 的全屏页） */
     fill?: boolean
+    /**
+     * 分享链接 token。传了就走链接视角。
+     *
+     * 链接权限锁死读+下载（服务端 listByLink 与下载接口都是**排他**分支，
+     * 登录用户带链接也一样拿不到更多），所以这个视角里所有写操作的入口
+     * 都不给：上传、新建、粘贴、删除、重命名、分享。
+     *
+     * 服务端本来就拦（那些接口没有 link 分支），但给一个点了必失败的
+     * 按钮不如不给 —— 匿名访客尤其不该看到「上传」。
+     */
+    link?: string | null
   }>(),
-  { variant: 'own', fill: false }
+  { variant: 'own', fill: false, link: null }
 )
 
 const isOwn = computed(() => props.variant === 'own')
-const defaultTitle = computed(() => (isOwn.value ? '我的文件' : '用户文件'))
+const defaultTitle = computed(() => {
+  if (linkMode.value) return '分享内容'
+  return isOwn.value ? '我的文件' : '用户文件'
+})
+
+/** 当前处于链接视角（props 传了 token，或服务端确认走了 listByLink） */
+const activeLink = computed(() => (props.link ? String(props.link) : null))
+/**
+ * 链接视角。prop 与服务端返回的 linkMode 取或 ——
+ * prop 是「我打算看链接」，linkMode 是「服务端确认按链接处理的」，
+ * 两者一致才生效；只有 prop 时首帧还没有 linkMode，不能因此漏掉限制。
+ */
+const linkMode = computed(() => !!activeLink.value || linkModeFromServer.value)
 
 /** 侧栏选人 + 停在根层 = 「平铺分享清单」，没有可粘的目标 */
 const isFlatSharedList = computed(() => !isOwn.value && sharedList.value)
-/** 当前目录能不能写：决定上传 / 新建 / 粘贴的入口 */
-const canWriteHere = computed(() => (isOwn.value ? true : canWrite.value))
+/** 当前目录能不能写：决定上传 / 新建 / 粘贴的入口。链接视角一律 false */
+const canWriteHere = computed(() => (linkMode.value ? false : (isOwn.value ? true : canWrite.value)))
 /**
  * 粘贴需要一个真实的目标目录。平铺清单的「根」是对方的根，
  * 粘过去等于往别人空间里写，语义不对，所以不给入口（要粘先点进具体目录）。
  */
-const showPaste = computed(() => isOwn.value || currentFolderId.value !== null)
+/**
+ * 粘贴需要一个真实的目标目录。平铺清单的「根」是对方的根，粘过去等于往
+ * 别人空间里写，语义不对，所以不给入口（要粘先点进具体目录）。
+ *
+ * 链接视角一律不给：链接的目录只读，粘不进去。
+ * 「从链接复制到自己的空间」是在**自己的**目录里点粘贴完成的 ——
+ * 剪贴板 payload 带着 link，服务端靠它证明能读源。
+ */
+const showPaste = computed(() => {
+  if (linkMode.value) return false
+  return isOwn.value || currentFolderId.value !== null
+})
 /** 拖拽上传要一个可写的当前目录 */
 const canDropUpload = computed(() => canWriteHere.value && !isFlatSharedList.value)
 const selectedItems = computed(() => {
@@ -378,17 +422,20 @@ const selectedItems = computed(() => {
  * 复制不受此限，读得到就能复制。
  */
 const canCutSelected = computed(() => {
+  if (linkMode.value) return false
   if (selectedCount.value === 0) return false
   if (isOwn.value) return true
   return selectedItems.value.some((it) => it.canWrite !== false)
 })
 /** 批量删除同理：只读条目删不掉，混选时交给服务端逐条判定 */
 const canDeleteSelected = computed(() => {
+  if (linkMode.value) return false
   if (selectedCount.value === 0) return false
   if (isOwn.value) return true
   return selectedItems.value.some((it) => it.canWrite !== false)
 })
 const emptyDescription = computed(() => {
+  if (linkMode.value) return '这个分享链接下没有可显示的内容。'
   if (isOwn.value) return '拖拽文件/文件夹到此处上传，或使用右上角“上传”按钮。'
   if (isFlatSharedList.value) return '这里是他分享给你的内容。点进具体目录后，才能在该目录里粘贴。'
   return canWriteHere.value
@@ -407,6 +454,7 @@ const previewingFile = ref<FileRecord | null>(null)
  *   传了  → 管理员代看该用户（useAdmin=1 由 service 自动带上）
  * 权限判定全在服务端的 getMeAndTarget，前端不用分支。
  */
+const linkRef = computed<string | null>(() => activeLink.value)
 const {
   folders,
   files,
@@ -417,11 +465,12 @@ const {
   breadcrumbs,
   sharedList,
   canWrite,
+  linkMode: linkModeFromServer,
   fetchFiles,
   navigateToFolder,
   goUp,
   goToBreadcrumb
-} = useFileBrowser({ targetUserId: targetUserIdRef, useAdmin: useAdminRef })
+} = useFileBrowser({ targetUserId: targetUserIdRef, useAdmin: useAdminRef, link: linkRef })
 
 const {
   masterCheckboxRef,
@@ -444,7 +493,11 @@ const {
   deleteFolder,
   deleteSelected,
   downloadSelected
-} = useBulkActions(folders, files, selectedFolderIds, selectedFileIds, { targetUserId: targetUserIdRef, useAdmin: useAdminRef })
+} = useBulkActions(folders, files, selectedFolderIds, selectedFileIds, {
+  targetUserId: targetUserIdRef,
+  useAdmin: useAdminRef,
+  link: linkRef
+})
 
 const { uploading, uploadProgress, uploadError, uploadMultipleFiles } = useFileUpload({ targetUserId: targetUserIdRef, useAdmin: useAdminRef })
 const {
@@ -463,7 +516,11 @@ const { createFolder, renameFolder, renameFile } = useNameEditing(
   fetchFiles,
   { targetUserId: targetUserIdRef, useAdmin: useAdminRef }
 )
-const { downloadingFolderId, downloadFolder } = useFolderDownload({ targetUserId: targetUserIdRef, useAdmin: useAdminRef })
+const { downloadingFolderId, downloadFolder } = useFolderDownload({
+  targetUserId: targetUserIdRef,
+  useAdmin: useAdminRef,
+  link: linkRef
+})
 const {
   isDragging,
   onDragEnter,
@@ -498,7 +555,7 @@ const {
     fetchFiles,
     clearSelection
   },
-  { targetUserId: targetUserIdRef, overwriteExisting, skipExisting, useAdmin: useAdminRef }
+  { targetUserId: targetUserIdRef, overwriteExisting, skipExisting, useAdmin: useAdminRef, link: linkRef }
 )
 
 const conflictStrategy = computed<'overwrite' | 'skip' | 'rename'>({
@@ -555,6 +612,9 @@ const onCopyFile = (file: FileListFile) => copyFile(asFile(file))
 const { user: authUser } = useAuth()
 const shareTarget = ref<{ type: 'file' | 'folder'; id: number; name: string } | null>(null)
 const shareAction = (item: FileListFile | FileListFolder): 'manage' | 'inspect' | 'none' => {
+  // 链接视角一律不给：那些条目属主是别人，分享设置是属主的私有数据，
+  // 而访客既没有身份也不该在这里看到权限来源
+  if (linkMode.value) return 'none'
   if (props.useAdmin) return 'manage'
   const myId = authUser.value?.id
   const ownerId = item.ownerId

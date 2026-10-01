@@ -6,10 +6,16 @@
 .cache
 dist
 
+# 命令行参数写错时，Nuxt 会把裸参数当路径，在项目根下建出同名目录
+# （`--host 106.54.199.177` 建出同名目录；`nuxt dev -- port 1231` 建出 port/ 和 1231/）。
+# 里面只有 node_modules 和 .nuxt，删掉即可。
+# 逐个列出来，不写通配：通配（[0-9]*/）会把根目录下 2fa/ 这种正常目录一起吃掉，
+# 而误建目录在 git status 里是可见的 untracked，反而不容易漏。
 test
 127.0.0.1
 localhost
 0.0.0.0
+106.54.199.177
 
 # Node dependencies
 node_modules
@@ -47,3 +53,9 @@ start.bat
 
 # 测试构建产物
 .build-test
+
+# 对抗测试用的攻击脚本（*exploit*.mjs）。
+# 注意写法：不能加 ./ 前缀 —— gitignore 的模式是相对仓库根的，
+# './exploit.mjs' 与 'exploit.mjs' 不等价，带前缀的那条匹配不到文件。
+# 之前写成 ./exploit.mjs 就没挡住，脚本被 git add 带进了提交。
+*exploit*.mjs

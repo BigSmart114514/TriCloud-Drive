@@ -9,9 +9,12 @@ import type { FolderRecord } from '~/types/file-browser'
 export function useFolderDownload(options?: {
   targetUserId?: Ref<number | null | undefined>
   useAdmin?: Ref<boolean | null | undefined>
+  /** 分享链接视角。两个请求都要带，否则匿名过不了中间件 */
+  link?: Ref<string | null | undefined>
 }) {
   const tRef = options?.targetUserId
   const admin = () => options?.useAdmin?.value || undefined
+  const link = () => options?.link?.value || null
   const downloadingFolderId = ref<number | null>(null)
 
   const downloadFolder = async (folder: FolderRecord) => {
@@ -19,7 +22,14 @@ export function useFolderDownload(options?: {
     downloadingFolderId.value = folder.id
     try {
       const t = tRef?.value ?? null
-      const manifest = await FoldersService.manifest(folder.id, t, admin())
+      const a = admin()
+      const l = link()
+      /**
+       * 链接视角下服务端已经把清单按链接能覆盖的范围过滤过了
+       * （非继承节点往下整支排除），所以逐个签名不会中途 403。
+       * 少了 link 的话清单会走「按人查权限」，访客直接 401。
+       */
+      const manifest = await FoldersService.manifest(folder.id, t, a, l)
       if (!manifest?.success) throw new Error('无法获取清单')
       if (!manifest.files?.length) {
         notify('该文件夹为空','error')
@@ -30,7 +40,7 @@ export function useFolderDownload(options?: {
 
       const sink = await createZipSink(`${folder.name}.zip`)
       for (const item of manifest.files) {
-        const sign = await FilesService.downloadSign({ fileKey: item.fileKey, filename: item.filename }, t, admin())
+        const sign = await FilesService.downloadSign({ fileKey: item.fileKey, filename: item.filename }, t, a, l)
         if (!sign?.success) throw new Error(`签名失败: ${item.filename}`)
         const entryPath = [folder.name, item.relDir, item.filename].filter(Boolean).join('/')
         await sink.addFromUrl(entryPath, sign.data.downloadUrl)

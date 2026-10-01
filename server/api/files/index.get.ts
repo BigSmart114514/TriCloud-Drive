@@ -1,5 +1,5 @@
 // server/api/files/index.get.ts
-import { getMeAndTarget } from '~~/server/utils/auth-middleware'
+import { getMeAndTarget, optionalAuth } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
 import { FileService, FolderService } from '~~/server/utils/db'
@@ -9,7 +9,7 @@ import {
   linkGrantsFile,
   linkGrantsFolder,
   LINK_ACCESS,
-  LINK_NOT_ACTIVE_MESSAGE,
+  linkNotActiveMessage,
   resolveLinkTarget
 } from '~~/server/utils/share-link'
 import {
@@ -34,8 +34,10 @@ import { getQuery } from 'h3'
  *
  * 子项一律只给继承态的：任何非继承子节点都是它自己那道边界，链接到不了。
  */
-async function listByLink(db: any, link: string, rawFolderId?: string) {
+async function listByLink(db: any, link: string, rawFolderId?: string, actingUserId: number | null = null) {
   const target = await resolveLinkTarget(db, link)
+  // 死链提示分访客/属主两套：匿名访客改不了任何设置，告诉他「去设为分享」没用
+  const notActive = linkNotActiveMessage(actingUserId, target.ownerId)
   const folderService = new FolderService(db)
   const fileService = new FileService(db)
 
@@ -68,7 +70,7 @@ async function listByLink(db: any, link: string, rawFolderId?: string) {
     // 结果是同一个死链，列表能看、下载 404，两条入口自相矛盾。
     // （这个洞是实测撞出来的：继承态文件上生成链接后，列表照样列出该文件。）
     if (!file || !(await linkGrantsFile(db, link, file.id))) {
-      throw createError({ statusCode: 404, message: LINK_NOT_ACTIVE_MESSAGE })
+      throw createError({ statusCode: 404, message: notActive })
     }
     return {
       success: true,
@@ -86,7 +88,7 @@ async function listByLink(db: any, link: string, rawFolderId?: string) {
   if (folderId === null) folderId = target.id
 
   if (!(await linkGrantsFolder(db, link, folderId))) {
-    throw createError({ statusCode: 404, message: LINK_NOT_ACTIVE_MESSAGE })
+    throw createError({ statusCode: 404, message: notActive })
   }
 
   const { folders, files } = await listChildrenByLink(folderService, fileService, target.ownerId, folderId)
@@ -132,7 +134,10 @@ export default defineEventHandler(async (event) => {
     // 而带链接的请求本来就该匿名通过（中间件已经放过来了）。
     const link = normalizeShareLink(q?.link)
     if (link) {
-      return await listByLink(db, link, q?.folderId)
+      // 匿名可调，所以身份用 optionalAuth 取：拿不到就走访客口径的提示。
+      // 它只读 cookie、不碰 body，与这个接口的 body 处理互不干扰。
+      const session = await optionalAuth(event)
+      return await listByLink(db, link, q?.folderId, session ? Number(session.userId) : null)
     }
 
     const { me, targetUserId, adminMode, authUserId } = await getMeAndTarget(event)

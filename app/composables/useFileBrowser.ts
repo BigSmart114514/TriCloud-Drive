@@ -1,3 +1,4 @@
+// ~/composables/useFileBrowser.ts
 import { FilesService } from '~/services/files.service'
 import { toMessage } from '~/utils/notify'
 import type { FolderRecord, FileRecord } from '~/types/files'
@@ -11,10 +12,20 @@ export function useFileBrowser(options?: {
    * 首页侧栏选人浏览**不传** —— 那是分享权限视角，管理员在首页拿不到提权。
    */
   useAdmin?: Ref<boolean>
+  /**
+   * 分享链接 token。传了就走服务端的链接分支（listByLink）：
+   * 匿名可调，权限锁死读+下载，与登录态无关。
+   *
+   * 它同时是「切换数据源」的开关 —— 换了链接要重置浏览状态回到根，
+   * 所以下面 watch 里和 targetUserId 一起进数组。
+   */
+  link?: Ref<string | null | undefined>
 }) {
   const tRef = options?.targetUserId
   const enabled = options?.enabled ?? ref(true)
   const useAdmin = options?.useAdmin ?? ref(false)
+  const linkRef = options?.link
+  const shareLink = computed(() => (linkRef?.value ? String(linkRef.value) : null))
 
   const folders = ref<FolderRecord[]>([])
   const files = ref<FileRecord[]>([])
@@ -32,6 +43,12 @@ export function useFileBrowser(options?: {
    */
   const sharedList = ref(false)
   const canWrite = ref(true)
+  /**
+   * 服务端走的是链接分支。链接视图里写操作一律不给（服务端也拦），
+   * 但入口不该出现 —— 匿名访客看到「上传」按钮点了只会得到一句 401。
+   * 与 canWrite 分开：这个是「视角性质」，那个是「这一层的权限」。
+   */
+  const linkMode = ref(false)
 
   // 列表拉取失败时的提示文案。onMounted 直接调 fetchFiles，
   // 这里不兜住异常的话，401/500 会变成未捕获的 promise rejection，
@@ -46,7 +63,8 @@ export function useFileBrowser(options?: {
       const res = await FilesService.list(
         currentFolderId.value,
         tRef?.value ?? null,
-        useAdmin.value || undefined
+        useAdmin.value || undefined,
+        shareLink.value
       )
       if (res.success) {
         folders.value = res.folders || []
@@ -54,13 +72,19 @@ export function useFileBrowser(options?: {
         currentFolderId.value = res.currentFolderId ?? null
         sharedList.value = !!res.sharedList
         canWrite.value = res.canWrite ?? true
+        linkMode.value = !!res.linkMode
       }
     } catch (e: any) {
       folders.value = []
       files.value = []
+      /**
+       * 链接的失效提示与「未登录」不同：链接过期/被撤销/目标已删都走 404，
+       * 说成「登录已失效」会让人跑去重新登录 —— 而他可能压根没账号。
+       * 服务端在 LINK_NOT_ACTIVE_MESSAGE 里已经把原因讲清了，直接透传。
+       */
       error.value =
         e?.statusCode === 401 || e?.status === 401
-          ? '登录已失效，请重新登录'
+          ? (shareLink.value ? toMessage(e, '分享链接无法访问') : '登录已失效，请重新登录')
           : toMessage(e, '加载文件列表失败')
     } finally {
       loading.value = false
@@ -87,8 +111,15 @@ export function useFileBrowser(options?: {
 
   onMounted(fetchFiles)
 
-  // 切换 targetUserId 时重置浏览状态
-  watch([tRef, enabled], () => {
+  /**
+   * 切换数据源时重置浏览状态。
+   *
+   * shareLink 必须在里面：链接视图的 currentFolderId 是**属主树里**的目录 id，
+   * 换一条链接（可能是别人的树）之后带着旧 id 去请求必然 404。
+   * 根层对链接的含义是「链接挂的那个节点」，由服务端 listByLink 解析，
+   * 前端只要把 currentFolderId 置空即可。
+   */
+  watch([tRef, enabled, shareLink], () => {
     folders.value = []
     files.value = []
     currentFolderId.value = null
@@ -98,7 +129,7 @@ export function useFileBrowser(options?: {
 
   return {
     folders, files, loading, error, hasItems,
-    currentFolderId, breadcrumbs, sharedList, canWrite,
+    currentFolderId, breadcrumbs, sharedList, canWrite, linkMode,
     fetchFiles, navigateToFolder, goUp, goToBreadcrumb
   }
 }

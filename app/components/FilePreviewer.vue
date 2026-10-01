@@ -6,8 +6,13 @@
         <h3 class="truncate text-base font-medium text-gray-900 sm:text-lg">{{ zipEntry?.filename || file?.filename }}</h3>
       </div>
       <div class="flex items-center gap-2">
+        <!--
+          链接视角只读：保存 / 替换文件两个入口都不给。
+          服务端本来也拦（/api/upload/credentials 与 /api/files/save 没有 link 分支），
+          但给一个点了必失败的按钮不如不给。
+        -->
         <button
-          v-if="isEditable && !zipEntry"
+          v-if="isEditable && !zipEntry && !linkMode"
           class="rounded-md bg-indigo-600 px-3 py-2 text-white hover:bg-indigo-700 disabled:opacity-50"
           :disabled="!dirty || uploading"
           @click="saveText"
@@ -23,7 +28,7 @@
         </button>
 
         <button
-          v-if="!zipEntry"
+          v-if="!zipEntry && !linkMode"
           class="rounded-md border border-indigo-200 px-3 py-2 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
           :disabled="uploading"
           @click="replaceInputRef?.click()"
@@ -149,6 +154,19 @@
         <div v-if="tooLargeHint" class="border-t border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-700">{{ tooLargeHint }}</div>
       </div>
 
+      <!--
+        链接视角下的纯文本：内容照常加载（load() 不分视角），但只读。
+        不能靠 isEditable=false 掉进下面那个「暂不支持在线预览」分支 ——
+        对 .txt 来说那是假消息，而内容明明已经拿到了。
+      -->
+      <div v-else-if="linkMode && isTextLike" class="flex h-full flex-col">
+        <div class="flex items-center justify-between gap-2 border-b px-4 py-2 text-xs text-gray-500">
+          <span>{{ isMd ? 'Markdown' : '纯文本' }} · 大小 {{ prettySize }}</span>
+          <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600">分享链接 · 只读</span>
+        </div>
+        <pre class="flex-1 w-full overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-sm outline-none sm:p-4">{{ textContent }}</pre>
+      </div>
+
       <div v-else class="flex h-full items-center justify-center text-gray-500">
         暂不支持该类型的在线预览，可尝试下载。
       </div>
@@ -171,6 +189,11 @@ const props = defineProps<{
   file: FileRecord
   currentFolderId: number | null
   targetUserId?: number | null
+  /**
+   * 分享链接 token。加载和下载都要带上 —— 预览走的就是 /api/files/download，
+   * 少了 link 的话匿名访客点开一个文件就是 401。
+   */
+  link?: string | null
 }>()
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'saved'): void }>()
@@ -209,7 +232,13 @@ const archiveExtensions = new Set(['zip', '7z', 'rar', 'tar', 'gz', 'tgz', 'bz2'
 const isZip = computed(() => ext.value === 'zip')
 const isArchive = computed(() => archiveExtensions.has(ext.value))
 const archiveFormat = computed<'zip' | '7z'>(() => isZip.value ? 'zip' : '7z')
-const isEditable = computed(() => !isArchive.value && (isText.value || isMd.value))
+/**
+ * 链接视角。链接只给读+下载，所以「可编辑」在这里必须为 false ——
+ * 否则会渲染出文本编辑框和「保存」按钮，而保存走的是上传接口（没有 link 分支）。
+ */
+const linkMode = computed(() => !!props.link)
+const isTextLike = computed(() => isText.value || isMd.value)
+const isEditable = computed(() => !linkMode.value && !isArchive.value && isTextLike.value)
 const isZipEntryImage = computed(() => !!zipEntry.value && isImageName(zipEntry.value.filename))
 const isZipEntryPdf = computed(() => !!zipEntry.value && extensionOf(zipEntry.value.filename) === 'pdf')
 const isZipEntryText = computed(() => !!zipEntry.value && isTextName(zipEntry.value.filename) && zipEntry.value.fileSize <= 10 * 1024 * 1024)
@@ -289,7 +318,9 @@ const load = async () => {
   try {
     const sign = await FilesService.downloadSign(
       { fileKey: currentFileKey.value, filename: props.file.filename },
-      props.targetUserId ?? null
+      props.targetUserId ?? null,
+      undefined,
+      props.link ?? null
     )
     if (!sign.success) throw new Error('获取下载链接失败')
     if (requestId !== loadId) return
@@ -457,7 +488,9 @@ const handleDownload = async () => {
   try {
     const sign = await FilesService.downloadSign(
       { fileKey: currentFileKey.value, filename: props.file.filename },
-      props.targetUserId ?? null
+      props.targetUserId ?? null,
+      undefined,
+      props.link ?? null
     )
     if (!sign.success) throw new Error('获取下载链接失败')
     const response = await fetch(sign.data.downloadUrl)

@@ -1,3 +1,4 @@
+// ~/composables/useBulkActions.ts
 import { FilesService } from '~/services/files.service'
 import { FoldersService } from '~/services/folders.service'
 import { triggerDownload } from '~/utils/download'
@@ -16,17 +17,20 @@ export function useBulkActions(
     targetUserId?: Ref<number | null | undefined>
     /** 显式传。/manage/files 传 true 才能代删，首页侧栏不传 */
     useAdmin?: Ref<boolean | null | undefined>
+    /** 分享链接视角。下载/整包下载都要带上，否则匿名请求过不了中间件 */
+    link?: Ref<string | null | undefined>
   }
 ) {
   const tRef = options?.targetUserId
   const admin = () => options?.useAdmin?.value || undefined
+  const link = () => options?.link?.value || null
   const bulkDeleting = ref(false)
   const bulkDownloading = ref(false)
   const downloadingFolderId = ref<number | null>(null)
 
   const downloadFile = async (file: FileRecord) => {
     try {
-      const res = await FilesService.downloadSign({ fileKey: file.fileKey, filename: file.filename }, tRef?.value ?? null, admin())
+      const res = await FilesService.downloadSign({ fileKey: file.fileKey, filename: file.filename }, tRef?.value ?? null, admin(), link())
       if (res.success) triggerDownload(res.data.downloadUrl, res.data.filename)
       else {
         notify(res?.statusMessage || '下载文件失败','error')
@@ -63,7 +67,7 @@ export function useBulkActions(
         selectedFolderIds.value.delete(folder.id)
         notify('文件夹删除成功','success')
       } else {
-        notify(res.statusMessage || '删除失败', 'error')
+        notify(res.statusMessage || '删除失败','error')
       }
     } catch (e) {
       notifyError(e, '删除文件夹失败')
@@ -131,7 +135,11 @@ export function useBulkActions(
     bulkDownloading.value = true
     try {
       const t = tRef?.value ?? null
-      const manifests = await Promise.all(selFolders.map(f => FoldersService.manifest(f.id, t)))
+      const a = admin()
+      const l = link()
+      // 链接视角下服务端已经按链接范围过滤过了（整包下载只给能覆盖的那部分），
+      // 所以这里拿到的清单可以直接逐个签名，不会中途 403。
+      const manifests = await Promise.all(selFolders.map(f => FoldersService.manifest(f.id, t, a, l)))
       const totalFolderBytes = manifests.reduce((acc, m) => acc + (m.totals?.bytes || 0), 0)
       const totalFileBytes = selFiles.reduce((acc, f) => acc + (f.fileSize || 0), 0)
       const totalBytes = totalFolderBytes + totalFileBytes
@@ -148,7 +156,7 @@ export function useBulkActions(
       // 文件夹条目（保持原有相对路径）
       for (const m of manifests) {
         for (const item of m.files) {
-          const sign = await FilesService.downloadSign({ fileKey: item.fileKey, filename: item.filename }, t)
+          const sign = await FilesService.downloadSign({ fileKey: item.fileKey, filename: item.filename }, t, a, l)
           if (!sign.success) throw new Error(`签名失败: ${item.filename}`)
           const entryPath = [m.folder.name, item.relDir, item.filename].filter(Boolean).join('/')
           await sink.addFromUrl(entryPath, sign.data.downloadUrl)
@@ -157,7 +165,7 @@ export function useBulkActions(
 
       // 选中的散文件放在 zip 根目录
       for (const f of selFiles) {
-        const sign = await FilesService.downloadSign({ fileKey: f.fileKey, filename: f.filename }, t, admin())
+        const sign = await FilesService.downloadSign({ fileKey: f.fileKey, filename: f.filename }, t, a, l)
         if (!sign.success) throw new Error(`签名失败: ${f.filename}`)
         await sink.addFromUrl(f.filename, sign.data.downloadUrl)
       }

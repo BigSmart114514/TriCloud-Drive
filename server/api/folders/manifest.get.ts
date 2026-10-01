@@ -8,15 +8,15 @@
 //      ?targetUserId=5 就能拿到**用户 5** 视角的清单。
 //   3. 额度预检查的是**真正会被扣的人**。以前查 targetUserId，实际预占记的是
 //      文件属主，于是提示「不会超限」点下去却被拒。
-import { getMeAndTarget } from '~~/server/utils/auth-middleware'
+import { getMeAndTarget, optionalAuth } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
 import type { ManifestFile } from '~~/server/utils/db'
 import { quotaExceededMessage, resolveQuotaOwnerId } from '~~/server/utils/quota'
 import {
   linkGrantsFolder,
+  linkNotActiveMessage,
   listSubtreeByLink,
-  LINK_NOT_ACTIVE_MESSAGE,
   resolveLinkTarget
 } from '~~/server/utils/share-link'
 import { dbConnectionError } from '~~/types/error'
@@ -56,7 +56,13 @@ export default defineEventHandler(async (event) => {
     // 先 resolveLinkTarget 拿到属主：链接覆盖判定和清单都靠它圈 user_id 范围
     const target = await resolveLinkTarget(db, link)
     if (!(await linkGrantsFolder(db, link, folderId))) {
-      throw createError({ statusCode: 404, message: LINK_NOT_ACTIVE_MESSAGE })
+      // 死链提示分访客/属主两套（见 linkNotActiveMessage）。
+      // 这里匿名可调，身份用 optionalAuth 取，拿不到就走访客口径。
+      const session = await optionalAuth(event)
+      throw createError({
+        statusCode: 404,
+        message: linkNotActiveMessage(session ? Number(session.userId) : null, target.ownerId)
+      })
     }
     const scoped = await listSubtreeByLink(db, target.ownerId, folderId)
     files = scoped.files

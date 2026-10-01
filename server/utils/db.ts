@@ -117,6 +117,14 @@ export interface OwnedFolder {
   /** 我授权了多少人（folder_access 行数）。继承态下角标靠它区分「共享中」和默认态 */
   grantCount: number
   /**
+   * 这个目录上挂了几条分享链接（share_links 行数）。
+   *
+   * 与 grantCount 并列的「设过东西」标志：光看名单和公开看不见链接，
+   * 于是「在继承态目录上生成了链接」这种死链在界面上毫无提示
+   *（而它恰恰是最容易踩的 —— 新建目录默认就是继承态）。
+   */
+  linkCount: number
+  /**
    * 继承态下自己设的名单/公开当前生效吗（列表接口挂，别的路径可能没有）。
    * 没人拍板（含根目录自己）或最近边界是「不分享」时为 false。
    */
@@ -141,6 +149,8 @@ export interface OwnedFile {
   grants: AccessGrant[]
   /** grants.length。列表页的红点判定要「有没有设过人员」，直接用数组长度即可 */
   grantCount?: number
+  /** 该文件上挂了几条分享链接。与 OwnedFolder.linkCount 同义，列表页红点用 */
+  linkCount?: number
   /** 同 OwnedFolder.presetActive */
   presetActive?: boolean
 }
@@ -166,6 +176,12 @@ export interface ManifestFile {
   /** 该文件自己的三态。非继承的文件是它自己那道边界，祖先的授权到不了它 */
   Shared: number
   IsPublic: boolean
+  /**
+   * MIME 类型。**只有分享链接那条路径带**（share-link.ts 的 listSubtreeByLink），
+   * 因为复制要靠它给副本写回 content_type；清单（整包下载）用不上。
+   * 缺省时调用方按 application/octet-stream 处理。
+   */
+  contentType?: string | null
 }
 
 /**
@@ -417,7 +433,9 @@ function toOwnedFolder(row: any): OwnedFolder {
     Shared: normalizeShareMode(row.Shared),
     IsPublic: toBool(row.IsPublic),
     // 缺列时兜底 0：老查询没带 grantCount，语义上等于「没授权任何人」
-    grantCount: Number(row.grantCount ?? 0) || 0
+    grantCount: Number(row.grantCount ?? 0) || 0,
+    // 同理：没带 linkCount 的老查询等于「没挂过链接」
+    linkCount: Number(row.linkCount ?? 0) || 0
   }
 }
 
@@ -459,7 +477,13 @@ const FOLDER_COLUMNS_BASE =
  * 带 `folders.` 限定名：个别查询里 folders 会与 folder_access 联表，不限定会歧义。
  */
 const FOLDER_COLUMNS_WITH_GRANTS =
-  `${FOLDER_COLUMNS_BASE}, (SELECT COUNT(*) FROM folder_access fa WHERE fa.folder_id = folders.id) AS grantCount`
+  `${FOLDER_COLUMNS_BASE}, (SELECT COUNT(*) FROM folder_access fa WHERE fa.folder_id = folders.id) AS grantCount` +
+  // linkCount = 这个目录上挂了几条分享链接。文件那侧在 attachAccess 里同样补。
+  // 两个计数都是「属主视角」的红点判据（见 types/share.ts 的 shareDotReason）：
+  // 授权名单非空、或者挂过链接，都算「设过东西」。缺了链接这一项，
+  // 「在刚建的目录上生成链接」这种最常见的死链场景图标上一点提示都没有。
+  // 走 ix_share_links_target 索引，不扫表。
+  `, (SELECT COUNT(*) FROM share_links sl WHERE sl.target_type = 'folder' AND sl.target_id = folders.id) AS linkCount`
 
 /**
  * 文件夹归属校验：所有读写都必须经过这里，SQL 里始终带 user_id
@@ -890,10 +914,29 @@ export class FileService {
       list.push({ userId: Number(row.userId), permission: normalizePermission(row.permission) })
       map.set(id, list)
     }
+
+    /**
+     * linkCount 与授权名单同批取：一次查询补两个计数，别为红点再跑一趟。
+     * 走 ix_share_links_target 索引。
+     */
+    const linkRows = await this.db
+      .prepare(
+        `SELECT target_id AS targetId, COUNT(*) AS n
+         FROM share_links
+         WHERE target_type = 'file' AND target_id IN (${placeholders(ids.length)})
+         GROUP BY target_id`
+      )
+      .bind(...ids)
+      .all()
+      .catch(() => null)
+    const linkMap = new Map<number, number>()
+    for (const row of linkRows?.results || []) linkMap.set(Number(row.targetId), Number(row.n) || 0)
+
     for (const file of files) {
       const grants = map.get(file.id) || []
       file.grants = grants
       file.grantCount = grants.length
+      file.linkCount = linkMap.get(file.id) || 0
     }
     return files
   }

@@ -8,6 +8,21 @@ type ClipboardPayload = {
   folderIds: number[]
   fileIds: number[]
   fromFolderId: number | null
+  /**
+   * 剪贴这些条目时所处的**链接视角**（token），没有则 null。
+   *
+   * 为什么必须带上：链接视图里那些条目的 id 是**属主树里**的 id，
+   * 而我（访客/被授权人）对它们没有按人授权 —— 服务端 findAccessibleMany
+   * 按 userId 查名单，拿到这些 id 一律 404。所以复制必须把凭据一起递过去，
+   * 服务端才知道该按 token 查边界。
+   *
+   * 粘到别处（自己的目录、别人的分享目录）时这个 token 就不再适用：
+   * 目标侧不传 link，走正常权限判定。这是对的 —— 副本的落点归目标侧管，
+   * 源的凭据只用来证明「我能读这些」。
+   *
+   * 剪贴（cut）不带 link：移动就是写属主的树，链接只给只读。
+   */
+  link?: string | null
 }
 
 type Params = {
@@ -33,10 +48,14 @@ export function useClipboard(
     overwriteExisting?: Ref<boolean | null | undefined>
     skipExisting?: Ref<boolean | null | undefined>
     useAdmin?: Ref<boolean | null | undefined>
+    /** 当前是否处于链接视角。剪贴时记进 payload，粘贴时带给服务端 */
+    link?: Ref<string | null | undefined>
   }
 ) {
   const tRef = options?.targetUserId
   const useAdmin = options?.useAdmin
+  const linkRef = options?.link
+  const currentLink = computed(() => (linkRef?.value ? String(linkRef.value) : null))
 
   /**
    * 剪贴板必须跨组件存活。
@@ -69,7 +88,9 @@ export function useClipboard(
       mode,
       folderIds,
       fileIds,
-      fromFolderId: currentFolderId.value ?? null
+      fromFolderId: currentFolderId.value ?? null,
+      // cut 不带链接：链接只给只读，移动需要写权限
+      link: mode === 'cut' ? null : currentLink.value
     }
   }
 
@@ -96,9 +117,21 @@ export function useClipboard(
       const t = tRef?.value ?? null
       const admin = useAdmin?.value || undefined
 
+      /**
+       * 剪贴时记下的链接**一律带上**。这正是「在链接视图里复制、粘到自己空间」
+       * 能成立的原因：源的 id 是属主树里的，服务端按 userId 查名单会 404，
+       * 必须靠 token 证明「我能读这些」。
+       *
+       * 带了链接会不会越权？不会 —— 服务端只把 link 用在**源**的解析上
+       * （见 paste.post.ts 的注释），目标目录仍然走 findAccessibleById +
+       * PERM_WRITE 的正常判定。所以「在自己的目录里粘贴」永远只粘得进
+       * 我自己有写权限的地方，而读源的范围被链接的边界 CTE 限死。
+       *
+       * cut 不带（剪贴时就没记 link）：移动要写权限，链接给不了。
+       */
       const res = c.mode === 'cut'
         ? await MoveService.paste(targetFolderId, c.folderIds, c.fileIds, t, options?.overwriteExisting?.value, options?.skipExisting?.value, admin)
-        : await CopyService.paste(targetFolderId, c.folderIds, c.fileIds, t, options?.overwriteExisting?.value, options?.skipExisting?.value, admin)
+        : await CopyService.paste(targetFolderId, c.folderIds, c.fileIds, t, options?.overwriteExisting?.value, options?.skipExisting?.value, admin, c.link ?? null)
 
       if (!res?.success) {
         notify(res?.statusMessage || (c.mode === 'cut' ? '移动失败' : '复制失败'), 'error')

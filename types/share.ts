@@ -66,30 +66,92 @@ export const SHARE_BADGE_LABELS: Record<ShareBadge, string> = {
 }
 
 /**
- * 要不要在图标右下角点一个红点 —— 提示「你设的分享当前没生效」。
+ * 图标右下角那个红点 —— 提示「你设的分享当前没生效」。为什么会亮有两种原因，
+ * 所以判定给的是 `reason` 而不是布尔：文案不一样（「名单没生效」和「链接是死的」
+ * 要分开说，混成一句会让人去改错地方）。
  *
- * 三个条件同时成立才点：
+ * **原因一：链接是死的**（linkCount > 0 且自己不是「分享」态）
+ *   见 linkActiveFromShareMode 的推导。不需要查库。
+ *
+ * **原因二：预设没生效**（原来那套），三个条件同时成立：
  *   1. 继承态（只有继承态才存在「预设」这回事）
  *   2. 确实设过东西（授权名单非空，或开了公开）—— 什么都没设就没有「没生效」
  *   3. 预设没生效（`presetActive === false`）：整条链没人拍板，含根目录自己；
  *      或者最近的那道边界是「不分享」，把它挡住了
  *
- * `presetActive` 缺失（undefined）时**不点**：那说明这条数据没经过判定
+ * `presetActive` 缺失（undefined）时**不点**（原因二）：那说明这条数据没经过判定
  * （部分接口不返回它），宁可漏提示也不要给一份正常的分享挂个「没生效」。
+ * 原因一不受此限 —— 死链判定只依赖列表本来就有的三态字段。
  */
-export function shouldShowPresetDot(input: {
+/** 红点为什么亮。null = 不亮 */
+export type ShareDotReason = 'link' | 'preset'
+
+export function shareDotReason(input: {
   Shared?: number | null
   IsPublic?: boolean | null
   grantCount?: number | null
+  /** 该节点上挂了几条分享链接。见下面 linkActiveFromShareMode 的推导 */
+  linkCount?: number | null
   presetActive?: boolean | null
-}): boolean {
-  if (normalizeShareMode(input.Shared) !== SHARE_INHERIT) return false
+}): ShareDotReason | null {
+  const mode = normalizeShareMode(input.Shared)
+
+  /**
+   * 死链优先判，且**不受「只在继承态判定」这条限制**。
+   *
+   * 判定就一句：这个节点不是「分享」，它身上的链接就永远不生效
+   * （见 linkActiveFromShareMode）。不需要查库，也不需要 presetActive。
+   *
+   * 之所以连「不分享」也算：那种节点图标上已经有锁角标，但锁只说「这里不给看」，
+   * 没说「你发的链接打不开」。两件事，都值得提示。
+   */
+  if (Number(input.linkCount ?? 0) > 0 && mode !== SHARE_SHARED) return 'link'
+
+  if (mode !== SHARE_INHERIT) return null
   const hasSetting = input.IsPublic === true || Number(input.grantCount ?? 0) > 0
-  if (!hasSetting) return false
-  return input.presetActive === false
+  if (!hasSetting) return null
+  return input.presetActive === false ? 'preset' : null
 }
 
-export const PRESET_DOT_TITLE = '已设置的分享当前未生效：上方没有「分享」节点，或被「不分享」挡住了'
+export function shouldShowPresetDot(input: Parameters<typeof shareDotReason>[0]): boolean {
+  return shareDotReason(input) !== null
+}
+
+/** 红点的悬浮说明。与 shareDotReason 同源，两种原因给不同文案 */
+export function shareDotTitle(reason: ShareDotReason): string {
+  return reason === 'link' ? LINK_DOT_TITLE : PRESET_DOT_TITLE
+}
+
+/**
+   * 挂在某个节点上的链接当前生效吗？
+   *
+   * **不需要查库**：判定只看节点自己的三态（服务端 BOUNDARY_CTE 的推导）：
+   *   Shared = 分享(1) → 边界落在自己、且不是墙 → 挂上来的链接全部生效
+   *   Shared = 继承(2) → 自己不是边界，判定会往上找第一个非继承祖先，
+   *                     那个祖先身上**没有**这条链接（链接挂在自己这儿）
+   *                     → 拒绝。上游改成「分享」也救不回来
+   *   Shared = 不分享(0) → 自己就是墙 → 拒绝
+   * 所以「链接在不在这一层生效」等价于「自己是不是分享态」，而这本来就在
+   * 列表数据里。省掉的是每条目一次上行 CTE —— 列表页是逐条查的，这笔开销不小。
+   *
+   * 与 `presetActive` 是两回事：那个问「名单/公开生效吗」，这个问「链接生效吗」。
+   * 一个节点可以「链接有效但名单没生效」（在别人的分享目录里自己开了名单），
+   * 反过来「名单生效但链接死的」就是死链这一种。
+   */
+export function linkActiveFromShareMode(shared: number | null | undefined): boolean {
+  return normalizeShareMode(shared) === SHARE_SHARED
+}
+
+export const PRESET_DOT_TITLE = '你设置的分享当前没生效：上级目录里没有「分享」，或被「不分享」挡住了'
+
+/**
+ * 死链的红点提示。与 linkActiveFromShareMode 的判定同源。
+ *
+ * 只对**属主**显示（FileList 用 showShareBadge 门控），所以这里可以直说
+ * 「怎么改能生效」—— 他就是要去改的人。
+ */
+export const LINK_DOT_TITLE =
+  '这个分享链接现在打不开：需要把这个文件夹或它的上级目录设为「分享」'
 
 export const SHARE_MODE_LABELS: Record<number, string> = {
   [SHARE_NONE]: '不分享',
@@ -200,12 +262,26 @@ export const LINK_PERMISSION = PERM_READ | PERM_DOWNLOAD
 export const SHARE_LINK_TOKEN_BYTES = 16
 
 /**
- * 分享链接页面的路径前缀，最终地址是 `${前缀}${token}`（如 `/s/1a2b...`）。
+ * 分享链接的 query 参数名，落地地址是 `/?share_link=<token>`。
  *
- * 放这里而不是各写一份字符串：服务端生成 url 时要用，前端路由也要用，
- * 两边不一致的表现是「链接复制出来点开 404」，很难一眼看出是哪边写错了。
+ * 为什么用 query 而不是路径（原来的 `/s/<token>` 想法）：
+ * 落地页就是首页，首页本来就在 auth.global.ts 的白名单里，匿名访客
+ * 带这个参数就能进 —— 用路径前缀的话得额外把 `/s/**` 加进白名单，
+ * 多一处「哪些路径匿名可进」的配置，多一处以后会忘的地方。
+ *
+ * 放这里而不是各写一份字符串：服务端拼 url 时用，前端解析 query 时用，
+ * 两边不一致的表现是「链接复制出来点开是首页但什么都没发生」，
+ * 很难一眼看出是哪边写错了。
  */
-export const SHARE_LINK_PAGE_PREFIX = '/s/'
+export const SHARE_LINK_QUERY_KEY = 'share_link'
+
+/**
+ * 分享链接的落地地址（相对路径）。
+ *
+ * 只有一个拼法，服务端生成与前端「写进地址栏」都用它，
+ * 免得出现「服务端发的链接点开是首页，前端自己的按钮却是另一种形态」。
+ */
+export const SHARE_LINK_LANDING_PATH = '/'
 
 /**
  * 校验/规范化一个链接 token，不合法返回 null。

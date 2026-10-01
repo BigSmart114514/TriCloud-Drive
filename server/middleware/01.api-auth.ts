@@ -24,7 +24,7 @@ import { normalizeShareLink } from '~~/types/share'
 const PUBLIC_PATHS = new Set(['/api/auth/login', '/api/auth/register', '/api/auth/logout'])
 
 /**
- * 分享链接能匿名访问的三个（读 + 下载 + 整包下载清单）。
+ * 分享链接能匿名访问的四个（读 + 下载 + 整包下载清单 + 验有效性）。
  *
  * **只在带了合法形状的 link 时才匿名放行**，不带就照常 requireAuth ——
  * 开成「这三个接口永久免鉴权」等于开三个匿名入口。
@@ -36,7 +36,17 @@ const PUBLIC_PATHS = new Set(['/api/auth/login', '/api/auth/register', '/api/aut
  * 这份名单与 PUBLIC_PATHS 是两回事：前者「本来就要给未登录用户调」，
  * 后者「凭一个能力凭据（token）调用，凭据对不对由 handler 判」。
  */
-const LINK_PUBLIC_PATHS = new Set(['/api/files', '/api/files/download', '/api/folders/manifest'])
+/**
+ * resolve 是「验有效性」那一步：访客点开链接时不保证有账号，
+ * 前端要判断该不该把这条链接从本地存储删掉，这一步必须匿名能做完。
+ * 它返回 200/active:false 与 404 两种可区分的结果，别的都不删。
+ */
+const LINK_PUBLIC_PATHS = new Set([
+  '/api/files',
+  '/api/files/download',
+  '/api/folders/manifest',
+  '/api/share/link/resolve'
+])
 
 export default defineEventHandler(async (event) => {
   const path = getRequestURL(event).pathname

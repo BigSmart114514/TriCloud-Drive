@@ -45,14 +45,27 @@
               <ShareIcon v-else class="h-3 w-3 text-blue-500" />
             </span>
             <!--
-              右下角红点：继承态下设了分享但没生效。
-              用右下角而不是右上角，右上角已经被角标占了，两个叠在一起会糊。
+              左上角 link 标：这个目录上挂着分享链接。
+              放左上角是因为右上角已经被分享角标占了（-right-1 -top-1），
+              两个叠在一起会糊成一块看不出是什么。
             -->
             <span
-              v-if="showPresetDot(folder)"
+              v-if="showLinkIcon(folder)"
+              class="absolute -left-1 -top-1 flex h-4 w-4 items-center justify-center rounded bg-white shadow-sm ring-1 ring-gray-200"
+              :title="linkIconTitle(folder)"
+              :aria-label="linkIconTitle(folder)"
+            >
+              <LinkIcon class="h-3 w-3 text-indigo-500" />
+            </span>
+            <!--
+              右下角红点：设过的分享当前没生效（名单预设没生效，或链接是死的）。
+              两种原因的悬浮文案不同，见 shareDotTitle。
+            -->
+            <span
+              v-if="dotReasonOf(folder)"
               class="absolute -bottom-0.5 -right-0.5 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"
-              :title="PRESET_DOT_TITLE"
-              :aria-label="PRESET_DOT_TITLE"
+              :title="shareDotTitle(dotReasonOf(folder)!)"
+              :aria-label="shareDotTitle(dotReasonOf(folder)!)"
             />
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="emit('navigate-folder', folder)">
@@ -156,12 +169,21 @@
           />
           <div class="shrink-0 relative">
             <FileIcon class="h-8 w-8 text-gray-400" :filename="file.filename" />
-            <!-- 同文件夹：继承态下设了分享但没生效 -->
+            <!-- 同文件夹：左上角 link 标（挂在文件上的分享链接） -->
             <span
-              v-if="showPresetDot(file)"
+              v-if="showLinkIcon(file)"
+              class="absolute -left-1 -top-1 flex h-4 w-4 items-center justify-center rounded bg-white shadow-sm ring-1 ring-gray-200"
+              :title="linkIconTitle(file)"
+              :aria-label="linkIconTitle(file)"
+            >
+              <LinkIcon class="h-3 w-3 text-indigo-500" />
+            </span>
+            <!-- 同文件夹：右下角红点，两种原因不同文案 -->
+            <span
+              v-if="dotReasonOf(file)"
               class="absolute -bottom-0.5 -right-0.5 block h-2 w-2 rounded-full bg-red-500 ring-2 ring-white"
-              :title="PRESET_DOT_TITLE"
-              :aria-label="PRESET_DOT_TITLE"
+              :title="shareDotTitle(dotReasonOf(file)!)"
+              :aria-label="shareDotTitle(dotReasonOf(file)!)"
             />
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="emit('preview-file', file)">
@@ -345,16 +367,17 @@ import type { FileListFile, FileListFolder, FileListId } from '~~/types/file-lis
 import {
   formatPermission,
   resolveShareBadge,
-  shouldShowPresetDot,
-  PRESET_DOT_TITLE,
+  shareDotReason,
+  shareDotTitle,
   SHARE_BADGE_LABELS
 } from '~~/types/share'
-import type { ShareBadge } from '~~/types/share'
+import type { ShareBadge, ShareDotReason } from '~~/types/share'
 import {
   ArrowDownTrayIcon,
   DocumentDuplicateIcon,
   EllipsisVerticalIcon,
   EyeIcon,
+  LinkIcon,
   LockClosedIcon,
   PencilSquareIcon,
   ScissorsIcon,
@@ -475,20 +498,42 @@ const folderBadges = computed(() => {
 })
 
 /**
- * 图标右下角那个红点：提示「继承态下设的分享当前没生效」。
+ * 图标右下角那个红点：「设过的分享当前没生效」。
  *
  * 与 folderBadge 共用 showShareBadge 这个开关 —— 两者都是「只有属主才需要知道」
- * 的信息，共享清单里那些是别人的目录，显示出来会误导。
- * 判定规则见 types/share.ts 的 shouldShowPresetDot。
+ * 的信息，共享清单里那些是别人的目录，显示出来会误导（而且链接是别人的，
+ * 我既拿不到也不该知道有几条）。
+ *
+ * 判定见 types/share.ts 的 shareDotReason，两种原因：
+ *   preset —— 继承态下授权名单/公开没生效（原有）
+ *   link   —— 这个节点上挂了链接但节点不是「分享」态，所以链接是死的
+ * 两种的悬浮文案不同，所以这里返回 reason 而不是布尔。
  */
-const showPresetDot = (item: FileListFile | FileListFolder): boolean =>
+const dotReasonOf = (item: FileListFile | FileListFolder): ShareDotReason | null =>
   props.showShareBadge
-  && shouldShowPresetDot({
-    Shared: item.Shared,
-    IsPublic: item.IsPublic,
-    grantCount: item.grantCount,
-    presetActive: item.presetActive
-  })
+    ? shareDotReason({
+        Shared: item.Shared,
+        IsPublic: item.IsPublic,
+        grantCount: item.grantCount,
+        linkCount: item.linkCount,
+        presetActive: item.presetActive
+      })
+    : null
+
+/**
+ * 左上角那个 link 标：这个条目上挂着分享链接。
+ *
+ * 与红点共用 showShareBadge —— 同理，链接是属主的凭据，别人的目录上不该显示。
+ * 只表达「有链接」这个静态事实；「链接能不能用」是红点的事。
+ */
+const showLinkIcon = (item: FileListFile | FileListFolder): boolean =>
+  props.showShareBadge && Number(item.linkCount ?? 0) > 0
+
+const linkIconTitle = (item: FileListFile | FileListFolder): string => {
+  const n = Number(item.linkCount ?? 0)
+  const name = 'filename' in item ? item.filename : item.name
+  return n > 1 ? `${name}：${n} 个分享链接` : `${name}：有分享链接`
+}
 
 /**
  * 悬停即出、移开即收；点击钉住，方便停留和复制文字。

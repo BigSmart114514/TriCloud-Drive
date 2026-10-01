@@ -1,4 +1,4 @@
-import { defineEventHandler, readBody } from 'h3'
+import { defineEventHandler, getQuery, readBody } from 'h3'
 import COS from 'cos-nodejs-sdk-v5'
 import { useRuntimeConfig } from '#imports'
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
@@ -8,8 +8,14 @@ import type { OwnedFile, OwnedFolder } from '~~/server/utils/db'
 import { ensurePaths } from '~~/server/utils/folders'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { uniqPositiveInts } from '~~/server/utils/functions'
+import {
+  linkGrantsFile,
+  linkGrantsFolder,
+  listSubtreeByLink,
+  resolveLinkTarget
+} from '~~/server/utils/share-link'
 import { skipAndOverwriteError } from '~~/types/error'
-import { DEFAULT_SHARE_MODE, hasPermission, PERM_WRITE } from '~~/types/share'
+import { DEFAULT_SHARE_MODE, hasPermission, normalizeShareLink, PERM_WRITE } from '~~/types/share'
 
 function sanitizeForKey(name: string): string {
   return name.replace(/[\\?%*:|"<>]/g, '_').replace(/[\s]+/g, ' ')
@@ -19,6 +25,24 @@ function randomId(len = 10) {
 }
 
 export default defineEventHandler(async (event) => {
+  /**
+   * 分享链接视图下的复制。
+   *
+   * link 只换掉**源**的解析方式，目标目录判定一行都没动（仍然是
+   * findAccessibleById(authId, targetFolderId, PERM_WRITE)）。这条边界不能松：
+   * 链接只给只读，它唯一该做的事是「让我把看到的东西拷进自己的空间」，
+   * 绝不能变成「让我往属主的树里写」。副本一律落在目标目录的属主树下。
+   *
+   * 源的两处判定都要换：
+   *   - 单个条目：按人查名单（findAccessibleMany + PERM_WRITE）→ 按 token 查边界（linkGrants*）
+   *   - 子树：逐层 resolveAccess + PERM_WRITE → listSubtreeByLink 的 ok 标志（只收继承态）
+   * 不复用 findAccessibleMany 的理由与 share-link.ts 顶部一致：那是按 userId 查
+   * file_access/folder_access 的，链接没有 userId，查询形状不同。
+   */
+  const shareLink = normalizeShareLink((getQuery(event) as any)?.link)
+
+  // 中间件不在 LINK_PUBLIC_PATHS 里放行本接口，所以链接复制仍然要求登录：
+  // 复制是写操作，要有个身份来承担空间额度和「副本归谁」。
   const { authUserId } = await getMeAndTarget(event)
   // 鉴权身份：判「我能不能读这些 / 能不能往那儿写」
   const authId = Number(authUserId)
@@ -49,11 +73,44 @@ export default defineEventHandler(async (event) => {
   // 复制源：要求 **WRITE**，不只是读得到。
   // 规则是「能原地改的才允许拷走」：只读授权的内容不会被搬进自己的空间，
   // 否则属主事后撤掉授权也追不回来。子树内的子目录/文件同规则（见 collectSubtree）。
+  //
+  // 链接分支例外：链接只给 READ|DOWNLOAD，本来就永远过不了上面那条 WRITE，
+  // 所以走 linkGrants*（只要求覆盖得到）。这是有意的 —— 链接是长期凭据，
+  // 拷走之后收不回来，但整包下载本来就能把同样的字节拿走，不算新的暴露面。
   let movedFolders: OwnedFolder[]
   let movedFileRows: OwnedFile[]
+  /** 链接解析出来的属主。子树的 SQL 要用它圈 user_id 范围 */
+  let linkOwnerId: number | null = null
   try {
-    movedFolders = await folderService.findAccessibleMany(authId, folderIds, PERM_WRITE)
-    movedFileRows = await fileService.findAccessibleMany(authId, fileIds, PERM_WRITE)
+    if (shareLink) {
+      const target = await resolveLinkTarget(db, shareLink)
+      linkOwnerId = target.ownerId
+
+      // 逐个验「这条 token 能不能覆盖它」。链接视角下列表只给继承态子项，
+      // 但 body 里的 id 是客户端给的，不能因为「列表里出现过」就信。
+      const okFolders: OwnedFolder[] = []
+      for (const id of folderIds) {
+        if (!(await linkGrantsFolder(db, shareLink, id))) continue
+        const row = await folderService.findOwnedById(linkOwnerId, id)
+        if (row) okFolders.push(row)
+      }
+      const okFiles: OwnedFile[] = []
+      for (const id of fileIds) {
+        if (!(await linkGrantsFile(db, shareLink, id))) continue
+        const row = await fileService.findOwnedById(linkOwnerId, id)
+        if (row) okFiles.push(row)
+      }
+      // 少一个就整体拒绝，不做部分成功 —— 否则会出现「搬了一半」的中间态，
+      // 与 findAccessibleMany 的口径一致。
+      if (okFolders.length !== folderIds.length || okFiles.length !== fileIds.length) {
+        return { success: false, statusMessage: '部分内容不存在，或不在该分享链接的范围内' }
+      }
+      movedFolders = okFolders
+      movedFileRows = okFiles
+    } else {
+      movedFolders = await folderService.findAccessibleMany(authId, folderIds, PERM_WRITE)
+      movedFileRows = await fileService.findAccessibleMany(authId, fileIds, PERM_WRITE)
+    }
   } catch (e: any) {
     return { success: false, statusMessage: e?.statusMessage || '部分内容不存在或无权限' }
   }
@@ -126,6 +183,9 @@ export default defineEventHandler(async (event) => {
    * 收录条件是 **PERM_WRITE**，不是 READ：能原地改的才允许拷走。只读授权的内容
    * 不会被搬进自己的空间，否则属主撤掉授权也追不回来了。顺带也保证不会把
    * 别人树里不可见的子树（SHARE_NONE / 私人文件）一并带出去。
+   *
+   * **链接视角不走这里**，见下面 collectSubtreeByLink —— 那条用 listSubtreeByLink，
+   * 和整包下载清单同一个收集器，不写第二套遍历。
    */
   async function collectSubtree(rootId: number, rootName: string, sourceOwnerId: number) {
     relPathByFolderId.set(rootId, rootName)
@@ -180,9 +240,58 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  /**
+   * 链接视角的子树收集：**复用 listSubtreeByLink**（整包下载清单用的同一个），
+   * 不写第二套遍历。
+   *
+   * 它已经按链接语义过滤好了：非继承节点（自己那道边界）往下整支清零，
+   * 文件还要 Shared = 继承。于是「墙后面的东西」不会被搬走。
+   *
+   * 它**不返回目录**，所以空目录会丢 —— 整包下载同样丢，是既有行为。
+   * 目录骨架从 relDir 切出来补齐。
+   *
+   * 注意 relDir 是**相对子树根**的（listSubtreeByLink 的 CTE 从 rootId 起算，
+   * 起点那层是空串），而 relPathByFolderId / pathsToEnsure 认的路径是
+   * **相对粘贴目标**的（collectSubtree 里根目录记的是自己的名字）。所以要补上
+   * rootName 前缀，否则查回落点时拿到 "sub" 而不是 "A/sub"，文件会落错目录。
+   */
+  async function collectSubtreeByLink(rootId: number, rootName: string, ownerId: number) {
+    relPathByFolderId.set(rootId, rootName)
+    pathsToEnsure.add(rootName)
+
+    const scoped = await listSubtreeByLink(db, ownerId, rootId)
+    for (const f of scoped.files) {
+      const relDir = String(f.relDir || '').replace(/^\/+|\/+$/g, '')
+      const rel = relDir ? `${rootName}/${relDir}` : rootName
+      // 补齐每一级祖先："A/B/C" → "A"、"A/B"、"A/B/C"
+      const segs = rel.split('/').filter(Boolean)
+      for (let i = 1; i <= segs.length; i++) {
+        pathsToEnsure.add(segs.slice(0, i).join('/'))
+      }
+      // 文件所在目录也要能查回落点：relPathByFolderId 认的是目录 id，
+      // 而 ManifestFile 正好带了 folderId
+      if (f.folderId != null) relPathByFolderId.set(f.folderId, rel)
+      filesFromFolders.push({
+        id: f.id,
+        filename: f.filename,
+        folderId: f.folderId,
+        fileKey: f.fileKey,
+        fileSize: f.fileSize,
+        contentType: f.contentType ?? null
+      })
+      filesFromFoldersSet.add(f.id)
+    }
+  }
+
   for (const f of movedFolders) {
-    // f.userId = 源目录的属主。剪贴板里混了多个属主的条目也各走各的。
-    await collectSubtree(f.id, f.name, f.userId)
+    if (shareLink) {
+      // 链接的属主是 resolveLinkTarget 给的，不是 f.userId 的逐条反查 ——
+      // 子树里每一行本来就同属主，用一个值圈范围就够了。
+      await collectSubtreeByLink(f.id, f.name, linkOwnerId!)
+    } else {
+      // f.userId = 源目录的属主。剪贴板里混了多个属主的条目也各走各的。
+      await collectSubtree(f.id, f.name, f.userId)
+    }
   }
 
   // 在目标位置创建/复用需要的目录（含空目录）
@@ -405,6 +514,9 @@ export default defineEventHandler(async (event) => {
 
   return {
     success: failed === 0,
+    // folders 记的是「请求复制了几个文件夹」，不是「实际建了几个」——
+    // 链接分支下空目录不会建（见 collectSubtreeByLink），所以这个数会偏大。
+    // 与非链接分支的既有口径保持一致，不在这里另算一套。
     copied: { folders: folderIds.length, files: copiedFiles },
     skipped,
     failed,

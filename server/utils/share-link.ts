@@ -22,7 +22,8 @@ import {
   LINK_PERMISSION,
   normalizeShareLink,
   SHARE_INHERIT,
-  SHARE_LINK_PAGE_PREFIX,
+  SHARE_LINK_LANDING_PATH,
+  SHARE_LINK_QUERY_KEY,
   SHARE_LINK_TOKEN_BYTES
 } from '~~/types/share'
 
@@ -79,24 +80,68 @@ export async function readTargetOwnerId(db: Database, type: ShareTargetType, id:
   return row ? Number(row.userId) : null
 }
 
-/** token → ShareTarget。无效或目标已删都按 404（不区分，避免探测） */
-export async function resolveLinkTarget(db: Database, link: string): Promise<ShareTarget> {
+/**
+ * 解析 token 的三种结果。**不抛错** —— 抛错会把「业务结论」和「HTTP 状态」搅在一起，
+ * 而这两件事在这里根本不是一回事（见 resolveLinkTargetOutcome 的说明）。
+ *
+ *   ok             token 有效、目标也在
+ *   token_not_found  从没存在，或已被 remove 撤销
+ *   target_gone      链接行还在，但它指的目录/文件没了
+ *
+ * 后两种前端都该把链接从本地存储删掉，但**提示语不同**：前者是「被撤销了」，
+ * 后者是「它指的东西没了」，用户据此知道该去问谁。
+ */
+export type LinkOutcome =
+  | { status: 'ok'; target: ShareTarget }
+  | { status: 'token_not_found' | 'target_gone' }
+
+/**
+ * token → ShareTarget，失败时**返回结论而不是抛 404**。
+ *
+ * 为什么不用 HTTP 状态码承载这个判断：
+ *
+ * 前端拿到这个结果要做一个**破坏性决定** —— 把用户的本地收藏删掉。而删除之后找不回来。
+ * 之前那版是「statusCode === 404 就删」，问题在于 404 这个信号能来自的地方太多了：
+ * 网关、代理、上层兜底、一次数据库抖动。任何一处让前端以为「服务端明确说了这链接无效」
+ * 就会清空用户的东西，而它其实什么都没说。
+ *
+ * 所以改成：成功就是成功，**无效是返回值里的一个字段**（valid: false + reason），
+ * 状态码 200。5xx 保持 5xx —— 那是「这次没问成」，前端据此什么都别做。
+ * 判断依据只有一个字段，不依赖对状态码语义的解读。
+ */
+export async function resolveLinkTargetOutcome(db: Database, link: string): Promise<LinkOutcome> {
   const row = await findLinkRow(db, link)
-  if (!row) {
-    throw createError({ statusCode: 404, message: '分享链接无效' })
-  }
+  if (!row) return { status: 'token_not_found' }
   const ownerId = await readTargetOwnerId(db, row.targetType, row.targetId)
   if (ownerId === null) {
     // 链接行还在但目标没了。FK 是 ON DELETE CASCADE，理论上不会发生 ——
     // 但外键没开时（PRAGMA foreign_keys 是连接级的）会真发生，当失效链接处理。
-    throw createError({ statusCode: 404, message: '分享链接无效' })
+    return { status: 'target_gone' }
   }
   return {
-    type: row.targetType,
-    table: row.targetType === 'file' ? 'files' : 'folders',
-    id: row.targetId,
-    ownerId
+    status: 'ok',
+    target: {
+      type: row.targetType,
+      table: row.targetType === 'file' ? 'files' : 'folders',
+      id: row.targetId,
+      ownerId
+    }
   }
+}
+
+/**
+ * token → ShareTarget。无效或目标已删都按 404。
+ *
+ * 给**内容接口**用（/api/files、/api/folders/manifest）：那里 404 是对的语义 ——
+ * 「这个链接打不开这个内容」，且不区分两种失效是刻意的（免得拿链接探测结构）。
+ * 只有 resolve 这个「问链接本身状态」的接口不能用它，见 resolveLinkTargetOutcome。
+ */
+export async function resolveLinkTarget(db: Database, link: string): Promise<ShareTarget> {
+  const outcome = await resolveLinkTargetOutcome(db, link)
+  if (outcome.status !== 'ok') {
+    throw createError({ statusCode: 404, message: '分享链接无效' })
+  }
+  return outcome.target
 }
 
 /** 目标上挂的全部链接 */
@@ -163,9 +208,16 @@ export async function deleteShareLink(db: Database, link: string, actingUserId: 
   await db.prepare('DELETE FROM share_links WHERE link = ?').bind(link).run()
 }
 
-/** 分享链接页面的地址。前端路由和这里共用同一个常量，别各写一份字符串 */
+/**
+ * 分享链接的落地地址：`<origin>/?share_link=<token>`。
+ *
+ * 落地页是首页而不是独立路由 —— 首页已在 auth.global.ts 的白名单里，
+ * 匿名访客带参数就能进。query 的名字与拼接方式都来自 types/share.ts，
+ * 前端解析时用同一组常量，两边不会写出不同的形态。
+ */
 export function buildShareLinkUrl(event: any, link: string): string {
-  return `${getRequestURL(event).origin}${SHARE_LINK_PAGE_PREFIX}${link}`
+  const query = new URLSearchParams({ [SHARE_LINK_QUERY_KEY]: link })
+  return `${getRequestURL(event).origin}${SHARE_LINK_LANDING_PATH}?${query.toString()}`
 }
 
 /**
@@ -303,6 +355,13 @@ export async function listChildrenByLink(
  *
  * 形状与 FolderService.listSubtreeManifest 一致（**同一个 ManifestFile 契约**，
  * 连那三个权限过滤要用的列也带上），只是多了 ok 过滤和 skipped 计数。
+ *
+ * **不返回目录**，只有文件 —— 所以链接视角下「复制整个文件夹」会丢空目录
+ * （整包下载同样丢，是既有行为）。要目录骨架的调用方（copy/paste 的 link 分支）
+ * 自己从 relDir 切出路径去喂 ensurePaths。
+ *
+ * 多带一列 content_type：整包下载用不上，但复制要靠它给副本写回 content_type，
+ * 否则副本全是 application/octet-stream，浏览器预览会失效。
  */
 export async function listSubtreeByLink(
   db: Database,
@@ -322,7 +381,8 @@ export async function listSubtreeByLink(
        )
        SELECT tree.rel_dir AS relDir, fl.id AS id, fl.filename AS filename,
               fl.file_key AS fileKey, fl.file_size AS fileSize,
-              fl.folder_id AS folderId, fl.Shared AS Shared, fl.IsPublic AS IsPublic
+              fl.folder_id AS folderId, fl.Shared AS Shared, fl.IsPublic AS IsPublic,
+              fl.content_type AS contentType
        FROM tree JOIN files fl ON fl.folder_id = tree.id
        WHERE fl.user_id = ? AND tree.ok = 1 AND fl.Shared = ?
        ORDER BY relDir, filename`
@@ -359,12 +419,33 @@ export async function listSubtreeByLink(
 export const LINK_ACCESS = { perm: LINK_PERMISSION, permSource: 'link' as const }
 
 /**
- * token 存在但当前覆盖不到目标时的提示。
+ * token 存在但当前覆盖不到目标时的提示。**分访客 / 属主两套**。
  *
- * 与「token 不存在」分开：后者由 resolveLinkTarget 直接 404「分享链接无效」，
+ * 与「token 不存在」分开：后者由 resolveLinkTarget 直接 404「分享链接无效」。
  * 而前者几乎总是**属主自己设置的问题** —— 在继承目录上发了链接，但上游没有
  * 「分享」节点拍板，或者被一道「不分享」的墙挡住了（链接是预设，没人拍板不生效）。
- * 说清楚这点，属主才知道去改哪里；笼统报「无效」会让人以为是链接坏了。
+ *
+ * 为什么分两套：拿到链接的人**多半改不了任何设置**（匿名访客连账号都没有）。
+ * 对他说「去把节点设为分享」没有任何用处 —— 他做不到。对属主说同样的话才有用，
+ * 因为那正是他要做的操作。
+ *
+ * 匿名路径一律用访客那条：判据是「请求者是不是属主」，判不出来时选访客口径
+ * （更安全 —— 不会把内部设置步骤泄露给无关的人）。
  */
 export const LINK_NOT_ACTIVE_MESSAGE =
-  '分享链接当前无效：链接所在的目录上方没有「分享」节点，或被「不分享」挡住了（继承态下链接只是预设，需要上游有人拍板才生效）'
+  '这个分享链接当前不可用，请联系分享它的人。'
+
+export const LINK_NOT_ACTIVE_MESSAGE_OWNER =
+  '这个链接现在打不开。文件夹还是「继承」状态 —— 分享链接要等它或它的上级目录设为「分享」之后才生效。'
+
+/**
+ * 该给谁看哪一条。
+ *
+ * `ownerId` 是链接目标的属主，`actingUserId` 是请求者（匿名时为 null）。
+ * 取不到身份就返回访客那条 —— 见上面的理由。
+ */
+export function linkNotActiveMessage(actingUserId: number | null, ownerId: number): string {
+  return actingUserId !== null && Number(actingUserId) === Number(ownerId)
+    ? LINK_NOT_ACTIVE_MESSAGE_OWNER
+    : LINK_NOT_ACTIVE_MESSAGE
+}

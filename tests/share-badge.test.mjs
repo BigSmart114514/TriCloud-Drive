@@ -32,7 +32,8 @@ import {
   formatPermission,
   LINK_PERMISSION,
   SHARE_LINK_TOKEN_BYTES,
-  SHARE_LINK_PAGE_PREFIX,
+  SHARE_LINK_LANDING_PATH,
+  SHARE_LINK_QUERY_KEY,
   normalizeShareLink
 } from '../types/share.ts'
 
@@ -413,15 +414,26 @@ describe('分享链接 —— 权限锁死', () => {
   })
 })
 
-describe('分享链接 —— 页面路径', () => {
-  test('前缀是 /s/，与服务端拼 url 用同一个常量', () => {
-    assert.equal(SHARE_LINK_PAGE_PREFIX, '/s/')
+describe('分享链接 —— 落地地址', () => {
+  /**
+   * 落地页是**首页 + query**，不是 `/s/<token>` 那种独立路由。
+   *
+   * 换成 query 的原因：首页本来就在 auth.global.ts 的白名单里，匿名访客
+   * 带参数就能进；用路径前缀就得额外把 `/s/**` 加进白名单，多一处
+   * 「哪些路径匿名可进」的配置。
+   */
+  test('落地路径是首页', () => {
+    assert.equal(SHARE_LINK_LANDING_PATH, '/')
   })
 
-  test('拼出来的路径不含 query，token 直接进路径段', () => {
+  test('query 参数名是 share_link，与前端解析用同一个常量', () => {
+    assert.equal(SHARE_LINK_QUERY_KEY, 'share_link')
+  })
+
+  test('拼出来的地址形态与 index.vue 读的一致', () => {
     const link = 'a'.repeat(32)
-    assert.equal(`${SHARE_LINK_PAGE_PREFIX}${link}`, `/s/${link}`)
-    assert.ok(!`${SHARE_LINK_PAGE_PREFIX}${link}`.includes('?'))
+    const qs = new URLSearchParams({ [SHARE_LINK_QUERY_KEY]: link })
+    assert.equal(`${SHARE_LINK_LANDING_PATH}?${qs}`, `/?share_link=${link}`)
   })
 })
 

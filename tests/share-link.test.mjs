@@ -12,7 +12,8 @@ import { createShareFixture } from './helpers/sqlite-fixture.mjs'
 import {
   normalizeShareLink,
   SHARE_LINK_TOKEN_BYTES,
-  SHARE_LINK_PAGE_PREFIX,
+  SHARE_LINK_LANDING_PATH,
+  SHARE_LINK_QUERY_KEY,
   LINK_PERMISSION,
   SHARE_NONE,
   SHARE_SHARED,
@@ -292,9 +293,16 @@ describe('无效链接一律拒绝', () => {
     assert.equal(LINK_PERMISSION, 9)
   })
 
-  test('页面路径前缀与生成的 url 对得上', () => {
-    assert.equal(SHARE_LINK_PAGE_PREFIX, '/s/')
-    assert.equal(`${SHARE_LINK_PAGE_PREFIX}${'a'.repeat(32)}`, `/s/${'a'.repeat(32)}`)
+  /**
+   * 服务端 buildShareLinkUrl 拼的形态：`<origin>/?share_link=<token>`。
+   * 这里只断言后半段（origin 由运行时决定，测试里固定掉没意义），
+   * 但形态必须与前端 index.vue 解析 query 的方式对得上。
+   */
+  test('落地地址形态与前端解析对得上', () => {
+    const link = 'a'.repeat(32)
+    const qs = new URLSearchParams({ [SHARE_LINK_QUERY_KEY]: link })
+    assert.equal(SHARE_LINK_LANDING_PATH, '/')
+    assert.equal(`${SHARE_LINK_LANDING_PATH}?${qs}`, `/?share_link=${link}`)
   })
 })
 

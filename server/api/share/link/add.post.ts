@@ -1,6 +1,13 @@
 // server/api/share/link/add.post.ts
 //
-// 生成一个分享链接。参数 { type: 'file'|'folder', id }。
+// 生成一个分享链接。参数 { targetType: 'file'|'folder', targetId }，
+// 与 /api/share/list、/api/share/mode **完全同名**（前端 scopeParams 直接透传，
+// 不用为这个接口单独拼一套 body）。
+//
+// （原先这里读的是 `type` / `id`，与另外两个接口不一致：前端按 list/mode 的
+// 字段名发过来，服务端读到 undefined 就 400「targetType 必须是 file 或 folder」。
+// 参数名以多数为准 —— 同一个概念在三个接口里三个名字，改服务端一处比改前端一处
+// 再加一处注释便宜。）
 //
 // **没有单独的管理员端点**：useAdmin 走原来的 getMeAndTarget 就行 ——
 // 它已经把 authUserId 换成 targetUserId，于是下面 resolveShareTarget 的
@@ -20,8 +27,8 @@ export default defineEventHandler(async (event) => {
     if (!db) throw dbConnectionError
 
     const body = await readBody(event)
-    const type = assertShareTargetType(body?.type)
-    const targetId = assertTargetId(body?.id)
+    const type = assertShareTargetType(body?.targetType)
+    const targetId = assertTargetId(body?.targetId)
 
     // 属主专属：授权管理是属主的权力，与访问权限无关
     const target = await resolveShareTarget(db, type, targetId, ownerId)

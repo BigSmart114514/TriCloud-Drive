@@ -29,6 +29,8 @@ export interface FileListFolder extends FileListPerm {
   IsPublic?: boolean
   /** 我授权了多少人。继承态下配合 Shared 决定角标：非空 = 共享中 */
   grantCount?: number
+  /** 这个目录上挂了几条分享链接。图标左上角的 link 标 + 死链红点靠它 */
+  linkCount?: number
   /** 同 FileListPerm.presetActive */
   presetActive?: boolean
   createdAt?: string | null
@@ -49,6 +51,8 @@ export interface FileListFile extends FileListPerm {
   IsPublic?: boolean
   /** 我授权了多少人。红点判定要「有没有设过人员」 */
   grantCount?: number
+  /** 这个文件上挂了几条分享链接。图标左上角的 link 标 + 死链红点靠它 */
+  linkCount?: number
   createdAt?: string | null
   contentType?: string
   allowedUsers?: number[]
