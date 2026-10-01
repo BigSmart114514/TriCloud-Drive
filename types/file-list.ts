@@ -36,6 +36,12 @@ export interface FileListFolder extends FileListPerm {
   createdAt?: string | null
   /** 所在目录的相对路径。仅「共享清单」这类平铺视图会带，普通目录浏览不传 */
   relDir?: string
+  /**
+   * 路径行的属主前缀。仅全站搜索用 —— 那里一行可能属不同的人，
+   * 不标明就分不清是谁的；普通浏览不传，行为与从前完全一致。
+   * 允许 null：服务端取不到用户名/邮箱时给的就是 null。
+   */
+  ownerLabel?: string | null
 }
 
 export interface FileListFile extends FileListPerm {
@@ -56,6 +62,11 @@ export interface FileListFile extends FileListPerm {
   createdAt?: string | null
   contentType?: string
   allowedUsers?: number[]
-  /** 同上：所在目录的相对路径 */
+  /** 所在目录的相对路径。与 FileListFolder.relDir 同义 */
   relDir?: string
+  /**
+   * 路径行的属主前缀。与 FileListFolder.ownerLabel 同义：
+   * 全站搜索结果需要它，普通浏览留空。
+   */
+  ownerLabel?: string | null
 }

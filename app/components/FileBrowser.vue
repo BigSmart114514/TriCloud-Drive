@@ -294,9 +294,9 @@
     <FilePreviewer
       v-if="previewingFile"
       :file="previewingFile"
-      :current-folder-id="currentFolderId"
       :target-user-id="targetUserIdRef"
       :link="activeLink"
+      :use-admin="useAdmin"
       @close="closePreview"
       @saved="fetchFiles"
     />
@@ -304,7 +304,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, toRef, watch } from 'vue'
+import { computed, onMounted, ref, toRef, watch } from 'vue'
 import { useFileBrowser } from '~/composables/useFileBrowser'
 import { useDualSelection } from '~/composables/useDualSelection'
 import { useBulkActions } from '~/composables/useBulkActions'
@@ -318,6 +318,7 @@ import FileList from '~/components/FileList.vue'
 import FilePreviewer from '~/components/FilePreviewer.vue'
 import ShareDialog from '~/components/ShareDialog.vue'
 import type { FileListFile, FileListFolder } from '~~/types/file-list'
+import type { SearchFileHit, SearchPathNode } from '~/services/search.service'
 import type { FileRecord, FolderRecord } from '~~/types/file-browser'
 import {
   ArrowDownTrayIcon,
@@ -371,8 +372,19 @@ const props = withDefaults(
      * 按钮不如不给 —— 匿名访客尤其不该看到「上传」。
      */
     link?: string | null
+    /**
+     * 从搜索结果空降到别人树里的目标。**跨属主时页面才会传**。
+     *
+     * 为什么必须走 props 而不是让页面直接调方法：跨属主意味着要换页面侧栏
+     * 选中的人，而本组件是按属主 id 做 key 的，一切换就重建 —— 重建后的
+     * 新实例里，重建前拿到的那个 ref 已经指向旧实例了。跳转指令只能通过
+     * props 在重建后的那一次 setup 里带进来。
+     *
+     * 页面在收到 `jump-consumed` 后清空它，避免下次重建重复空降。
+     */
+    initialJump?: { ownerId: number; path: SearchPathNode[]; file?: SearchFileHit } | null
   }>(),
-  { variant: 'own', fill: false, link: null }
+  { variant: 'own', fill: false, link: null, initialJump: null }
 )
 
 const isOwn = computed(() => props.variant === 'own')
@@ -447,6 +459,26 @@ const targetUserIdRef = toRef(props, 'targetUserId')
 const useAdminRef = toRef(props, 'useAdmin')
 const previewingFile = ref<FileRecord | null>(null)
 
+/* ---------------- 搜索结果空降 ---------------- */
+
+/**
+ * 挂载时要执行的一次空降（跨属主搜索结果）。
+ *
+ * **在 setup 阶段就抄下来**：父组件收到 `jump-consumed` 后会把 initialJump
+ * 清空，而那时 onMounted 还没跑 —— 到时候再读 props 就是 null 了。
+ */
+const mountJump = props.initialJump ?? null
+/** 只给 useFileBrowser 用：它会在首次取数前把浏览位置摆到这里 */
+const initialPathRef = ref<{ id: number; name: string }[]>(mountJump?.path ?? [])
+
+onMounted(() => {
+  if (!mountJump) return
+  // 路径那半截已由 useFileBrowser 的 initialPath 在首次取数前摆好，
+  // 这里只补「顺带打开的那个文件」
+  if (mountJump.file) previewingFile.value = asFile(mountJump.file)
+  emit('jump-consumed')
+})
+
 /**
  * 只有一个数据源 —— 自己的文件和「分享给我的」都走 /api/files，
  * 区别只在 targetUserId 传不传：
@@ -468,9 +500,15 @@ const {
   linkMode: linkModeFromServer,
   fetchFiles,
   navigateToFolder,
+  navigateToPath,
   goUp,
   goToBreadcrumb
-} = useFileBrowser({ targetUserId: targetUserIdRef, useAdmin: useAdminRef, link: linkRef })
+} = useFileBrowser({
+  targetUserId: targetUserIdRef,
+  useAdmin: useAdminRef,
+  link: linkRef,
+  initialPath: initialPathRef
+})
 
 const {
   masterCheckboxRef,
@@ -644,6 +682,8 @@ const emit = defineEmits<{
    * 预览中 = 文件名；进了子目录 = 目录名；停在根层 = 面板标题（我的文件 / 用户文件）。
    */
   'location-change': [name: string]
+  /** initialJump 已被消费，页面可以清空了 —— 不清的话下次重建会重复空降 */
+  'jump-consumed': []
 }>()
 
 /**
@@ -667,7 +707,23 @@ watch(currentFolderId, (id) => emit('folder-change', id), { immediate: true })
 defineExpose({
   fetchFiles,
   currentFolderId,
-  breadcrumbs
+  breadcrumbs,
+  /**
+   * 空降到任意深度的目录（搜索结果用）。
+   * 同属主的落点由页面直接调它；跨属主的落点走 initialJump ——
+   * 那种情况本组件会重建，调方法调不到新实例。
+   */
+  navigateToPath,
+  /**
+   * 打开一个文件的预览（搜索结果里点「打开」）。
+   *
+   * 收 FileListFile 而不是 FileRecord：搜索结果是 FileList 那一套形状，
+   * 少 fileUrl / createdAt 两个 FilePreviewer 用不到的字段（它只用
+   * id / filename / fileSize / fileKey / folderId）。
+   */
+  openPreview: (file: FileListFile) => {
+    previewingFile.value = file as unknown as FileRecord
+  }
 })
 </script>
 

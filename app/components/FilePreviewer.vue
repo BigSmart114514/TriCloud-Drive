@@ -188,17 +188,28 @@ import { NO_DOWNLOAD_MESSAGE } from '~~/types/share'
 
 const props = defineProps<{
   file: FileRecord
-  currentFolderId: number | null
   targetUserId?: number | null
   /**
    * 分享链接 token。加载和下载都要带上 —— 预览走的就是 /api/files/download，
    * 少了 link 的话匿名访客点开一个文件就是 401。
    */
   link?: string | null
+  /**
+   * 管理视角：/manage/files 里管理员替别人看文件。
+   *
+   * **必须显式传**，不能靠 targetUserId 推断 —— 首页的分享视角同样有
+   * targetUserId，但那不是管理权限，带上会被服务端 403。与 FileBrowser
+   * 的 useAdmin 是同一个值。
+   *
+   * 不传的话下载/保存都会被服务端当成「我以自己身份操作别人的文件」：
+   * 预览直接 404，保存会写错身份。
+   */
+  useAdmin?: boolean
 }>()
 
 const emit = defineEmits<{ (e: 'close'): void; (e: 'saved'): void }>()
 const targetUserIdRef = toRef(props, 'targetUserId')
+const useAdminRef = toRef(props, 'useAdmin')
 const currentFileKey = ref(props.file.fileKey)
 const replaceInputRef = ref<HTMLInputElement | null>(null)
 const loading = ref(false)
@@ -218,7 +229,7 @@ const MAX_ENTRY_SIZE = 100 * 1024 * 1024
 let loadController: AbortController | null = null
 let loadId = 0
 
-const { uploading, uploadProgress, uploadFile } = useFileUpload({ targetUserId: targetUserIdRef })
+const { uploading, uploadProgress, uploadFile } = useFileUpload({ targetUserId: targetUserIdRef, useAdmin: useAdminRef })
 
 const ext = computed(() => {
   const name = props.file?.filename?.toLowerCase() || ''
@@ -323,7 +334,7 @@ const load = async () => {
     const sign = await FilesService.downloadSign(
       { fileKey: currentFileKey.value, filename: props.file.filename },
       props.targetUserId ?? null,
-      undefined,
+      props.useAdmin,
       props.link ?? null
     )
     if (!sign.success) throw new Error('获取下载链接失败')
@@ -457,7 +468,10 @@ const saveText = async () => {
     const blob = new Blob([textContent.value], { type })
     const newFile = new File([blob], props.file.filename, { type })
     currentFileKey.value = await uploadFile(newFile, {
-      folderId: props.currentFolderId ?? null,
+      // 写回**文件自己的**目录，不是当前浏览的目录 ——
+      // 从搜索结果直接打开时两者不同（人在 A 目录，文件在 B 目录），
+      // 用当前目录会把替换内容上传到 A 去。
+      folderId: props.file.folderId ?? null,
       overwrite: true
     })
     originalContent.value = textContent.value
@@ -477,7 +491,8 @@ const handlePickReplacement = async (e: Event) => {
     error.value = ''
     const replacement = new File([selected], props.file.filename, { type: selected.type || 'application/octet-stream' })
     currentFileKey.value = await uploadFile(replacement, {
-      folderId: props.currentFolderId ?? null,
+      // 同上：写回文件自己的目录
+      folderId: props.file.folderId ?? null,
       overwrite: true
     })
     await load()
@@ -494,7 +509,7 @@ const handleDownload = async () => {
     const sign = await FilesService.downloadSign(
       { fileKey: currentFileKey.value, filename: props.file.filename },
       props.targetUserId ?? null,
-      undefined,
+      props.useAdmin,
       props.link ?? null
     )
     if (!sign.success) throw new Error('获取下载链接失败')

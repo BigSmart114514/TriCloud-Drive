@@ -70,7 +70,7 @@
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="emit('navigate-folder', folder)">
             <p class="text-sm sm:text-base font-medium text-gray-900 truncate">{{ folder.name }}</p>
-            <p v-if="folder.relDir" class="text-xs text-gray-400 truncate" :title="folder.relDir">{{ folder.relDir }}</p>
+            <p v-if="pathLabelOf(folder)" class="text-xs text-gray-400 truncate" :title="pathLabelOf(folder)">{{ pathLabelOf(folder) }}</p>
             <p v-if="formatDate(folder.createdAt)" class="text-xs sm:text-sm text-gray-500 truncate">{{ formatDate(folder.createdAt) }}</p>
           </div>
         </div>
@@ -188,11 +188,22 @@
           </div>
           <div class="flex-1 min-w-0 cursor-pointer" @click="emit('preview-file', file)">
             <p class="text-sm sm:text-base font-medium text-gray-900 truncate">{{ file.filename }}</p>
-            <p v-if="file.relDir" class="text-xs text-gray-400 truncate" :title="file.relDir">{{ file.relDir }}</p>
+            <p v-if="pathLabelOf(file)" class="text-xs text-gray-400 truncate" :title="pathLabelOf(file)">{{ pathLabelOf(file) }}</p>
             <p class="text-xs sm:text-sm text-gray-500 truncate">
               {{ formatFileSize(file.fileSize) }}<span v-if="formatDate(file.createdAt)"> • {{ formatDate(file.createdAt) }}</span>
             </p>
           </div>
+        </div>
+
+        <!--
+          文件行专属的额外交互位（目录行没有）。
+
+          必须放在上面那个 `v-if="showActions"` 的 div **之外** —— 搜索结果里
+          传的是 show-actions="false"，若放在里面，slot 内容会跟着一起不渲染。
+          调用方目前只有搜索弹窗，用来放「到所在文件夹」那个图标按钮。
+        -->
+        <div v-if="$slots['file-extra-actions']" class="flex items-center gap-1 shrink-0">
+          <slot name="file-extra-actions" :file="file" />
         </div>
 
         <div v-if="showActions" class="flex items-center gap-1 shrink-0">
@@ -452,6 +463,16 @@ const emit = defineEmits<{
 }>()
 
 const hasItems = computed(() => props.folders.length + props.files.length > 0)
+
+/**
+ * 列表第二行的「这是哪一项」文本。
+ *
+ * 普通目录浏览只有 relDir（且大多为空，因为直接看的就是那个目录）；
+ * 全站搜索会传 ownerLabel，那一行必须带上属主 —— 跨用户的同名文件
+ * 不带属主根本分不清是谁的。两段都为空时返回空串，调用方 v-if 掉整行。
+ */
+const pathLabelOf = (item: FileListFile | FileListFolder) =>
+  [item.ownerLabel, item.relDir].filter(Boolean).join(' · ')
 
 const shareActionOf = (item: FileListFile | FileListFolder) => props.shareAction(item)
 

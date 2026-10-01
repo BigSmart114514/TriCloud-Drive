@@ -4,8 +4,10 @@ import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useAuth } from '~/composables/useAuth'
 import FileBrowser from '~/components/FileBrowser.vue'
 import ManageUserList, { type UserSummary } from '~/components/ManageUserList.vue'
+import SearchDialog from '~/components/SearchDialog.vue'
+import type { SearchFileHit, SearchPathNode } from '~/services/search.service'
 import { notifyError } from '~/utils/notify'
-import { FolderOpenIcon, Bars3Icon, HomeIcon, ShieldExclamationIcon } from '@heroicons/vue/24/outline'
+import { FolderOpenIcon, Bars3Icon, HomeIcon, ShieldExclamationIcon, MagnifyingGlassIcon } from '@heroicons/vue/24/outline'
 
 useHead({ title: '文件总览' })
 
@@ -72,6 +74,49 @@ function selectUser(u: UserSummary) {
     return
   }
   selectedUserId.value = u.id
+  drawerOpen.value = false
+}
+
+/* ---------------- 全站搜索 ---------------- */
+
+const searchOpen = ref(false)
+const browserRef = ref()
+
+/**
+ * 搜索结果的落点在**别的**属主树里时的待执行跳转。
+ *
+ * 超管的「全站搜索」可能命中任何用户的文件，而 FileBrowser 只看当前侧栏
+ * 选中的那个人。所以先把指令存这里，再切 `selectedUserId` —— 组件会因
+ * `:key` 重建，重建时通过 `:initial-jump` 把指令带进去。
+ * 组件消费完会 emit `jump-consumed`，那时清空，避免下次重建重复空降。
+ */
+const pendingJump = ref<{ ownerId: number; path: SearchPathNode[]; file?: SearchFileHit } | null>(null)
+
+async function onSearchPick(payload: { ownerId: number; path: SearchPathNode[]; file?: SearchFileHit }) {
+  searchOpen.value = false
+  const owner = Number(payload.ownerId)
+
+  // 同一棵树，而且那棵树正开着（selectedUser 有值 = FileBrowser 已渲染）：
+  // 直接让它空降。判 selectedUser 而不是 selectedUserId —— 侧栏关键词可能
+  // 把已选中的人过滤掉，那时 selectedUserId 还在，但组件已经被卸载了。
+  if (selectedUser.value && owner === selectedUserId.value) {
+    browserRef.value?.navigateToPath(payload.path ?? [])
+    if (payload.file) browserRef.value?.openPreview(payload.file)
+    return
+  }
+
+  // 换属主。目标可能被侧栏的关键词过滤掉了 —— 那种情况下 selectedUser 为 null，
+  // FileBrowser 不渲染（它挂在 selectedUser 上），跳转无处落地，先清掉过滤重拉。
+  if (!users.value.some((u) => u.id === owner)) {
+    userSearch.value = ''
+    await fetchUsers()
+    if (!users.value.some((u) => u.id === owner)) {
+      notifyError('找不到这个文件所属的用户，可能账号已被删除')
+      return
+    }
+  }
+  pendingJump.value = payload
+  selectedUserId.value = owner
   drawerOpen.value = false
 }
 
@@ -144,6 +189,23 @@ await fetchUsers()
             <p class="hidden shrink-0 text-xs text-gray-400 xl:block">
               完整权限：上传 / 下载 / 重命名 / 删除 / 新建 / 剪贴 / 复制 / 粘贴
             </p>
+
+            <!--
+              全站搜索入口。**只给超管**：普通管理员在这里能管别人的文件，
+              但「能搜到谁」是另一个问题 —— 需求是普通管理员不许跨站搜。
+              服务端对 scope=site 也会自己验一次 isSuperAdmin（见
+              server/api/files/search.get.ts），这里只决定要不要显示按钮。
+            -->
+            <button
+              v-if="isSuper"
+              type="button"
+              class="-mr-1 shrink-0 rounded-md p-2 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+              aria-label="搜索全站"
+              title="搜索全站"
+              @click="searchOpen = true"
+            >
+              <MagnifyingGlassIcon class="h-5 w-5" />
+            </button>
           </div>
         </template>
 
@@ -171,14 +233,24 @@ await fetchUsers()
           <FileBrowser
             v-else
             :key="selectedUser.id"
+            ref="browserRef"
             fill
             :target-user-id="selectedUser.id"
             :use-admin="true"
             :target-user-label="selectedUser.username || selectedUser.email || ''"
             :title="`用户：${selectedUser.username || selectedUser.email}（ID: ${selectedUser.id}）`"
+            :initial-jump="pendingJump"
+            @jump-consumed="pendingJump = null"
           />
         </div>
       </SidePanelLayout>
     </div>
+
+    <SearchDialog
+      :open="searchOpen"
+      scope="site"
+      @close="searchOpen = false"
+      @pick="onSearchPick"
+    />
   </div>
 </template>

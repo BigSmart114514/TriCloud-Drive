@@ -74,6 +74,21 @@
               <h1 class="truncate text-base font-semibold text-gray-900">{{ panelTitle }}</h1>
               <p v-if="panelSubtitle" class="truncate text-xs text-gray-500">{{ panelSubtitle }}</p>
             </div>
+
+            <!--
+              搜索入口。只在看「我的文件」时给：搜索结果恒为我自己拥有的东西，
+              在别人的树里（侧栏选了人或开了链接）搜自己的会让人错乱。
+            -->
+            <button
+              v-if="isLoggedIn && !viewingOthers"
+              type="button"
+              class="-mr-1 shrink-0 rounded-md p-2 text-gray-600 transition-colors hover:bg-gray-100 hover:text-gray-900"
+              aria-label="搜索我的文件"
+              title="搜索我的文件"
+              @click="searchOpen = true"
+            >
+              <MagnifyingGlassIcon class="h-5 w-5" />
+            </button>
           </div>
         </template>
 
@@ -91,6 +106,13 @@
         </div>
       </SidePanelLayout>
     </div>
+
+    <SearchDialog
+      :open="searchOpen"
+      scope="mine"
+      @close="searchOpen = false"
+      @pick="onSearchPick"
+    />
   </div>
 
   <!-- 未登录：欢迎页。有链接则直接进链接视图，不给欢迎页 -->
@@ -154,11 +176,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { KeyIcon, Bars3Icon } from '@heroicons/vue/24/outline'
+import { KeyIcon, Bars3Icon, MagnifyingGlassIcon } from '@heroicons/vue/24/outline'
 import FileBrowser from '~/components/FileBrowser.vue'
 import SidePanelLayout from '~/components/SidePanelLayout.vue'
 import ManageUserList from '~/components/ManageUserList.vue'
 import ShareLinkList from '~/components/ShareLinkList.vue'
+import SearchDialog from '~/components/SearchDialog.vue'
+import type { SearchFileHit, SearchPathNode } from '~/services/search.service'
 import { useAuth } from '~/composables/useAuth'
 import { useShareLinks } from '~/composables/useShareLinks'
 import { notify, notifyError } from '~/utils/notify'
@@ -167,6 +191,23 @@ import { normalizeShareLink, SHARE_LINK_QUERY_KEY } from '~~/types/share'
 const { user, isLoggedIn } = useAuth()
 const fileListRef = ref()
 const currentFolderId = ref<number | null>(null)
+
+/* ---------------- 搜索 ---------------- */
+
+const searchOpen = ref(false)
+
+/**
+ * 搜索结果落点。
+ *
+ * 首页只搜「我的文件」，命中的必然都是我自己拥有的东西 —— 不需要切属主，
+ * 直接让 FileBrowser 空降到目标目录；文件的话顺带把预览打开。
+ * （跨属主的落点只有超管在 /manage/files 会碰到，那边自己处理。）
+ */
+function onSearchPick(payload: { path: SearchPathNode[]; file?: SearchFileHit }) {
+  searchOpen.value = false
+  fileListRef.value?.navigateToPath(payload.path ?? [])
+  if (payload.file) fileListRef.value?.openPreview(payload.file)
+}
 
 const onFolderChange = (id: number | null) => {
   currentFolderId.value = id

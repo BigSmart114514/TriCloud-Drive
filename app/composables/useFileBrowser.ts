@@ -20,6 +20,16 @@ export function useFileBrowser(options?: {
    * 所以下面 watch 里和 targetUserId 一起进数组。
    */
   link?: Ref<string | null | undefined>
+  /**
+   * 挂载时直接落到这条路径（不含「全部文件」那一级），而不是根层。
+   *
+   * 从搜索结果跳到**别人树里**的目录时用：那种跳转要顺带切换侧栏选中的
+   * 用户，而 FileBrowser 是按属主 id 做 key 的，一切换就重建 —— 跳转指令
+   * 只能在重建后的那一次 setup 里通过 props 带进来。
+   *
+   * 只读一次：挂载之后父组件会把它清掉（跳过了就不该再留在那）。
+   */
+  initialPath?: Ref<{ id: number; name: string }[] | null | undefined>
 }) {
   const tRef = options?.targetUserId
   const enabled = options?.enabled ?? ref(true)
@@ -96,6 +106,23 @@ export function useFileBrowser(options?: {
     breadcrumbs.value.push({ id: folder.id, name: folder.name })
     fetchFiles()
   }
+
+  /**
+   * 从搜索结果空降到任意深度的目录。
+   *
+   * 与 navigateToFolder 的区别：那个是「点进当前列表里的一级」，只 push
+   * 一层就够；这个是跨层跳转，必须把整条面包屑**换掉**。只 push 一层的话
+   * 面包屑会断：显示成「全部文件 / 目标目录」，用户点「全部文件」会跳过
+   * 中间那些层级 —— 而中间那些层级他刚刚才在搜索结果里看到过。
+   */
+  const navigateToPath = (path: { id: number; name: string }[]) => {
+    // 不用 path[path.length - 1] 直接取：noUncheckedIndexedAccess 下那是
+    // T | undefined，而这里恰好要「空路径 = 回根层」的语义，分开写更清楚
+    const last = path.length ? path[path.length - 1] : undefined
+    breadcrumbs.value = [{ id: null, name: '全部文件' }, ...path]
+    currentFolderId.value = last ? last.id : null
+    fetchFiles()
+  }
   const goUp = () => {
     if (breadcrumbs.value.length <= 1) return
     breadcrumbs.value.pop()
@@ -109,7 +136,17 @@ export function useFileBrowser(options?: {
     fetchFiles()
   }
 
-  onMounted(fetchFiles)
+  onMounted(() => {
+    // 空降目标：在首次取数**之前**把浏览位置摆好，否则会先请求一遍根层。
+    // 只在挂载时读一次 —— 父组件跳完就会把它清掉（见 options.initialPath）。
+    const path = options?.initialPath?.value ?? []
+    const last = path.length ? path[path.length - 1] : undefined
+    if (last) {
+      breadcrumbs.value = [{ id: null, name: '全部文件' }, ...path]
+      currentFolderId.value = last.id
+    }
+    fetchFiles()
+  })
 
   /**
    * 切换数据源时重置浏览状态。
@@ -130,6 +167,6 @@ export function useFileBrowser(options?: {
   return {
     folders, files, loading, error, hasItems,
     currentFolderId, breadcrumbs, sharedList, canWrite, linkMode,
-    fetchFiles, navigateToFolder, goUp, goToBreadcrumb
+    fetchFiles, navigateToFolder, navigateToPath, goUp, goToBreadcrumb
   }
 }
