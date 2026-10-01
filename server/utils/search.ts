@@ -37,6 +37,13 @@
 
 import type { Database } from '~~/server/utils/db'
 import { escapeLike } from '~~/server/utils/file'
+import {
+  collectHits,
+  fileRelDir,
+  folderRelDir,
+  type FolderPathNode,
+  type HitPathRow
+} from '~~/server/utils/folder-path'
 
 /**
  * 每类（目录 / 文件）的结果上限。
@@ -47,11 +54,14 @@ import { escapeLike } from '~~/server/utils/file'
  */
 export const SEARCH_RESULT_LIMIT = 50
 
-/** 面包屑的一级。path 是「从根到目标」的完整链路，供前端重建导航 */
-export interface SearchPathNode {
-  id: number
-  name: string
-}
+/**
+ * 面包屑的一级。path 是「从根到目标」的完整链路，供前端重建导航。
+ *
+ * 与分享管理列表共用同一个类型（见 server/utils/folder-path.ts）—— 两边
+ * 产出的是同一种东西，前端也是同一处消费（FileBrowser 的 initialJump）。
+ * 这里保留 SearchPathNode 这个名字，调用方不必知道它 aliased 了谁。
+ */
+export type SearchPathNode = FolderPathNode
 
 interface SearchHitBase {
   /** 属主 id。全站搜索时一行一个属主，前端据此（必要时）切换侧栏 */
@@ -95,10 +105,10 @@ export interface SearchFileHit extends SearchHitBase {
  * 上溯 CTE 的原始行：同一个 hitId 有多行，depth 越大越靠近根。
  *
  * 命中的列（name / filename / …）只在 depth 最大的那几行里可靠 —— 递归
- * 出来的父级行没有它们。取用时按 hitId 去重后取第一条，那时读到的就是
+ * 出来的父级行没有它们。折叠时按 hitId 去重后取第一条，那时读到的就是
  * 命中行自己的值（SELECT 的列在递归里没有投影，所以走的是外层 hits 的列）。
  */
-interface PathRow {
+interface PathRow extends HitPathRow {
   hitId: number
   ownerId: number
   ownerUsername: string | null
@@ -114,24 +124,6 @@ interface PathRow {
   contentType?: string | null
   folderId?: number | null
   createdAt?: string | null
-}
-
-/**
- * 把「命中行 × 祖先行」的平铺结果折叠成 一次命中 = 一条 path。
- *
- * 依赖 SQL 里的 `ORDER BY hitId, depth DESC`：同一 hitId 下行的到达顺序
- * 就是「根 → 目标」，直接 push 即可，不需要再排序。
- */
-function foldPaths(rows: PathRow[]): Map<number, SearchPathNode[]> {
-  const paths = new Map<number, SearchPathNode[]>()
-  for (const row of rows) {
-    if (row.pathId === null || row.pathId === undefined) continue
-    const hitId = Number(row.hitId)
-    const list = paths.get(hitId) ?? []
-    list.push({ id: Number(row.pathId), name: String(row.pathName) })
-    paths.set(hitId, list)
-  }
-  return paths
 }
 
 function ownerLabelOf(row: PathRow): string | null {
@@ -193,28 +185,17 @@ export async function searchFolders(
     .all()
 
   const rows = (res?.results || []) as PathRow[]
-  const paths = foldPaths(rows)
 
-  // 按首次出现顺序去重。LIMIT 取的是 limit+1，多出来的那一条就是截断信号。
-  const seen = new Set<number>()
-  const ordered: SearchFolderHit[] = []
-  for (const row of rows) {
-    const hitId = Number(row.hitId)
-    if (seen.has(hitId)) continue
-    seen.add(hitId)
-    const path = paths.get(hitId) ?? []
-    ordered.push({
-      id: hitId,
-      name: String(row.name),
-      ownerId: Number(row.ownerId),
-      ownerLabel: ownerLabelOf(row),
-      path,
-      // 目录的 relDir 是**父**路径：显示「它在哪」，不含自己
-      relDir: path.slice(0, -1).map((n) => n.name).join('/')
-    })
-  }
-
-  return { hits: ordered.slice(0, limit), truncated: ordered.length > limit }
+  // 去重、折叠路径、截断都在 collectHits 里，见 server/utils/folder-path.ts
+  return collectHits<SearchFolderHit>(rows as unknown as Array<Record<string, any>>, limit, (row, path) => ({
+    id: Number(row.hitId),
+    name: String(row.name),
+    ownerId: Number(row.ownerId),
+    ownerLabel: ownerLabelOf(row as PathRow),
+    path,
+    // 目录的 relDir 是**父**路径：显示「它在哪」，不含自己
+    relDir: folderRelDir(path)
+  }))
 }
 
 /**
@@ -272,29 +253,18 @@ export async function searchFiles(
     .all()
 
   const rows = (res?.results || []) as PathRow[]
-  const paths = foldPaths(rows)
 
-  const seen = new Set<number>()
-  const ordered: SearchFileHit[] = []
-  for (const row of rows) {
-    const hitId = Number(row.hitId)
-    if (seen.has(hitId)) continue
-    seen.add(hitId)
-    const path = paths.get(hitId) ?? []
-    ordered.push({
-      id: hitId,
-      filename: String(row.filename),
-      fileKey: String(row.fileKey),
-      fileSize: Number(row.fileSize),
-      contentType: row.contentType ?? null,
-      folderId: row.folderId === null || row.folderId === undefined ? null : Number(row.folderId),
-      createdAt: row.createdAt ?? null,
-      ownerId: Number(row.ownerId),
-      ownerLabel: ownerLabelOf(row),
-      path,
-      relDir: path.map((n) => n.name).join('/')
-    })
-  }
-
-  return { hits: ordered.slice(0, limit), truncated: ordered.length > limit }
+  return collectHits<SearchFileHit>(rows as unknown as Array<Record<string, any>>, limit, (row, path) => ({
+    id: Number(row.hitId),
+    filename: String(row.filename),
+    fileKey: String(row.fileKey),
+    fileSize: Number(row.fileSize),
+    contentType: row.contentType ?? null,
+    folderId: row.folderId === null || row.folderId === undefined ? null : Number(row.folderId),
+    createdAt: row.createdAt ?? null,
+    ownerId: Number(row.ownerId),
+    ownerLabel: ownerLabelOf(row as PathRow),
+    path,
+    relDir: fileRelDir(path)
+  }))
 }

@@ -373,16 +373,19 @@ const props = withDefaults(
      */
     link?: string | null
     /**
-     * 从搜索结果空降到别人树里的目标。**跨属主时页面才会传**。
+     * 跳到这里来。**搜索与分享管理共用这一条通道**，三处入口：
      *
-     * 为什么必须走 props 而不是让页面直接调方法：跨属主意味着要换页面侧栏
-     * 选中的人，而本组件是按属主 id 做 key 的，一切换就重建 —— 重建后的
-     * 新实例里，重建前拿到的那个 ref 已经指向旧实例了。跳转指令只能通过
-     * props 在重建后的那一次 setup 里带进来。
+     *   首页搜索命中          属主必然是自己，直接落地
+     *   文件管理页搜索命中    属主不同时页面先切 selectedUserId，本组件随之重建
+     *   分享管理「在文件里打开」 落在自己树上，同属主
+     *
+     * 为什么必须走 props 而不是让页面直接调方法：跨属主要换侧栏选中的人，
+     * 而本组件是按属主 id 做 key 的，一切换就重建 —— 重建后的新实例里，
+     * 重建前拿到的那个 ref 已经指向旧实例了。指令只能通过 props 带进去。
      *
      * 页面在收到 `jump-consumed` 后清空它，避免下次重建重复空降。
      */
-    initialJump?: { ownerId: number; path: SearchPathNode[]; file?: SearchFileHit } | null
+    initialJump?: { ownerId?: number | null; path: SearchPathNode[]; file?: SearchFileHit } | null
   }>(),
   { variant: 'own', fill: false, link: null, initialJump: null }
 )
@@ -459,10 +462,10 @@ const targetUserIdRef = toRef(props, 'targetUserId')
 const useAdminRef = toRef(props, 'useAdmin')
 const previewingFile = ref<FileRecord | null>(null)
 
-/* ---------------- 搜索结果空降 ---------------- */
+/* ---------------- 跳转落点（搜索 / 分享管理共用一条通道） ---------------- */
 
 /**
- * 挂载时要执行的一次空降（跨属主搜索结果）。
+ * 挂载时要执行的一次空降。
  *
  * **在 setup 阶段就抄下来**：父组件收到 `jump-consumed` 后会把 initialJump
  * 清空，而那时 onMounted 还没跑 —— 到时候再读 props 就是 null 了。
@@ -478,6 +481,28 @@ onMounted(() => {
   if (mountJump.file) previewingFile.value = asFile(mountJump.file)
   emit('jump-consumed')
 })
+
+/**
+ * 挂载之后才到的落点。
+ *
+ * 为什么需要这一段：挂载前就带 initialJump 的场景，父组件多半同时换了
+ * `selectedUserId`，组件会因 :key 重建 —— 那条路走 initialPath，在首次取数前
+ * 就摆好，不多发请求。而「属主没变、只是从搜索结果跳过去」时组件不会重建，
+ * 指令是挂载后才到的，只能靠 watcher 接住。
+ *
+ * 不 immediate：挂载时那一份由上面的 onMounted 消费掉，两边都处理会跳两次。
+ * watch 也不认「同一个对象」：父组件清空时会把 initialJump 置 null（不是重复
+ * 传同一个 payload），所以只判 null 就够，不必再存一份 applied 做比对。
+ */
+watch(
+  () => props.initialJump,
+  (jump) => {
+    if (!jump) return
+    navigateToPath(jump.path ?? [])
+    if (jump.file) previewingFile.value = asFile(jump.file)
+    emit('jump-consumed')
+  }
+)
 
 /**
  * 只有一个数据源 —— 自己的文件和「分享给我的」都走 /api/files，
@@ -704,26 +729,18 @@ watch(locationName, (name) => emit('location-change', name), { immediate: true }
 watch([folders, files], () => reconcileSelection())
 watch(currentFolderId, (id) => emit('folder-change', id), { immediate: true })
 
+/**
+ * 只暴露「刷新」和当前浏览位置。
+ *
+ * 跳转与预览**不再暴露**：三个入口（首页搜索、文件管理页搜索、分享管理定位）
+ * 统一走 `initialJump` 这一条通道 —— 页面把 payload 塞进 pendingJump 就行，
+ * 不用先判断属主相同再决定调方法还是走 prop。少一条分支，也少一个「重建后
+ * 拿到的 ref 指向旧实例」的坑。
+ */
 defineExpose({
   fetchFiles,
   currentFolderId,
-  breadcrumbs,
-  /**
-   * 空降到任意深度的目录（搜索结果用）。
-   * 同属主的落点由页面直接调它；跨属主的落点走 initialJump ——
-   * 那种情况本组件会重建，调方法调不到新实例。
-   */
-  navigateToPath,
-  /**
-   * 打开一个文件的预览（搜索结果里点「打开」）。
-   *
-   * 收 FileListFile 而不是 FileRecord：搜索结果是 FileList 那一套形状，
-   * 少 fileUrl / createdAt 两个 FilePreviewer 用不到的字段（它只用
-   * id / filename / fileSize / fileKey / folderId）。
-   */
-  openPreview: (file: FileListFile) => {
-    previewingFile.value = file as unknown as FileRecord
-  }
+  breadcrumbs
 })
 </script>
 

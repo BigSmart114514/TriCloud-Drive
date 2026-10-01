@@ -98,10 +98,12 @@
             :variant="viewingOthers ? 'shared' : 'own'"
             :link="activeLink"
             :target-user-id="viewingOthers ? selectedUserId : null"
+            :initial-jump="pendingJump"
             fill
             ref="fileListRef"
             @folder-change="onFolderChange"
             @location-change="onLocationChange"
+            @jump-consumed="pendingJump = null"
           />
         </div>
       </SidePanelLayout>
@@ -197,16 +199,16 @@ const currentFolderId = ref<number | null>(null)
 const searchOpen = ref(false)
 
 /**
- * 搜索结果落点。
+ * 跳转落点。搜索结果、分享管理的「在文件里打开」都往这里塞，
+ * 由 FileBrowser 的 initialJump 统一消费（见 FileBrowser 里那段注释）。
  *
- * 首页只搜「我的文件」，命中的必然都是我自己拥有的东西 —— 不需要切属主，
- * 直接让 FileBrowser 空降到目标目录；文件的话顺带把预览打开。
- * （跨属主的落点只有超管在 /manage/files 会碰到，那边自己处理。）
+ * 首页这一侧永远不切属主 —— 搜索范围是「我的文件」，定位也落在我自己的树上。
  */
+const pendingJump = ref<{ ownerId?: number | null; path: SearchPathNode[]; file?: SearchFileHit } | null>(null)
+
 function onSearchPick(payload: { path: SearchPathNode[]; file?: SearchFileHit }) {
   searchOpen.value = false
-  fileListRef.value?.navigateToPath(payload.path ?? [])
-  if (payload.file) fileListRef.value?.openPreview(payload.file)
+  pendingJump.value = payload
 }
 
 const onFolderChange = (id: number | null) => {
@@ -275,6 +277,64 @@ const selfEntry = computed<Person>(() => ({
 const route = useRoute()
 const router = useRouter()
 const { tokens, hydrateLinks, addLink, removeLink, verifyLink } = useShareLinks()
+
+/* ---------------- ?at=<folderId>：分享管理页「在文件里打开」的落点 ---------------- */
+
+/**
+ * 面包屑要的是「根 → 目标」每一级的 id **和名字**，而 URL 里只有一个 id，
+ * 所以要向服务端要一次祖先链（/api/folders/lineage）。
+ *
+ * 能在 SSR 阶段取到，省掉客户端那次往返。**但别指望 SSR 渲染出目标目录** ——
+ * FileBrowser 的列表是 onMounted 里 fetch 的，SSR 一律不渲染（首页本来就这样），
+ * 所以深链的落点最终由客户端的 initialPath 完成，SSR HTML 里看不到目录名是正常的。
+ * 真正省下来的是「先按根目录取一次数、发现不对再跳第二次」这一轮往返：
+ * 祖先链在挂载前就备好，initialPath 直接把首次请求指向目标。
+ */
+const atParam = computed(() => {
+  const raw = route.query.at
+  const id = Number(Array.isArray(raw) ? raw[0] : raw)
+  return Number.isInteger(id) && id > 0 ? id : null
+})
+
+/**
+ * 自己 try/catch 而不用 useFetch 的 error 通道：404 在这里是**预期结果**
+ * （id 失效、目录不是我的），而 useFetch 会把失败对象序列化进 SSR payload
+ * 的 __NUXT_DATA__，页面上看不出差别但控制台会红、埋点会记成错误。
+ * catch 掉只留 null，语义也就是「不跳转」这一件事。
+ */
+const atLineage = ref<Array<{ id: number; name: string }> | null>(null)
+if (atParam.value) {
+  try {
+    // useRequestFetch 而不是裸 $fetch：SSR 阶段裸 $fetch **不转发请求头**，
+    // 拿不到登录 cookie，接口会回 401，深链在 SSR 时就静默失效了。
+    // （useFetch 内部就是用它，但它的 error 通道会把 404 记成错误，
+    //   那是这里最不需要的副作用 —— 见上面的说明。）
+    const requestFetch = useRequestFetch()
+    const res = await requestFetch<{
+      success: boolean
+      lineage: Array<{ id: number; name: string }>
+    }>('/api/folders/lineage', { query: { id: atParam.value } })
+    if (Array.isArray(res?.lineage) && res.lineage.length) atLineage.value = res.lineage
+  } catch {
+    atLineage.value = null
+  }
+}
+
+const applyAtJump = ([id, lineage]: [number | null, Array<{ id: number; name: string }> | null]) => {
+  if (!id || !Array.isArray(lineage) || !lineage.length) return
+  pendingJump.value = { ownerId: null, path: lineage }
+  // 消费掉 query：否则刷新会再跳一次，而且浏览器历史里留下一条同 URL 记录。
+  //
+  // **只在客户端做**：SSR 阶段调 navigateTo 会立刻发 302 跳到 `/`，
+  // 指令还在 setup 作用域里、没进过 payload —— 深链就此失效（实测过一次：
+  // 带着 ?at= 直接访问，302 之后落在根目录）。URL 里的 ?at= 留着也无害，
+  // 真正必须做的是「清掉它」这件事放在浏览器里做。
+  if (import.meta.client) {
+    void navigateTo({ path: '/', query: {} }, { replace: true })
+  }
+}
+
+watch([atParam, atLineage], applyAtJump, { immediate: true })
 
 /**
  * URL 上的 ?share_link=。

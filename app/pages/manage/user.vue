@@ -1,19 +1,7 @@
 <template>
   <div class="min-h-screen bg-gray-50">
     <!-- 导航栏 -->
-    <AppNavbar>
-      <template #extra>
-        <NuxtLink
-          to="/"
-          class="flex items-center rounded-md p-2 text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 sm:px-3 sm:py-2 sm:text-sm sm:font-medium"
-          aria-label="返回首页"
-          title="返回首页"
-        >
-          <HomeIcon class="h-5 w-5 shrink-0" />
-          <span class="hidden sm:ml-1.5 sm:inline">返回首页</span>
-        </NuxtLink>
-      </template>
-    </AppNavbar>
+    <AppNavbar />
 
     <!-- 主内容 -->
     <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
@@ -228,7 +216,7 @@ import { formatDateTime } from '~/utils/time'
 import { notify, notifyError, toMessage } from '~/utils/notify'
 import { formatBytes, parseBytes } from '~/utils/size'
 import { fromDatetimeLocal, toDatetimeLocal } from '~/utils/datetimeLocal'
-import { HomeIcon, PencilSquareIcon, ShieldCheckIcon, StarIcon } from '@heroicons/vue/24/outline'
+import { PencilSquareIcon, ShieldCheckIcon, StarIcon } from '@heroicons/vue/24/outline'
 import UserEditDialog, { type DbUser } from '~/components/UserEditDialog.vue'
 
 useHead({ title: '用户管理' })

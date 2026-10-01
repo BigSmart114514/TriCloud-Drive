@@ -13,10 +13,19 @@
           <!-- 头部 -->
           <div class="flex items-start gap-3 border-b border-gray-100 px-4 py-3">
             <div class="min-w-0 flex-1">
+              <!--
+                标题行。「分享」两个字必须保住：不给它 shrink-0，flex 会把它
+                压得比一个字还窄，中文于是可以在字与字之间断行 —— 于是「分享」
+                竖着排成两行，而本该折叠的是后面的名字。
+
+                名字那一侧要 min-w-0 才能 truncate：flex 子项的 min-width 默认
+                是 auto（内容宽度），不给它放开就永远不会触发省略号。
+                所以让「分享」不可压缩、名字可压缩到任意窄，折叠就落在名字上。
+              -->
               <h2 class="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
                 <ShareIcon class="h-4 w-4 shrink-0 text-gray-500" />
-                分享
-                <span class="truncate font-normal text-gray-500">{{ name }}</span>
+                <span class="shrink-0 whitespace-nowrap">分享</span>
+                <span class="min-w-0 truncate font-normal text-gray-500" :title="name">{{ name }}</span>
               </h2>
               <p class="mt-0.5 text-xs text-gray-500">
                 <component :is="isFolder ? FolderIcon : DocumentIcon" class="mr-0.5 inline h-3 w-3 align-[-2px]" />

@@ -14,16 +14,22 @@
           <!-- 头部 -->
           <div class="flex items-start gap-3 border-b border-gray-100 px-4 py-3">
             <div class="min-w-0 flex-1">
+              <!--
+                同 ShareDialog 的标题行：固定文案必须 shrink-0，否则 flex 会把它
+                压到比一个字还窄，中文于是在字间断行、竖着排；名字那一侧要
+                min-w-0，truncate 才会真的生效（flex 子项的 min-width 默认 auto
+                = 内容宽度，不放开就永远不触发省略号）。
+              -->
               <h2 class="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
                 <PencilSquareIcon class="h-4 w-4 shrink-0 text-gray-500" />
-                编辑用户
-                <span class="truncate font-normal text-gray-500">{{ displayName }}</span>
+                <span class="shrink-0 whitespace-nowrap">编辑用户</span>
+                <span class="min-w-0 truncate font-normal text-gray-500" :title="displayName">{{ displayName }}</span>
               </h2>
               <p class="mt-0.5 flex items-center gap-1.5 text-xs text-gray-500">
-                <span>ID {{ draft.id }}</span>
+                <span class="shrink-0">ID {{ draft.id }}</span>
                 <template v-if="draft.email">
-                  <span class="text-gray-300">·</span>
-                  <span class="truncate">{{ draft.email }}</span>
+                  <span class="shrink-0 text-gray-300">·</span>
+                  <span class="min-w-0 truncate" :title="draft.email">{{ draft.email }}</span>
                 </template>
                 <ShieldCheckIcon v-if="draft.IsSuperAdmin" class="h-3.5 w-3.5 shrink-0 text-purple-500" title="超级管理员" />
                 <StarIcon v-else-if="draft.IsAdmin" class="h-3.5 w-3.5 shrink-0 text-amber-500" title="管理员" />

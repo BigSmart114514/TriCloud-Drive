@@ -7,7 +7,7 @@ import ManageUserList, { type UserSummary } from '~/components/ManageUserList.vu
 import SearchDialog from '~/components/SearchDialog.vue'
 import type { SearchFileHit, SearchPathNode } from '~/services/search.service'
 import { notifyError } from '~/utils/notify'
-import { FolderOpenIcon, Bars3Icon, HomeIcon, ShieldExclamationIcon, MagnifyingGlassIcon } from '@heroicons/vue/24/outline'
+import { FolderOpenIcon, Bars3Icon, ShieldExclamationIcon, MagnifyingGlassIcon } from '@heroicons/vue/24/outline'
 
 useHead({ title: '文件总览' })
 
@@ -80,7 +80,6 @@ function selectUser(u: UserSummary) {
 /* ---------------- 全站搜索 ---------------- */
 
 const searchOpen = ref(false)
-const browserRef = ref()
 
 /**
  * 搜索结果的落点在**别的**属主树里时的待执行跳转。
@@ -97,11 +96,11 @@ async function onSearchPick(payload: { ownerId: number; path: SearchPathNode[]; 
   const owner = Number(payload.ownerId)
 
   // 同一棵树，而且那棵树正开着（selectedUser 有值 = FileBrowser 已渲染）：
-  // 直接让它空降。判 selectedUser 而不是 selectedUserId —— 侧栏关键词可能
-  // 把已选中的人过滤掉，那时 selectedUserId 还在，但组件已经被卸载了。
+  // 指令直接交给它，watcher 会接住（组件不重建，走「挂载后到达」那一条路）。
+  // 判 selectedUser 而不是 selectedUserId —— 侧栏关键词可能把已选中的人过滤掉，
+  // 那时 selectedUserId 还在，但组件已经被卸载了。
   if (selectedUser.value && owner === selectedUserId.value) {
-    browserRef.value?.navigateToPath(payload.path ?? [])
-    if (payload.file) browserRef.value?.openPreview(payload.file)
+    pendingJump.value = payload
     return
   }
 
@@ -134,19 +133,7 @@ await fetchUsers()
 <template>
   <!-- 整页铺满：上至 NavBar，下至屏幕底部；内容区不产生页面级滚动 -->
   <div class="flex h-[100dvh] flex-col overflow-hidden bg-gray-50">
-    <AppNavbar fluid>
-      <template #extra>
-        <NuxtLink
-          to="/"
-          class="flex items-center rounded-md p-2 text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 sm:px-3 sm:py-2 sm:text-sm sm:font-medium"
-          aria-label="返回首页"
-          title="返回首页"
-        >
-          <HomeIcon class="h-5 w-5 shrink-0" />
-          <span class="hidden sm:ml-1.5 sm:inline">返回首页</span>
-        </NuxtLink>
-      </template>
-    </AppNavbar>
+    <AppNavbar fluid />
 
     <div class="flex min-h-0 flex-1">
       <SidePanelLayout v-model:open="drawerOpen" aria-label="用户列表">
@@ -233,7 +220,6 @@ await fetchUsers()
           <FileBrowser
             v-else
             :key="selectedUser.id"
-            ref="browserRef"
             fill
             :target-user-id="selectedUser.id"
             :use-admin="true"

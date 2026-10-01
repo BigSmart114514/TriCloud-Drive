@@ -431,7 +431,9 @@ describe('前端接线', () => {
     const src = read('app/pages/index.vue')
     assert.ok(/v-if="isLoggedIn && !viewingOthers"/.test(src), '入口没有按「在看别人的东西」隐藏')
     assert.ok(/scope="mine"/.test(src), '首页搜索范围不是 mine')
-    assert.ok(src.includes('navigateToPath'), '结果点击没有落地')
+    // 结果点击不直接调 FileBrowser 的方法，而是走统一的 initialJump 通道
+    assert.ok(/pendingJump\.value = payload/.test(src), '结果点击没有落地')
+    assert.ok(/:initial-jump="pendingJump"/.test(src), '跳转指令没有传给 FileBrowser')
   })
 
   test('文件管理页只给超管全站搜索，普通管理员拿不到入口', () => {

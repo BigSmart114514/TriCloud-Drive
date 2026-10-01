@@ -209,6 +209,36 @@ export async function deleteShareLink(db: Database, link: string, actingUserId: 
 }
 
 /**
+ * 撤销某个目标上的**全部**链接，返回删掉几条。
+ *
+ * 与 deleteShareLink 的区别只在于「按目标批量」而不是「按 token 单条」：
+ * 分享管理页的批量按钮要一次清掉一项上的所有链接，而列表接口只给条数、
+ * 不给 token（token 是凭据，不该为了显示个数就整批吐出来）。
+ *
+ * 归属校验同一口径：先反查目标属主。所以传别人的 target_id 一样删不掉 ——
+ * 「按目标删」比「按 token 删」少一个信息维度，不该因此放松校验。
+ */
+export async function deleteShareLinksByTarget(
+  db: Database,
+  targetType: ShareTargetType,
+  targetId: number,
+  actingUserId: number
+): Promise<number> {
+  try {
+    await resolveShareTarget(db, targetType, targetId, actingUserId)
+  } catch (e: any) {
+    // 与 deleteShareLink 同理：404 = 目标已消失，顺手清掉孤儿链接。
+    // 403 会照原样抛出去 —— 那正是「这不是你的东西」。
+    if (e?.statusCode !== 404) throw e
+  }
+  const res = await db
+    .prepare('DELETE FROM share_links WHERE target_type = ? AND target_id = ?')
+    .bind(targetType, targetId)
+    .run()
+  return Number((res as any)?.meta?.changes ?? 0) || 0
+}
+
+/**
  * 分享链接的落地地址：`<origin>/?share_link=<token>`。
  *
  * 落地页是首页而不是独立路由 —— 首页已在 auth.global.ts 的白名单里，

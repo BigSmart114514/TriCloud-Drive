@@ -50,6 +50,84 @@ export interface ShareCandidate {
 }
 
 /**
+ * 分享管理列表里的一行。目录与文件同构，所以一个列表组件渲染两份。
+ *
+ * `mode` / `isPublic` / `grantCount` / `linkCount` 是「我设了什么」，
+ * `presetActive` / `linkActive` 是「设了的东西现在生效吗」——
+ * 后两个是这个页面真正的价值：它们把「我明明分享过了」和「分享了但没用上」分开。
+ * 判定口径见 server/utils/share-settings.ts。
+ */
+export interface ShareSettingRow {
+  id: number
+  targetType: 'file' | 'folder'
+  name: string
+  /** 所在目录的文本路径。根层为空串 */
+  relDir: string
+  /** 从根到目标的目录链，文件到所在目录为止。点「在文件里打开」用 */
+  path: Array<{ id: number; name: string }>
+  ownerId: number
+  mode: ShareMode
+  isPublic: boolean
+  grantCount: number
+  linkCount: number
+  presetActive: boolean
+  linkActive: boolean
+  createdAt: string | null
+  /** 仅文件。null = 在根目录，此时没有「在文件里打开」的落点 */
+  folderId?: number | null
+  fileSize?: number
+  contentType?: string | null
+}
+
+export interface ShareSettingsSummary {
+  /** 两类合计。不受列表上限影响 —— 摘要说的是「一共有多少设置」，不是「给你看几条」 */
+  total: number
+  folderCount: number
+  fileCount: number
+  publicCount: number
+  privateCount: number
+  linkCount: number
+  deadLinkCount: number
+}
+
+export interface ShareSettingsResult {
+  success: boolean
+  folders: ShareSettingRow[]
+  files: ShareSettingRow[]
+  summary: ShareSettingsSummary
+  truncated: boolean
+  limit: number
+}
+
+/**
+ * 批量处置的三个动作。
+ *
+ *   reset       恢复默认：三态→继承 + 取消公开 + 清空名单 + 撤销全部链接
+ *   unpublish   取消公开：只动 IsPublic
+ *   removeLinks 撤销链接：只撤链接
+ *
+ * 没有「只把三态设成继承」：点完名单和链接都还在，条目照样不出列表，
+ * 语义上等于「没恢复」。真要「停止当挡板但保留名单」，在分享弹窗里改三态即可。
+ */
+export type ShareBulkAction = 'reset' | 'unpublish' | 'removeLinks'
+
+export const SHARE_BULK_ACTION_LABELS: Record<ShareBulkAction, string> = {
+  reset: '恢复默认',
+  unpublish: '取消公开',
+  removeLinks: '撤销链接'
+}
+
+export interface ShareBulkResult {
+  success: boolean
+  action: ShareBulkAction
+  actionLabel: string
+  okCount: number
+  failCount: number
+  /** 逐项结果。归属校验在服务端做，别名不属于你的项会单独 ok:false 而不是整批失败 */
+  results: Array<{ targetType: string; targetId: number | null; ok: boolean; message?: string }>
+}
+
+/**
  * 链接校验的返回形状。三态对应前端三种动作，**不能压成布尔**：
  *
  *   200 active:true   → 打开
@@ -74,6 +152,40 @@ function scopeParams(target: ShareTargetType) {
 }
 
 export const ShareService = {
+  /**
+   * 分享管理列表：我设置过分享的全部文件与文件夹（默认态的反面）。
+   * 只涉及自己，服务端不接受任何用户参数。
+   */
+  async settings(limit?: number) {
+    return await $fetch<ShareSettingsResult>('/api/share/settings', {
+      params: limit ? { limit } : undefined
+    })
+  },
+
+  /**
+   * 批量处置。**返回值必须看 okCount / failCount**，不能只看 success：
+   * 归属校验逐项在服务端做，别人的（或已被删的）项会单独 ok:false，
+   * 其余照常执行 —— 勾了 20 项不该因为 1 项失效而白做另外 19 项。
+   */
+  async bulk(
+    targets: Array<{ targetType: 'file' | 'folder'; targetId: number }>,
+    action: ShareBulkAction
+  ) {
+    return await $fetch<ShareBulkResult>('/api/share/bulk', {
+      method: 'POST',
+      body: { targets, action }
+    })
+  },
+
+  /** 一个目录的祖先链（根在前）。首页据此重建面包屑，/?at=<id> 用 */
+  async lineage(folderId: number) {
+    return await $fetch<{
+      success: boolean
+      folderId: number
+      lineage: Array<{ id: number; name: string }>
+    }>('/api/folders/lineage', { params: { id: folderId } })
+  },
+
   async list(target: ShareTargetType) {
     return await $fetch<ShareState & { success: boolean; targetId: number; ownerId: number }>(
       '/api/share/list',

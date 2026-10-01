@@ -26,8 +26,44 @@
               欢迎，{{ user?.username }}
             </span>
 
-            <!-- 右侧额外内容（修改密码 / 返回首页） -->
+            <!--
+              返回首页。**收在导航栏里而不是让各页面写在 #extra 里**：
+              除了首页自己，所有页面都需要它，而 AppNavbar 没有面包屑 ——
+              不给这个入口就只能按浏览器后退。四处各抄一遍的代价是文案和
+              图标会各自漂移，改起来要改四个文件。
+              首页自己不显示（在这里等于无处可去）。
+            -->
+            <NuxtLink
+              v-if="!isHome"
+              to="/"
+              class="flex items-center rounded-md p-2 text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 sm:px-3 sm:py-2 sm:text-sm sm:font-medium"
+              aria-label="返回首页"
+              title="返回首页"
+            >
+              <HomeIcon class="h-5 w-5 shrink-0" />
+              <span class="hidden sm:ml-1.5 sm:inline">返回首页</span>
+            </NuxtLink>
+
+            <!-- 右侧额外内容（修改密码等，页面自己决定） -->
             <slot name="extra" />
+
+            <!--
+              分享管理：**所有登录用户**都有，不设管理员门槛。
+              放在导航栏而不是某个页面的 #extra 里，因为它要从任何页面都能直接到，
+              而各页面的 #extra 只在自己那一页可见。
+
+              移动端空间紧张，文字隐藏只留图标 —— 与「修改密码」同一套处理。
+              aria-label 保证图标单独出现时仍有名字。
+            -->
+            <NuxtLink
+              to="/shares"
+              class="flex items-center rounded-md p-2 text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 sm:px-3 sm:py-2 sm:text-sm sm:font-medium"
+              aria-label="分享管理"
+              title="分享管理"
+            >
+              <ShareIcon class="h-5 w-5 shrink-0" />
+              <span class="hidden sm:ml-1.5 sm:inline">分享管理</span>
+            </NuxtLink>
 
             <!-- 管理入口：仅管理员渲染，普通用户导航栏完全看不到 -->
             <UiManageMenu v-if="isAdmin" />
@@ -68,7 +104,12 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { useRoute } from 'vue-router'
-import { ArrowRightOnRectangleIcon, ShieldExclamationIcon } from '@heroicons/vue/24/outline'
+import {
+  ArrowRightOnRectangleIcon,
+  HomeIcon,
+  ShareIcon,
+  ShieldExclamationIcon
+} from '@heroicons/vue/24/outline'
 import UiManageMenu from '~/components/UiManageMenu.vue'
 import UiSettingsMenu from '~/components/UiSettingsMenu.vue'
 
@@ -77,6 +118,9 @@ const fluid = computed(() => props.fluid)
 
 const route = useRoute()
 const isManageArea = computed(() => route.path === '/manage' || route.path.startsWith('/manage/'))
+
+/** 首页自己不需要「返回首页」。带 query 的（/?at=127）也是首页，不显示 */
+const isHome = computed(() => route.path === '/')
 
 const { user, isLoggedIn, isAdmin, logout } = useAuth()
 const handleLogout = async () => { await logout() }
