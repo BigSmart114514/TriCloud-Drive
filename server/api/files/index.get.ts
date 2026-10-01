@@ -16,6 +16,7 @@ import {
   hasPermission,
   normalizeShareLink,
   PERM_ALL,
+  PERM_DOWNLOAD,
   PERM_READ,
   PERM_WRITE,
   SHARE_SHARED
@@ -153,6 +154,17 @@ export default defineEventHandler(async (event) => {
      *   perm        —— 我对这个条目的**完整**位掩码（含删除位），弹层里显示「你所有的权限」
      *   permSource  —— 这份权限的来源（直接授权 / 继承 / 公开），回答「我为什么能看到它」
      * 记录里本来就带 userId，这里只是给它一个语义明确的名字。
+     *
+     * ## 为什么顺带抹掉 fileKey
+     *
+     * fileKey 是 COS 里的**真实对象路径**（`users/141/202610/secret.xlsx`）。
+     * 只读受权人（perm=READ，没有下载位）本来下载会被 403 挡掉，但他仍然能从
+     * 列表响应里读到完整路径 —— 纵深防御上的缺口：路径一旦泄漏，攻击者就能
+     * 直接拿它去构造请求，不必再猜。
+     *
+     * 抹掉它不影响任何功能：**预览和下载都走 /api/files/download，而那个接口
+     * 要 PERM_DOWNLOAD**。没有下载位的人点预览本来就会被 403，fileKey 留给他
+     * 纯属白给。有下载位的人（含属主、含分享链接的 LINK_PERMISSION）照常拿到。
      */
     const withMeta = <T extends { userId: number; canWrite?: boolean; perm?: number; permSource?: PermSource }>(
       rows: T[],
@@ -160,13 +172,19 @@ export default defineEventHandler(async (event) => {
     ) =>
       rows.map(r => {
         const perm = r.perm ?? fallback.perm
-        return {
+        const out = {
           ...r,
           ownerId: r.userId,
           perm,
           permSource: r.permSource ?? fallback.permSource,
           canWrite: r.canWrite ?? hasPermission(perm, PERM_WRITE)
         }
+        // 没有下载位就不给对象路径。null 而不是删字段：前端的类型是可选的，
+        // 显式 null 比 undefined 少一类「这个键到底存不存在」的分支。
+        if (!hasPermission(perm, PERM_DOWNLOAD) && 'fileKey' in r) {
+          ;(out as Record<string, unknown>).fileKey = null
+        }
+        return out
       })
 
     // 解析 folderId，root / 0 / 缺省都视为根层

@@ -312,6 +312,25 @@ export function readOnly(mask: number): boolean {
 }
 
 /**
+ * 「这个文件我能不能下载」。
+ *
+ * 判据是 **fileKey 在不在**，不是权限位 —— 服务端对没有下载位的人不再下发
+ * fileKey（那是 COS 里的真实对象路径，见 server/api/files/index.get.ts 的
+ * withMeta 注释）。所以前端判断能不能下载/预览，看这个字段就够了。
+ *
+ * 为什么不让前端去比 perm 位：perm 是服务端算好的，fileKey 是不是 null
+ * 是同一个判断的结果。两者可能因为历史数据/异常分支不一致，而**能不能下载
+ * 只有服务端知道**。让前端看「服务端有没有给我下载所需的凭据」比让它
+ * 复现一遍权限算法可靠。
+ */
+export function canDownloadFile(file: { fileKey?: string | null } | null | undefined): boolean {
+  return Boolean(file?.fileKey)
+}
+
+/** 没有下载权限时统一用这句。分享设置弹层里也有类似说明 */
+export const NO_DOWNLOAD_MESSAGE = '你没有这个文件的下载权限。需要对方在分享设置里勾选「下载」。'
+
+/**
  * 权限位的标签，以及把掩码渲染成一句中文。
  *
  * PERMISSION_LABELS 保留是为了兼容 share/list.get.ts（它按掩码查标签返回），

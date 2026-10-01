@@ -184,6 +184,7 @@ import { formatFileSize } from '~/utils/format'
 import { notify } from '~/utils/notify'
 import type { FileRecord } from '~~/types/file-browser'
 import type { ArchiveFileItem } from '~~/types/zip'
+import { NO_DOWNLOAD_MESSAGE } from '~~/types/share'
 
 const props = defineProps<{
   file: FileRecord
@@ -316,6 +317,9 @@ const load = async () => {
   textContent.value = ''
   originalContent.value = ''
   try {
+    // 服务端不给没有下载位的人 fileKey（真实对象路径）。预览走的就是
+    // /api/files/download，没有它必然 400 —— 直接说清原因。
+    if (!currentFileKey.value) throw new Error(NO_DOWNLOAD_MESSAGE)
     const sign = await FilesService.downloadSign(
       { fileKey: currentFileKey.value, filename: props.file.filename },
       props.targetUserId ?? null,
@@ -486,6 +490,7 @@ const handlePickReplacement = async (e: Event) => {
 
 const handleDownload = async () => {
   try {
+    if (!currentFileKey.value) throw new Error(NO_DOWNLOAD_MESSAGE)
     const sign = await FilesService.downloadSign(
       { fileKey: currentFileKey.value, filename: props.file.filename },
       props.targetUserId ?? null,

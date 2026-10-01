@@ -244,7 +244,35 @@ export default defineNitroPlugin(async () => {
       console.log('[db-migrate] ix_share_links_target created')
     }
 
-    // 4) 所有者守卫触发器
+    // 4) file_key 唯一索引
+    //
+    // 为什么要：file_key 是 COS 里的真实对象路径，权限判定又是「按它查一行」。
+    // 没有唯一约束时同一个路径可以有多行，命中哪一行由 SQLite 自己决定
+    // （原查询连 ORDER BY 都没有）—— 行为不确定本身就是缺陷。
+    //
+    // 与 ux_files_user_folder_filename 互补：那个管「同一目录里不能重名」，
+    // 这个管「同一个对象不能被两行指认」。上传用 uuid、复制用时间戳+随机数，
+    // 正常路径不会撞，所以加约束不影响任何现存写入。
+    if (!(await indexExists(db, 'ux_files_file_key'))) {
+      if (await hasDuplicateFileKeys(db)) {
+        // 有重复就不建：建索引会报错拖垮启动。写入侧的前缀校验（file-key.ts）
+        // 和 download.post.ts 签 fileRecord.fileKey 已经挡住了越权，这里只是
+        // 收窄重复行的影响面，不补也不会开出新洞。
+        console.warn(
+          '[db-migrate] files.file_key 有重复行，跳过 ux_files_file_key（请人工去重后重启）'
+        )
+      } else {
+        try {
+          await db.prepare('CREATE UNIQUE INDEX ux_files_file_key ON files(file_key)').bind().run()
+          console.log('[db-migrate] ux_files_file_key created')
+        } catch (e) {
+          // 唯一约束不是安全边界的一部分，不该因为它起不来
+          console.warn('[db-migrate] ux_files_file_key 创建失败，继续启动：', e)
+        }
+      }
+    }
+
+    // 5) 所有者守卫触发器
     if (!mysql) {
       for (const trigger of OWNER_GUARD_TRIGGERS) {
         if (await triggerExists(db, trigger.name)) continue
@@ -293,6 +321,26 @@ function isMysqlDb() {
     (process.env.MYSQL_HOST && process.env.MYSQL_USER && process.env.MYSQL_DATABASE) ||
     process.env.DATABASE_URL?.startsWith?.('mysql://')
   )
+}
+
+/**
+ * file_key 是否有重复行。
+ *
+ * 加 UNIQUE 索引前必须先查：sqlite 的 CREATE UNIQUE INDEX 撞到重复行会直接
+ * 报错，迁移插件抛出去，服务起不来。老库里若有重复（file_key 曾经没有任何
+ * 唯一约束），这里返回 true 让调用方跳过 + 告警，而不是让整个实例挂掉。
+ *
+ * 查不出来（.catch 吞了）时返回 false：不拦，让调用方去建。建失败也是同一个
+ * catch 路径，等价于跳过 —— 宁可少一个索引，也不要因为索引把服务卡住。
+ */
+async function hasDuplicateFileKeys(db: any): Promise<boolean> {
+  const res = await db
+    .prepare('SELECT file_key FROM files GROUP BY file_key HAVING COUNT(*) > 1 LIMIT 1')
+    .bind()
+    .all()
+    .catch(() => null)
+  if (res === null) return false
+  return Boolean(res?.results?.length)
 }
 
 async function tableExists(db: any, table: string) {

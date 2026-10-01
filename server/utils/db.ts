@@ -1059,7 +1059,22 @@ export class FileService {
     need: number,
     deniedMessage?: string
   ): Promise<OwnedFile> {
-    const row = await this.db.prepare('SELECT * FROM files WHERE file_key = ?').bind(fileKey).first()
+    /**
+     * `ORDER BY id LIMIT 1`：file_key 曾经没有 UNIQUE 约束，重复行是合法的。
+     * 原来这条查询没有 ORDER BY / LIMIT，命中哪一行由 SQLite 自己决定 ——
+     * 全表扫描时通常是 rowid 最小的那条，但那是实现细节不是保证。
+     *
+     * 加上排序后行为确定：同一组重复行里永远取最早那条。这不是「修好越权」
+     * （越权那半边在 download.post.ts 签 fileRecord.fileKey + 写入侧校验前缀，
+     * 见 server/utils/file-key.ts），这里是让「同一请求两次得到同一行」。
+     *
+     * UNIQUE 索引由 db-migrate 补上，之后重复行不再可能出现；这两句留着，
+     * 因为老库里可能已经有重复的存量数据。
+     */
+    const row = await this.db
+      .prepare('SELECT * FROM files WHERE file_key = ? ORDER BY id LIMIT 1')
+      .bind(fileKey)
+      .first()
     if (!row) throw fileNotFoundError
     const [file] = await this.attachAccess([this.toOwned(row)])
     return this.ensureAccess(userId, file!, need, deniedMessage)

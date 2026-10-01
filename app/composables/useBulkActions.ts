@@ -7,6 +7,7 @@ import { formatFileSize } from '~/utils/format'
 import type { FolderRecord, FileRecord } from '~/types/files'
 import { ref, type Ref } from 'vue'
 import { notify, notifyError, toMessage } from '~/utils/notify'
+import { canDownloadFile, NO_DOWNLOAD_MESSAGE } from '~~/types/share'
 
 export function useBulkActions(
   folders: Ref<FolderRecord[]>,
@@ -29,6 +30,12 @@ export function useBulkActions(
   const downloadingFolderId = ref<number | null>(null)
 
   const downloadFile = async (file: FileRecord) => {
+    // 服务端不给没有下载位的人 fileKey（那是 COS 真实路径，见 types/share.ts
+    // canDownloadFile 的注释）。这里先挡一道，别发一个必然 400 的请求。
+    if (!canDownloadFile(file)) {
+      notify(NO_DOWNLOAD_MESSAGE, 'error')
+      return
+    }
     try {
       const res = await FilesService.downloadSign({ fileKey: file.fileKey, filename: file.filename }, tRef?.value ?? null, admin(), link())
       if (res.success) triggerDownload(res.data.downloadUrl, res.data.filename)

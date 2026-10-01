@@ -117,6 +117,13 @@ CREATE TABLE files (
 CREATE UNIQUE INDEX ux_files_user_folder_filename
   ON files (user_id, COALESCE(folder_id, -1), filename);
 
+-- file_key（COS 真实对象路径）全局唯一。
+-- 与上面那条互补：那条管「同一目录里不能重名」，这条管「同一个对象不能被
+-- 两行指认」。少了它，权限判定（按 file_key 查一行）命中哪一行由 SQLite 自己
+-- 决定，行为不确定。老库补这个索引走 server/plugins/db-migrate.ts（有重复行
+-- 时会跳过并告警，不拖垮启动）。
+CREATE UNIQUE INDEX ux_files_file_key ON files (file_key);
+
 CREATE INDEX ix_files_user   ON files(user_id);
 CREATE INDEX ix_files_folder ON files(folder_id);
 

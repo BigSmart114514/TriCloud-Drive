@@ -148,8 +148,21 @@ export default defineEventHandler(async (event) => {
 
     try {
       if (config.cdnEnabled && config.cdnDomain) {
+        /**
+         * 签的是 **fileRecord.fileKey**（刚鉴权通过的那一行），不是请求里的
+         * fileKey。
+         *
+         * 两者在有重复行的库里会不同 —— files.file_key 曾经没有 UNIQUE 约束，
+         * 而查找是 `WHERE file_key = ?` 无 ORDER BY / LIMIT，命中哪一行由
+         * SQLite 自己定。签请求里的路径等于「用甲行的授权去签乙行的对象」：
+         * 攻击者只要先注册一条同名 key，之后别人下载就会拿到他那条路径的签名。
+         *
+         * 改成签 fileRecord 之后，签名与被授权的那一行严格一致 —— 重复行
+         * 最多让鉴权落在「另一行同 key 的记录」上（仍是同一个真实对象，
+         * 因为 key 就是对象路径），不再能签出未授权的路径。
+         */
         const cdnUrl = generateCDNUrl(
-          fileKey,
+          fileRecord.fileKey,
           config.cdnDomain,
           config.cdnAuthKeyPrimary,
           config.cdnAuthKeyBackup,
@@ -170,8 +183,8 @@ export default defineEventHandler(async (event) => {
         }
       }
 
-      // 无 CDN：返回 COS 直链
-      const cosUrl = `https://${config.cosBucket}.cos.${config.cosRegion}.myqcloud.com/${fileKey}`
+      // 无 CDN：返回 COS 直链。同样用 fileRecord.fileKey，理由见上面 generateCDNUrl 那段
+      const cosUrl = `https://${config.cosBucket}.cos.${config.cosRegion}.myqcloud.com/${fileRecord.fileKey}`
       return {
         success: true,
         data: {

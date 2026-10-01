@@ -2,6 +2,7 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
 import { resolveUniqueFilename } from '~~/server/utils/file'
+import { assertFileKeyOwner } from '~~/server/utils/file-key'
 import { userExpiredError, userNotFindError, dbConnectionError, upload403Error } from '~~/types/error'
 import { DEFAULT_SHARE_MODE, PERM_WRITE } from '~~/types/share'
 import { isExpired, nowSqlString } from '~~/server/utils/time'
@@ -51,6 +52,19 @@ export default defineEventHandler(async (event) => {
       const dest = await folderService.findAccessibleById(authId, folderId, PERM_WRITE)
       userId = dest.userId
     }
+
+    /**
+     * fileKey 必须落在属主的命名空间里。
+     *
+     * fileKey 是客户端原样送进来的（COS 上真实存在的对象路径），而服务端只在
+     * /api/upload/credentials **生成**过它、从不复验 —— 少一步校验，攻击者就能
+     * 给自己的一条文件记录填上受害者的路径。
+     *
+     * 比的是 **userId（解析出来的属主）而不是 authId**：useAdmin 场景下文件是
+     * 写进别人的树（userId = dest.userId），拿 authId 比会把管理员自己的合法
+     * 上传也挡掉。
+     */
+    assertFileKeyOwner(fileKey, userId)
 
     // 额度与过期一律按**属主**判定：文件落在谁的树里，就占谁的容量、算谁过期。
     const userRow: any = await db.prepare('SELECT expire_at FROM users WHERE id = ?').bind(userId).first()
