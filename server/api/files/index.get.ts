@@ -4,8 +4,109 @@ import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
 import { FileService, FolderService } from '~~/server/utils/db'
 import type { PermSource, ResolvedAccess, SharedEntry } from '~~/server/utils/db'
-import { hasPermission, PERM_ALL, PERM_READ, PERM_WRITE, SHARE_SHARED } from '~~/types/share'
+import {
+  listChildrenByLink,
+  linkGrantsFile,
+  linkGrantsFolder,
+  LINK_ACCESS,
+  LINK_NOT_ACTIVE_MESSAGE,
+  resolveLinkTarget
+} from '~~/server/utils/share-link'
+import {
+  hasPermission,
+  normalizeShareLink,
+  PERM_ALL,
+  PERM_READ,
+  PERM_WRITE,
+  SHARE_SHARED
+} from '~~/types/share'
 import { getQuery } from 'h3'
+
+/**
+ * 分享链接视角的列表。与登录态完全无关，也没有任何权限参数可调 ——
+ * 权限锁死 LINK_PERMISSION，ownerId 是内容的属主（前端据此判断能不能改，
+ * 对匿名访问者来说恒为 false）。
+ *
+ * 三种落点：
+ *   不给 folderId + 链接挂在文件上 → 那个文件单列一行（复用列表渲染）
+ *   不给 folderId + 链接挂在目录上 → 该目录的内容
+ *   给了 folderId                  → 该目录的内容，但先要 token 真能覆盖它
+ *
+ * 子项一律只给继承态的：任何非继承子节点都是它自己那道边界，链接到不了。
+ */
+async function listByLink(db: any, link: string, rawFolderId?: string) {
+  const target = await resolveLinkTarget(db, link)
+  const folderService = new FolderService(db)
+  const fileService = new FileService(db)
+
+  const tag = <T extends { userId: number }>(rows: T[]) =>
+    rows.map((r) => ({
+      ...r,
+      ownerId: r.userId,
+      perm: LINK_ACCESS.perm,
+      permSource: LINK_ACCESS.permSource,
+      canWrite: false
+    }))
+
+  let folderId: number | null = null
+  if (rawFolderId && rawFolderId !== 'root' && rawFolderId !== '0') {
+    const parsed = Number(rawFolderId)
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw createError({ statusCode: 400, message: '非法的 folderId' })
+    }
+    folderId = parsed
+  }
+
+  // 链接直接挂在文件上：把那个文件作为唯一一项交出去。
+  // 不包装成「只含一个文件的目录」—— 那样面包屑会显示成一个假目录。
+  if (folderId === null && target.type === 'file') {
+    const file = await fileService.findOwnedById(target.ownerId, target.id)
+    // **必须验链接真能覆盖这个文件**，不能只看文件在不在。
+    // 文件自己不是边界时（Shared=继承），挂上去的链接是死的 —— 但只要文件存在，
+    // 这里原来就直接返回了，于是死链照样能匿名列出来。
+    // 而 /api/files/download 走 findFileByLink，那边是验的：
+    // 结果是同一个死链，列表能看、下载 404，两条入口自相矛盾。
+    // （这个洞是实测撞出来的：继承态文件上生成链接后，列表照样列出该文件。）
+    if (!file || !(await linkGrantsFile(db, link, file.id))) {
+      throw createError({ statusCode: 404, message: LINK_NOT_ACTIVE_MESSAGE })
+    }
+    return {
+      success: true,
+      currentFolderId: null,
+      isOwner: false,
+      sharedList: false,
+      canWrite: false,
+      linkMode: true,
+      folder: null,
+      folders: [],
+      files: tag([file])
+    }
+  }
+
+  if (folderId === null) folderId = target.id
+
+  if (!(await linkGrantsFolder(db, link, folderId))) {
+    throw createError({ statusCode: 404, message: LINK_NOT_ACTIVE_MESSAGE })
+  }
+
+  const { folders, files } = await listChildrenByLink(folderService, fileService, target.ownerId, folderId)
+
+  return {
+    success: true,
+    currentFolderId: folderId,
+    isOwner: false,
+    // 匿名视角没有「粘贴的目标」这回事，sharedList 让前端别给这类入口
+    sharedList: false,
+    canWrite: false,
+    linkMode: true,
+    folder: {
+      id: folderId,
+      name: (await folderService.findOwnedById(target.ownerId, folderId))?.name ?? ''
+    },
+    folders: tag(folders),
+    files: tag(files)
+  }
+}
 
 /**
  * 列表。三种情况，同一个接口：
@@ -17,14 +118,25 @@ import { getQuery } from 'h3'
  *
  * me != target 只有 adminMode（管理员 + useAdmin）才可能，所以第二个分支
  * 是管理员代看某人时的「入口」；普通用户看自己时 me 恒等于 target。
+ *
+ * 带 link 时走另一条完全独立的路（listByLink），**与登录态无关** ——
+ * 理由同 download.post.ts：链接永远只能给出 LINK_PERMISSION。
  */
 export default defineEventHandler(async (event) => {
   try {
     const db = getDb(event)
     if (!db) throw dbConnectionError
 
+    const q = getQuery(event) as { folderId?: string; link?: string }
+    // 必须在 getMeAndTarget 之前判：它对未登录请求直接 401，
+    // 而带链接的请求本来就该匿名通过（中间件已经放过来了）。
+    const link = normalizeShareLink(q?.link)
+    if (link) {
+      return await listByLink(db, link, q?.folderId)
+    }
+
     const { me, targetUserId, adminMode, authUserId } = await getMeAndTarget(event)
-    const { folderId: rawFolderId } = getQuery(event) as { folderId?: string }
+    const rawFolderId = q?.folderId
 
     const fileService = new FileService(db)
     const folderService = new FolderService(db)

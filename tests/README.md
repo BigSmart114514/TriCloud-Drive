@@ -14,21 +14,34 @@ Node ≥ 22.6（`.ts` 靠 `--experimental-strip-types` 直接 import，需要 22
 
 | 文件 | 测什么 | 依赖 |
 |---|---|---|
-| `share-badge.test.mjs` | `types/share.ts` 的纯函数：角标判定、三态归一、权限位掩码 | 无 |
+| `share-badge.test.mjs` | `types/share.ts` 的纯函数：角标判定、三态归一、权限位掩码、分享链接 token | 无 |
 | `resolve-access.test.mjs` | 分享权限解析的端到端行为：三种三态 × 预设 × 墙 | sqlite3 + 库副本 |
+| `manifest-access.test.mjs` | 整包下载清单的权限过滤：属主快路径、访客过滤、skipped 计数 | sqlite3 + 库副本 |
+| `share-link.test.mjs` | 分享链接的边界判定 + 增删（级联、UNIQUE、CHECK） | sqlite3 + 库副本 |
 
-## 为什么 `resolve-access` 是复刻而不是直接 import
+## helpers
 
-`server/utils/db.ts` 依赖 Nuxt 的自动导入（`createError` 等全局）和 sqlite3 封装，
-在 `node --test` 里跑不起来，所以测试里复刻了算法本体（`combineWithAncestor` /
-`decideAncestor` / `resolveAccess` 的 SQL）。
+| 文件 | 提供什么 |
+|---|---|
+| `sqlite-fixture.mjs` | 建库副本、造目录/文件/授权/链接、`reset()`。**三个集成测试共用** |
+| `access-algorithm.mjs` | 分享权限算法的复刻（`combineWithAncestor` / `decideAncestor` / `resolveAccess` / `resolveFileAccessFrom` / `listDownloadableSubtree`） |
 
-**代价：改了 `db.ts` 的算法必须同步改这里**，否则测试测的是旧逻辑。测试里每个
-函数上方都标了对应的源码位置（`db.ts:256` 之类），方便对照。
+## 为什么算法是复刻而不是直接 import
 
-真正的端到端验证（跑真实 dev server）仍然是手工的，靠 `node --test` 覆盖不到。
+`server/utils/db.ts` 和 `server/utils/share-link.ts` 都依赖 Nuxt 的自动导入
+（`createError` 等全局）、h3 和 `~~/` 路径别名，在 `node --test` 里跑不起来，
+所以把算法与 SQL 本体复制到 `helpers/access-algorithm.mjs` 与各测试文件里。
+
+**代价：改了这两个 util 的算法必须同步改复刻处**，否则测试测的是旧逻辑。
+每个函数上方都标了对应的源码位置（`db.ts:xxx` 之类），方便对照。
+
+真实端到端验证（跑真实 dev server、浏览器里点）仍然是手工的，`node --test` 覆盖不到。
 
 ## 数据
 
-`resolve-access.test.mjs` 会把 `data.sqlite` **复制**到临时目录再操作，不碰开发库。
-测试内会 `DELETE FROM folders WHERE id >= 900` 之类，只清理自己造的 id ≥ 900 的数据。
+集成测试把 `data.sqlite` **复制**到临时目录再操作，不碰开发库。
+每个用例前 `reset()`，只清理自己造的 id ≥ 900 的数据。
+
+夹具自己建 `share_links` 表与两个级联删除触发器（与 `schema.sql` / `db-migrate.ts`
+一致），不依赖开发库是否已迁移过 —— 否则「有没有先跑过 dev server」会变成测试能否
+运行的前置条件，报错还长得像业务 bug。

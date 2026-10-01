@@ -17,6 +17,8 @@ DROP TRIGGER IF EXISTS trg_file_access_not_owner_ins;
 DROP TRIGGER IF EXISTS trg_file_access_not_owner_upd;
 DROP TRIGGER IF EXISTS trg_folder_access_not_owner_ins;
 DROP TRIGGER IF EXISTS trg_folder_access_not_owner_upd;
+DROP TRIGGER IF EXISTS trg_share_links_purge_file;
+DROP TRIGGER IF EXISTS trg_share_links_purge_folder;
 
 DROP INDEX IF EXISTS ux_folders_user_parent_name;
 DROP INDEX IF EXISTS ix_folders_user;
@@ -28,9 +30,11 @@ DROP INDEX IF EXISTS ix_file_access_file;
 DROP INDEX IF EXISTS ix_file_access_user;
 DROP INDEX IF EXISTS ix_folder_access_folder;
 DROP INDEX IF EXISTS ix_folder_access_user;
+DROP INDEX IF EXISTS ix_share_links_target;
 
 DROP TABLE IF EXISTS file_access;
 DROP TABLE IF EXISTS folder_access;
+DROP TABLE IF EXISTS share_links;
 DROP TABLE IF EXISTS files;
 DROP TABLE IF EXISTS folders;
 DROP TABLE IF EXISTS users;
@@ -153,6 +157,51 @@ CREATE TABLE folder_access (
 
 CREATE INDEX ix_folder_access_folder ON folder_access(folder_id);
 CREATE INDEX ix_folder_access_user   ON folder_access(user_id);
+
+-- -------- 分享链接（匿名 bearer token）--------
+-- 与 file_access / folder_access 最大的不同：**没有 user_id**。持有 token 的人
+-- 没有任何身份，所以权限是写死的（LINK_PERMISSION = 读 + 下载），不是逐人配的。
+--
+-- 链接挂在文件或文件夹上，并**向下继承**：从目标往上找第一个非继承节点，
+-- 那儿挂着这条 token 才算数（见 server/utils/share-link.ts 的 linkGrants*）。
+-- 祖先的链接因此能覆盖整棵子树，但遇到任何非继承后代就停 —— 那儿是道边界。
+--
+-- 不存 owner_id：扣费要的文件属主在 download 流程里本来就有，
+-- 少一个会和 files/folders 漂移的冗余字段。
+--
+-- **没有外键** —— 目标是一对多的多态引用（target_type + target_id），
+-- 单列外键表达不了，外键也不能写在两个表上（那样 UNIQUE/索引都要变成两套）。
+-- 级联删除交给下面两个触发器做。目标没了 token 留着也没用（还多一把没用的钥匙），
+-- 而 resolveLinkTarget 对「行还在但目标没了」也会按失效链接处理，两层都兜住。
+CREATE TABLE share_links (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  link        TEXT    NOT NULL,                  -- 32 位小写 hex，见 SHARE_LINK_TOKEN_BYTES
+  target_type TEXT    NOT NULL,                  -- 'file' | 'folder'
+  target_id   INTEGER NOT NULL,
+  created_at  TEXT    DEFAULT CURRENT_TIMESTAMP,
+
+  UNIQUE (link),
+  CHECK (target_type IN ('file', 'folder'))
+);
+
+CREATE INDEX ix_share_links_target ON share_links(target_type, target_id);
+
+-- 级联删除：目标没了，链接一起消失。
+-- 用触发器而不是外键，是因为多态引用没法声明外键，而级联这个行为不能省 ——
+-- 留着孤儿链接会让「这个 token 到底指向什么」变成不确定的事。
+CREATE TRIGGER trg_share_links_purge_file
+AFTER DELETE ON files
+WHEN EXISTS (SELECT 1 FROM share_links WHERE target_type = 'file' AND target_id = OLD.id)
+BEGIN
+  DELETE FROM share_links WHERE target_type = 'file' AND target_id = OLD.id;
+END;
+
+CREATE TRIGGER trg_share_links_purge_folder
+AFTER DELETE ON folders
+WHEN EXISTS (SELECT 1 FROM share_links WHERE target_type = 'folder' AND target_id = OLD.id)
+BEGIN
+  DELETE FROM share_links WHERE target_type = 'folder' AND target_id = OLD.id;
+END;
 
 -- -------- Triggers: 数据一致性 --------
 -- 1) files.user_id 必须与其所属 folder 的 user_id 一致

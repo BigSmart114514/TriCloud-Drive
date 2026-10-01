@@ -29,7 +29,11 @@ import {
   PERM_ALL,
   PERM_BIT_LABELS,
   PERMISSION_LABELS,
-  formatPermission
+  formatPermission,
+  LINK_PERMISSION,
+  SHARE_LINK_TOKEN_BYTES,
+  SHARE_LINK_PAGE_PREFIX,
+  normalizeShareLink
 } from '../types/share.ts'
 
 describe('resolveShareBadge —— 文件夹图标的分享角标', () => {
@@ -344,6 +348,80 @@ describe('权限位掩码 —— 四个相互独立的位', () => {
     for (const mask of [PERM_READ, PERM_READ | PERM_WRITE, PERM_READ | PERM_WRITE | PERM_DELETE, PERM_ALL]) {
       assert.ok(PERMISSION_LABELS[mask], `掩码 ${mask} 缺标签`)
     }
+  })
+})
+
+describe('分享链接 —— token 校验', () => {
+  test('合法 token 是 32 位小写 hex', () => {
+    assert.equal(SHARE_LINK_TOKEN_BYTES, 16)
+    assert.equal(normalizeShareLink('0'.repeat(32)), '0'.repeat(32))
+    assert.equal(normalizeShareLink('0123456789abcdef'.repeat(2)), '0123456789abcdef'.repeat(2))
+  })
+
+  test('长度不对一律 null', () => {
+    assert.equal(normalizeShareLink('a'.repeat(31)), null)
+    assert.equal(normalizeShareLink('a'.repeat(33)), null)
+    assert.equal(normalizeShareLink(''), null)
+  })
+
+  test('非 hex 字符 null（含大写：不做大小写兜底）', () => {
+    assert.equal(normalizeShareLink('g'.repeat(32)), null)
+    assert.equal(normalizeShareLink('A'.repeat(32)), null)
+    assert.equal(normalizeShareLink(`${'0'.repeat(31)}-`), null)
+  })
+
+  test('非字符串 null（挡掉 Number/数组等被隐式转的情况）', () => {
+    assert.equal(normalizeShareLink(null), null)
+    assert.equal(normalizeShareLink(undefined), null)
+    assert.equal(normalizeShareLink(123), null)
+    assert.equal(normalizeShareLink(true), null)
+    assert.equal(normalizeShareLink(['a'.repeat(32)]), null, '数组不是字符串，别让它走进 SQL')
+  })
+
+  test('只 trim，不改大小写', () => {
+    assert.equal(normalizeShareLink(` \t${'a'.repeat(32)}\n `), 'a'.repeat(32))
+  })
+})
+
+describe('分享链接 —— 权限锁死', () => {
+  test('只有读 + 下载', () => {
+    assert.equal(LINK_PERMISSION, PERM_READ | PERM_DOWNLOAD)
+    assert.equal(LINK_PERMISSION, 9)
+  })
+
+  // 链接是匿名 bearer token：拿到的人没有身份可追责，所以不给写/删。
+  // 这条钉死「不能给多」—— 将来有人想「给链接开个写权限」时会先撞到这里。
+  test('不含写和删除位', () => {
+    assert.equal(hasPermission(LINK_PERMISSION, PERM_WRITE), false)
+    assert.equal(hasPermission(LINK_PERMISSION, PERM_DELETE), false)
+    assert.equal(hasPermission(LINK_PERMISSION, PERM_ALL), false)
+  })
+
+  test('有读也有下载（预览靠下载位，所以两者必须都有）', () => {
+    assert.equal(hasPermission(LINK_PERMISSION, PERM_READ), true)
+    assert.equal(hasPermission(LINK_PERMISSION, PERM_DOWNLOAD), true)
+  })
+
+  test('渲染出来的文案含「下载」', () => {
+    assert.equal(formatPermission(LINK_PERMISSION), '查看 / 下载')
+  })
+
+  test('9 不等于旧的「全权」7，不该被补位规则碰到', () => {
+    assert.equal(normalizePermission(LINK_PERMISSION), LINK_PERMISSION)
+    assert.notEqual(LINK_PERMISSION, PERM_ALL)
+    assert.notEqual(LINK_PERMISSION, 7)
+  })
+})
+
+describe('分享链接 —— 页面路径', () => {
+  test('前缀是 /s/，与服务端拼 url 用同一个常量', () => {
+    assert.equal(SHARE_LINK_PAGE_PREFIX, '/s/')
+  })
+
+  test('拼出来的路径不含 query，token 直接进路径段', () => {
+    const link = 'a'.repeat(32)
+    assert.equal(`${SHARE_LINK_PAGE_PREFIX}${link}`, `/s/${link}`)
+    assert.ok(!`${SHARE_LINK_PAGE_PREFIX}${link}`.includes('?'))
   })
 })
 

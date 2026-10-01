@@ -146,6 +146,41 @@ function readBool(v: any): boolean {
  *                      返回的每一行仍要过 me 的分享权限过滤
  */
 export async function getMeAndTarget(event: any): Promise<MeAndTarget> {
+  return resolveIdentity(event)
+}
+
+/**
+ * 严格版：**指名别人就需要管理员身份**。
+ *
+ * 与 getMeAndTarget 的唯一区别就是把 b73e45a 原版那道闸加回来：
+ *   targetUserId 指向别人 → 必须是管理员/超管，否则 403；
+ *   且此时 adminMode 自动为真，authUserId = targetUserId。
+ *
+ * 为什么要另开一个而不是改 getMeAndTarget：d42614f 有意去掉了那道闸，把安全性
+ * 从「不许指名别人」换成「指名别人拿不到任何权限」（authUserId）。这要求每个接口
+ * 自己保证**不拿 targetUserId 做权限判定**。
+ *
+ * 而 targetUserId 必须继续可自由传入 —— 普通用户浏览别人的共享内容正是靠它
+ * （files/index.get.ts 的「分享给我的」分支就是 targetUserId ≠ me 且非管理员）。
+ * 所以宽松版不能动，需要严格语义的接口各自取这个。
+ *
+ * 什么时候该用严格版：targetUserId 会被当成**写操作的归属目标**或数据范围，
+ * 也就是「我能不能动这个人的东西」。典型的就是改密码 ——
+ * 宽松版下普通用户传一个 targetUserId 就能改掉别人的密码（原版代码拿 targetUserId
+ * 当更新目标，闸门却是 `me.userId === targetUserId`，于是校验整段跳过）。
+ *
+ * 读别人的共享内容 → 用 getMeAndTarget。
+ * 以写为目的、或者不确定 → 用严格版，多一次校验的代价可以忽略。
+ */
+export async function getMeAndTargetStrict(event: any): Promise<MeAndTarget> {
+  return resolveIdentity(event, { gateTargetUserId: true })
+}
+
+/** 两个入口的共用内核。gateTargetUserId 决定要不要恢复原版那道闸 */
+async function resolveIdentity(
+  event: any,
+  opts?: { gateTargetUserId?: boolean }
+): Promise<MeAndTarget> {
   const me = await requireAuth(event, { withUser: true })
   const isGet = getMethod(event) === 'GET'
   const q: any = isGet ? getQuery(event) : null
@@ -156,7 +191,7 @@ export async function getMeAndTarget(event: any): Promise<MeAndTarget> {
   if (useAdmin && !isStaff) {
     throw createError({ statusCode: 403, message: '仅管理员可使用管理权限' })
   }
-  const adminMode = useAdmin && isStaff
+  let adminMode = useAdmin && isStaff
 
   const provided = q?.targetUserId ?? b?.targetUserId
   const targetUserId = provided != null && provided !== '' ? Number(provided) : me.userId
@@ -164,17 +199,27 @@ export async function getMeAndTarget(event: any): Promise<MeAndTarget> {
     throw createError({ statusCode: 400, message: '非法的 targetUserId' })
   }
 
+  // 严格版：指名别人 = 一次管理操作。非管理员直接 403（不给静默降级）。
+  if (opts?.gateTargetUserId && targetUserId !== me.userId) {
+    if (!isStaff) {
+      throw createError({ statusCode: 403, message: '仅管理员可操作他人的数据' })
+    }
+    adminMode = true
+  }
+
   // 非超管不得进入超管的数据范围。
   //
-  // 放在这里而不是逐个 handler，是因为 getMeAndTarget 是全部 useAdmin 端点的
-  // 唯一入口（files / folders / share / copy-paste / upload / download /
-  // change-password 共 18 处），一处拦住就不会漏。
+  // 放在这里而不是逐个 handler，是因为这里是全部目标解析的共同入口
+  // （files / folders / share / copy-paste / upload / download / change-password
+  // 共 18 处），一处拦住就不会漏。
   //
   // 之前没有任何角色区分：普通管理员用 targetUserId 就能进超管的文件。
   // deleteUser 早就写了「普通管理员不能删除管理员或超管」，这里补的是同一条规则的
   // 数据侧 —— 不然就变成「不能删超管，却能翻他文件、能改他分享」。
   //
   // 只在「管理视图 + 自己不是超管」时多查这一次；超管和普通浏览都是零额外查询。
+  // 严格版里 adminMode 可能由「指名别人」推出，所以这道防线照样会生效 ——
+  // 否则普通管理员只要不传 useAdmin、只传 targetUserId 就能绕过它。
   if (adminMode && !me.isSuperAdmin) {
     const db = getDb(event)
     if (!db) throw createError({ statusCode: 500, message: '数据库连接失败' })

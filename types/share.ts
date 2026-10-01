@@ -184,6 +184,47 @@ export function normalizePermission(mask: number): number {
   return out
 }
 
+/**
+ * 分享链接能给的权限，**锁死**：只读 + 下载。
+ *
+ * 为什么不给写/删：链接是匿名 bearer token，拿到的人没有身份可以追责，
+ * 给写权限等于把整个子树交出去还能改。也不给「只读但能下载」的组合以外的自由 ——
+ * 链接就只有这一种形态，不需要用户配置。
+ *
+ * 有下载位是因为预览走的就是 /api/files/download（会扣下载流量），
+ * 不给下载位的话对方连预览都做不到。
+ */
+export const LINK_PERMISSION = PERM_READ | PERM_DOWNLOAD
+
+/** 链接 token 的字节数。生成出来是 2 倍长度的 hex */
+export const SHARE_LINK_TOKEN_BYTES = 16
+
+/**
+ * 分享链接页面的路径前缀，最终地址是 `${前缀}${token}`（如 `/s/1a2b...`）。
+ *
+ * 放这里而不是各写一份字符串：服务端生成 url 时要用，前端路由也要用，
+ * 两边不一致的表现是「链接复制出来点开 404」，很难一眼看出是哪边写错了。
+ */
+export const SHARE_LINK_PAGE_PREFIX = '/s/'
+
+/**
+ * 校验/规范化一个链接 token，不合法返回 null。
+ *
+ * 格式就是 `randomBytes(16).toString('hex')` —— 32 位小写 hex。**只 trim，
+ * 不 lowercase**：token 全是数字和 a-f，转成大写仍然匹配得到虽然无害，
+ * 但「大小写写错了」和「token 无效」两种提示混在一起更难排查。
+ *
+ * 严格校验是有意义的：token 直接进 SQL 参与查询，挡掉形状不对的输入
+ * 能省掉一次注定落空的查库，也顺带挡掉超长串（有人拿它当缓冲区塞东西）。
+ */
+export function normalizeShareLink(value: any): string | null {
+  if (typeof value !== 'string') return null
+  const s = value.trim()
+  if (s.length !== SHARE_LINK_TOKEN_BYTES * 2) return null
+  if (!/^[0-9a-f]+$/.test(s)) return null
+  return s
+}
+
 export function hasPermission(mask: number, need: number): boolean {
   const granted = normalizePermission(mask)
   const required = normalizePermission(need)
@@ -236,5 +277,8 @@ export function formatPermission(mask: number): string {
 /**
  * 一条有效权限的**来源**，用来回答「我为什么能看到 / 能改这个」。
  * 按「谁最具体谁赢」定优先级：自身名单 > 边界祖先 > 边界之下的授权 > 公开。
+ *
+ * `link` 是唯一的非用户来源：分享链接没有 userId，所以走不到前面那套
+ * 按人查名单的判定，是单独一条链路给出的固定掩码 LINK_PERMISSION。
  */
-export type PermSource = 'owner' | 'self' | 'inherited' | 'public' | 'none'
+export type PermSource = 'owner' | 'self' | 'inherited' | 'public' | 'link' | 'none'

@@ -1,6 +1,7 @@
 // server/middleware/01.api-auth.ts
-import { getMethod, getRequestURL } from 'h3'
+import { getMethod, getQuery, getRequestURL } from 'h3'
 import { requireAuth, requireAdmin } from '~~/server/utils/auth-middleware'
+import { normalizeShareLink } from '~~/types/share'
 
 /**
  * API 默认拒绝：所有 /api/** 先过这道中间件，再进具体 handler。
@@ -22,6 +23,21 @@ import { requireAuth, requireAdmin } from '~~/server/utils/auth-middleware'
  */
 const PUBLIC_PATHS = new Set(['/api/auth/login', '/api/auth/register', '/api/auth/logout'])
 
+/**
+ * 分享链接能匿名访问的三个（读 + 下载 + 整包下载清单）。
+ *
+ * **只在带了合法形状的 link 时才匿名放行**，不带就照常 requireAuth ——
+ * 开成「这三个接口永久免鉴权」等于开三个匿名入口。
+ * 链接本身的有效性由各 handler 里的 linkGrants* 判定，中间件只管认不认这个参数。
+ *
+ * link 走 **query**（不放 body）：中间件要能只靠 getQuery 判完，
+ * 不碰 readBody —— 那玩意在 handler 里还要再读一遍，缓存行为不该依赖中间件先读过。
+ *
+ * 这份名单与 PUBLIC_PATHS 是两回事：前者「本来就要给未登录用户调」，
+ * 后者「凭一个能力凭据（token）调用，凭据对不对由 handler 判」。
+ */
+const LINK_PUBLIC_PATHS = new Set(['/api/files', '/api/files/download', '/api/folders/manifest'])
+
 export default defineEventHandler(async (event) => {
   const path = getRequestURL(event).pathname
 
@@ -36,6 +52,10 @@ export default defineEventHandler(async (event) => {
   // 管理类一律要求管理员，角色判定在 requireAdmin 里（会查一次库）
   if (path.startsWith('/api/manage/')) {
     await requireAdmin(event)
+    return
+  }
+
+  if (LINK_PUBLIC_PATHS.has(path) && normalizeShareLink((getQuery(event) as any)?.link)) {
     return
   }
 

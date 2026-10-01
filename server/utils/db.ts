@@ -4,6 +4,7 @@ import {
   hasPermission,
   normalizePermission,
   normalizeShareMode,
+  PERM_DOWNLOAD,
   PERM_READ,
   PERM_WRITE,
   SHARE_INHERIT,
@@ -160,6 +161,11 @@ export interface ManifestFile {
   fileKey: string
   fileSize: number
   relDir: string
+  /** 所在目录。权限过滤时按它分组，同一目录只解析一次 */
+  folderId: number | null
+  /** 该文件自己的三态。非继承的文件是它自己那道边界，祖先的授权到不了它 */
+  Shared: number
+  IsPublic: boolean
 }
 
 /**
@@ -347,6 +353,57 @@ function combineWithAncestor(
 
 function toBool(value: any): boolean {
   return value === true || value === 1 || value === '1'
+}
+
+/**
+ * 解析某用户对某个**文件**的有效权限。文件本身也是一个节点，同样有三态；
+ * 继承态下把自身名单与祖先（目录侧）的决策叠加。
+ *
+ * 提到模块级是因为有两处要算同一个东西：
+ *   FileService.resolveFileAccess —— 日常的 download / 列表逐条判定
+ *   FileService.listDownloadableSubtree —— 整棵子树的权限过滤
+ * 写成两份的话，改了「文件侧怎么叠祖先」只有一处会跟着变，另一处静默过期。
+ *
+ * `ownPermission` 是直接授权（file_access 里的那一行），没有就给 undefined。
+ */
+function resolveFileAccessFrom(
+  self: { Shared: number; IsPublic: boolean },
+  ownPermission: number | undefined,
+  inherited: ResolvedAccess
+): ResolvedAccess {
+  /**
+   * 文件的继承态预设（自己的名单/公开）有没有人背书。
+   *
+   * 注意**不能只看 inherited.hasBoundary** —— 它回答的是「**祖先**链里有没有
+   * 拍板者」，不包含「当前目录自己就是边界」这种情况。
+   *
+   * 以前这里写的是 `inherited.hasBoundary !== false`，于是：
+   *   访客点进一个直接分享给他的目录（该目录自己 Shared=1，上面全是继承）
+   *     → resolveAccess 走 SHARED 分支，hasBoundary = !!anc = false
+   *     → 里面继承态的文件全部拿到 mask 0
+   *   表现是「目录在「分享给我的」里点得进去，进去却一个文件都没有」。
+   *   只要再往下一层（那层上面还有边界），anc 非空就又正常了 —— 所以这个 bug
+   *   一直没被发现：触发条件是**当前目录自己就是最近的边界**。
+   *
+   * 正确的判据是「我们继承的这一侧有没有拍板者」：
+   *   inherited.mode !== 继承   → 当前目录自己就是边界（分享或不分享）
+   *   inherited.hasBoundary      → 或者祖先里有边界
+   * 满足其一即可。祖先是「不分享」时另有 combineWithAncestor 的墙分支兜着，
+   * 这里判 true 也不会把它放过去。
+   */
+  const backed = inherited.hasBoundary === true || inherited.mode !== SHARE_INHERIT
+
+  return combineWithAncestor(
+    { mode: normalizeShareMode(self.Shared), isPublic: toBool(self.IsPublic), permission: ownPermission },
+    inherited,
+    // 目录那侧的 inherited 已经在 combineWithAncestor 里算过祖先叠加，
+    // 这里只需要它带下来的「继承侧有没有拍板者」——文件自己若是继承态，
+    // 自己的 IsPublic 属不属于预设，就看这一条。
+    0,
+    false,
+    0,
+    backed
+  )
 }
 
 function toOwnedFolder(row: any): OwnedFolder {
@@ -556,7 +613,15 @@ export class FolderService {
     return Number(res?.meta?.changes ?? 0)
   }
 
-  /** 整棵子树的打包清单（带相对路径），每一跳都限定 user_id */
+  /**
+   * 整棵子树的打包清单（带相对路径），每一跳都限定 user_id。
+   *
+   * **不过滤权限** —— 这里只回答「这棵树里有哪些文件」。调用方分两种：
+   * 属主（FileService.listDownloadableSubtree 走快路径直接返回这份）和
+   * 需要过滤的访客（同一份数据按 folderId 分组后逐目录解析权限）。
+   * 所以这里多带了 folder_id / Shared / IsPublic 三列供后者使用，
+   * 它们对属主那条路是无用列 —— 比起为两种形态各写一条 SQL，多三个无用列便宜。
+   */
   async listSubtreeManifest(userId: number, folderId: number): Promise<ManifestFile[]> {
     const res = await this.db
       .prepare(`
@@ -574,11 +639,14 @@ export class FolderService {
           JOIN tree ON f.parent_id = tree.id
           WHERE f.user_id = ?
         )
-        SELECT fl.id       AS id,
-               fl.filename AS filename,
-               fl.file_key AS fileKey,
+        SELECT fl.id        AS id,
+               fl.filename  AS filename,
+               fl.file_key  AS fileKey,
                fl.file_size AS fileSize,
-               tree.rel_dir AS relDir
+               tree.rel_dir AS relDir,
+               fl.folder_id AS folderId,
+               fl.Shared    AS Shared,
+               fl.IsPublic  AS IsPublic
         FROM files fl
         JOIN tree ON fl.folder_id = tree.id
         WHERE fl.user_id = ?
@@ -709,8 +777,16 @@ export class FolderService {
    *
    * 与 resolveAccess 的区别：不 JOIN folder_access、不算具体权限，只问
    * 「有没有拍板者、最近的那个是不是墙」。所以跟访问者身份无关，属主视角也能用。
+   *
+   * `includeSelf` 是给**文件**用的：文件不在 folders 表里，它的「自身三态」不在
+   * 这条链上，链上的第一个节点是**所在目录**。而对目录本身，depth 0 是它自己，
+   * 一个设成「分享」的目录不算预设（红点规则本来也不会点它），所以要排除。
+   * 文件则相反 —— 所在目录就是它的边界，目录拍板了，文件的预设就该生效。
+   * 不区分这两者的话，权限判定（已含目录自己）和红点判定会给出相反的答案。
    */
-  async isPresetActive(folderId: number): Promise<boolean> {
+  async isPresetActive(folderId: number, opts?: { includeSelf?: boolean }): Promise<boolean> {
+    const minDepth = opts?.includeSelf ? 0 : 1
+
     const res = await this.db
       .prepare(`
         WITH RECURSIVE up(id, parent_id, shared, depth) AS (
@@ -730,7 +806,8 @@ export class FolderService {
 
     // 没人拍板：整条链（含根目录自己）没有一个 Shared IN (0,1)
     const boundary = rows.find(
-      (r: any) => Number(r.depth) > 0 && (Number(r.shared) === 0 || Number(r.shared) === 1)
+      (r: any) =>
+        Number(r.depth) >= minDepth && (Number(r.shared) === 0 || Number(r.shared) === 1)
     )
     if (!boundary) return false
 
@@ -828,31 +905,93 @@ export class FileService {
    * 文件不是树上的节点（不在 folders 表里），它的祖先链就是所在目录的链 ——
    * 文件自己顶多算链的末端。所以直接委托给目录。
    *
+   * `includeSelf: true` 是关键：文件的「自身三态」不在这条链上，链的第一个
+   * 节点是所在目录，**那个目录就是它的边界**。目录拍板了（Shared=1），
+   * 文件写在继承态上的名单/公开就该生效 —— 权限判定（resolveFileAccessFrom）
+   * 也是这么算的。不传这个标志的话，红点会和权限给出相反的答案。
+   *
    * folderId === null（根层文件）→ 上面什么都没有 = 没人拍板 = 预设不生效。
    * 文件自己若是 Shared=1 那是明确表态，不依赖祖先，由调用方另行判定。
    */
   async isPresetActiveForFile(file: OwnedFile): Promise<boolean> {
     if (file.folderId === null || file.folderId === undefined) return false
-    return this.folders.isPresetActive(Number(file.folderId))
+    return this.folders.isPresetActive(Number(file.folderId), { includeSelf: true })
   }
 
   /**
-   * 解析某用户对某文件的有效权限。文件本身也是一个节点，同样有三态；
-   * 继承态下把自身名单与祖先决策叠加。祖先链由 folderService 一次解析完。
+   * 解析某用户对某文件的有效权限。算法见模块级的 resolveFileAccessFrom ——
+   * 这里只负责从 grants 里挑出这一行。
    */
   private resolveFileAccess(userId: number, file: OwnedFile, inherited: ResolvedAccess): ResolvedAccess {
     const own = file.grants.find((g) => g.userId === userId)
-    return combineWithAncestor(
-      { mode: normalizeShareMode(file.Shared), isPublic: file.IsPublic, permission: own?.permission },
-      inherited,
-      // 目录那侧的 inherited 已经在 combineWithAncestor 里算过祖先叠加，
-      // 这里只需要它带下来的「链上有没有拍板者」——文件自己若是继承态，
-      // 自己的 IsPublic 属不属于预设，就看这一条。
-      0,
-      false,
-      0,
-      inherited.hasBoundary !== false
+    return resolveFileAccessFrom(file, own?.permission, inherited)
+  }
+
+  /**
+   * 整棵子树里**我真能下载**的文件（整包下载的清单）。
+   *
+   * 为什么要过滤：`listSubtreeManifest` 只按 user_id 圈范围，不看权限。
+   * 直接把它发给访客，等于把整棵子树的 filename + file_key（真实存储路径）
+   * 交出去 —— 包括他连读都没权限的那些。而且前端拿到这份清单后会逐个调
+   * /api/files/download，任一文件缺下载位就 403，整个 zip 中途作废。
+   * 两个问题一起被「按权限过滤」解决。
+   *
+   * 属主走快路径原样返回（零额外查询，覆盖绝大多数真实用量）。
+   *
+   * 访客按 folderId 分组，同一目录只 resolveAccess 一次，文件侧在内存里合 ——
+   * 复用的是 resolveFileAccessFrom，不重写一遍权限算法。
+   * 代价是「子目录数」次 CTE 查询。要压到一次得写多 seed 的批量上行走法，
+   * 那是把权限算法复制一份到 SQL 里，不划算，留作后续优化。
+   *
+   * skipped 单独返回，让调用方能说清「N 个文件你没权限」，
+   * 而不是让用户看到一句莫名的「该文件夹为空」。
+   */
+  async listDownloadableSubtree(
+    visitorId: number,
+    ownerId: number,
+    folderId: number,
+    need: number = PERM_DOWNLOAD
+  ): Promise<{ files: ManifestFile[]; skipped: number }> {
+    const all = await this.folders.listSubtreeManifest(ownerId, folderId)
+    if (!all.length) return { files: [], skipped: 0 }
+    if (ownerId === visitorId) return { files: all, skipped: 0 }
+
+    const byFolder = new Map<number, ManifestFile[]>()
+    for (const f of all) {
+      const key = Number(f.folderId)
+      const group = byFolder.get(key)
+      if (group) group.push(f)
+      else byFolder.set(key, [f])
+    }
+
+    // 一次性把访客在这些文件上的直接授权捞回来，避免逐文件查
+    const ids = all.map((f) => f.id)
+    const grantRes = await this.db
+      .prepare(
+        `SELECT file_id AS fileId, permission FROM file_access
+         WHERE user_id = ? AND file_id IN (${placeholders(ids.length)})`
+      )
+      .bind(visitorId, ...ids)
+      .all()
+      .catch(() => null)
+    const ownGrants = new Map<number, number>()
+    for (const r of grantRes?.results || []) ownGrants.set(Number(r.fileId), Number(r.permission))
+
+    const kept: ManifestFile[] = []
+    for (const [dirId, group] of byFolder) {
+      const dirAccess = await this.folders.resolveAccess(visitorId, dirId)
+      for (const f of group) {
+        const access = resolveFileAccessFrom(f, ownGrants.get(f.id), dirAccess)
+        if (hasPermission(access.mask, need)) kept.push(f)
+      }
+    }
+    // 分组遍历打散了 relDir 顺序，排序回去 —— 清单是给人看的，也是 zip 里的路径
+    kept.sort((a, b) =>
+      a.relDir === b.relDir
+        ? String(a.filename).localeCompare(String(b.filename))
+        : String(a.relDir).localeCompare(String(b.relDir))
     )
+    return { files: kept, skipped: all.length - kept.length }
   }
 
   /** 单文件完整解析（会走一次上行 CTE），用于 download / rename / delete 这类操作 */

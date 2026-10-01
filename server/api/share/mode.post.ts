@@ -13,6 +13,7 @@ import {
   setPublic,
   setShareMode
 } from '~~/server/utils/share'
+import { listShareLinks, withShareLinkUrls } from '~~/server/utils/share-link'
 import { isShareBoundary, normalizeShareMode, SHARE_MODE_LABELS } from '~~/types/share'
 import type { ShareMode } from '~~/types/share'
 
@@ -73,6 +74,11 @@ export default defineEventHandler(async (event) => {
     // 返回覆盖本地名单，缺 user 的话界面上会变成「未知用户」。
     const grants = await listGrantsWithUsers(db, target)
 
+    // links 也带上，理由和 grants 完全一样：前端改完 mode 会用这个返回值整体
+    // 覆盖本地状态，返回里没有 links 的话链接列表就被抹空了（下次重开弹窗才恢复）。
+    // /api/share/link/add|remove 也返回同样结构，三处必须一致。
+    const links = await listShareLinks(db, target)
+
     return {
       success: true,
       statusMessage: mode !== null
@@ -84,7 +90,8 @@ export default defineEventHandler(async (event) => {
       modeLabel: SHARE_MODE_LABELS[state.mode] ?? '',
       isBoundary: isShareBoundary(state.mode),
       IsPublic: state.isPublic,
-      grants
+      grants,
+      links: withShareLinkUrls(event, links)
     }
   } catch (error: any) {
     console.error('Share mode error:', error)

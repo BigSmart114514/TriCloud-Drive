@@ -2,8 +2,12 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import crypto from 'crypto'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
+import type { OwnedFile } from '~~/server/utils/db'
+import { quotaExceededMessage, resolveQuotaOwnerId } from '~~/server/utils/quota'
+import { findFileByLink } from '~~/server/utils/share-link'
 import { dbConnectionError } from '~~/types/error'
-import { PERM_DOWNLOAD } from '~~/types/share'
+import { normalizeShareLink, PERM_DOWNLOAD } from '~~/types/share'
+import { getQuery } from 'h3'
 
 // 生成 CDN 鉴权 URL (TypeA)
 const generateCDNUrl = (
@@ -39,43 +43,29 @@ const generateCDNUrl = (
 const getAffectedRows = (res: any) =>
   res?.meta?.changes ?? res?.meta?.rowsWritten ?? res?.meta?.rowsAffected ?? 0
 
-/**
- * 下载额度不足时的提示。
- *
- * 额度记在 quotaOwnerId 头上，而这个人不一定是操作者，所以文案不能说「您的」：
- *
- *   自己              → 记自己，用「您」
- *   别人的文件        → 记文件属主，名字要点出来，否则用户会去查自己的额度
- *   管理员代管        → 记管理员自己，「您」是对的，但要说明代的是谁
- */
-async function quotaExceededMessage(
-  db: any,
-  quotaOwnerId: number,
-  actorId: number,
-  adminMode: boolean
-): Promise<string> {
-  const row = (await db
-    .prepare('SELECT username FROM users WHERE id = ?')
-    .bind(quotaOwnerId)
-    .first()) as { username?: string } | null
-  const name = row?.username || `用户 ${quotaOwnerId}`
-
-  if (quotaOwnerId === actorId) {
-    return '下载额度不足：下载该文件将超过您的下载流量上限'
-  }
-  if (adminMode) {
-    return `下载额度不足：代「${name}」下载会计入您的下载流量，已超过您的上限`
-  }
-  return `下载额度不足：该文件属于「${name}」，下载它消耗的是对方的下载流量，且会超过对方的上限`
-}
-
 export default defineEventHandler(async (event) => {
   try {
-    //const user = await requireAuth(event)
-    const { authUserId, adminMode, me } = await getMeAndTarget(event)
-    const userId = Number(authUserId)
+    /**
+     * 分享链接优先，**排他**：带了 link 就只走链接逻辑，完全不看登录态。
+     *
+     * 「排他」是有意的 —— 反过来（两条路都走、或者登录态优先）的话，一个
+     * 登录用户拿着别人的链接来下载，会走自己那份权限，等于链接变成了
+     * 「绕过授权的旁路」。这里保证链接永远只能给出 LINK_PERMISSION，
+     * 不可能因为恰好有 cookie 就多拿到什么。
+     *
+     * 代价：属主自己用链接来下载也只拿到读+下载。属主本来就有全权，
+     * 所以只是少几个按钮，不影响使用。
+     */
+    const link = normalizeShareLink((getQuery(event) as any)?.link)
 
-    const { fileKey, filename } = await readBody(event)
+    // 不带 link 才认证。getMeAndTarget 内部会 readBody，所以必须在下面那次
+    // readBody 之前调用 —— 顺序照旧，不动。
+    const session = link ? null : await getMeAndTarget(event)
+
+    // body 可能整个不存在（空 body / body 是 null / 没有 Content-Type）。
+    // 直接解构 undefined 会抛 TypeError，被最外层 catch 兜成 500 —— 客户端格式错
+    // 不该得到服务端错误。`?? {}` 把它变成「字段缺失」，走下面那句 400。
+    const { fileKey, filename } = (await readBody(event)) ?? {}
 
     if (!fileKey) {
       throw createError({ statusCode: 400, message: '文件路径不能为空' })
@@ -87,32 +77,36 @@ export default defineEventHandler(async (event) => {
 
     const fileService = new FileService(db)
 
-    // 归属或授权：所有者、被授权人（含从父文件夹继承的）都可下载
-    //
-    // 要的是 PERM_DOWNLOAD 而不是 PERM_READ：预览走的就是这个接口（前端
-    // FilePreviewer 调 FilesService.downloadSign 拿签名），一样扣下载流量，
-    // 所以「能预览」和「能下载」是同一件事，由同一个位管。
-    // 只想控制「能不能取走内容」而允许在线看，是做不到的 —— 那也是流量。
-    const fileRecord = await fileService.findAccessibleByKey(
-      userId,
-      fileKey,
-      PERM_DOWNLOAD,
-      // 默认文案是「该文件的权限不足」，在下载场景会让人困惑（明明能看）。
-      // 说清楚是下载/预览这一项没给。
-      '无权下载该文件：预览也走下载接口（会消耗下载流量），需要「下载」权限'
-    )
+    let fileRecord: OwnedFile
+    // 额度记在谁头上，规则见 server/utils/quota.ts 的 resolveQuotaOwnerId。
+    let quotaOwnerId: number
+    // 谁在点这个下载。分享链接没有操作者 —— 拿链接的人没有身份，记 null。
+    let actorId: number | null
+
+    if (link) {
+      fileRecord = await findFileByLink(db, fileService, link, fileKey)
+      quotaOwnerId = resolveQuotaOwnerId(false, 0, fileRecord.userId)
+      actorId = null
+    } else {
+      const { authUserId, adminMode, me } = session!
+      // 归属或授权：所有者、被授权人（含从父文件夹继承的）都可下载
+      //
+      // 要的是 PERM_DOWNLOAD 而不是 PERM_READ：预览走的就是这个接口（前端
+      // FilePreviewer 调 FilesService.downloadSign 拿签名），一样扣下载流量，
+      // 所以「能预览」和「能下载」是同一件事，由同一个位管。
+      fileRecord = await fileService.findAccessibleByKey(
+        Number(authUserId),
+        fileKey,
+        PERM_DOWNLOAD,
+        // 默认文案是「该文件的权限不足」，在下载场景会让人困惑（明明能看）。
+        // 说清楚是下载/预览这一项没给。
+        '无权下载该文件：预览也走下载接口（会消耗下载流量），需要「下载」权限'
+      )
+      quotaOwnerId = resolveQuotaOwnerId(adminMode, Number(me.userId), fileRecord.userId)
+      actorId = Number(me.userId)
+    }
 
     const fileSize = fileRecord.fileSize
-
-    // 额度记在谁头上，分两种：
-    //
-    //   管理员代管（adminMode）→ 记管理员自己（me.userId）。代管是「我去看你的东西」，
-    //     花的是我自己的带宽，不该让你替我付。原来记的是 authUserId（= targetUserId），
-    //     等于你被浏览一次就掉额度，而你根本没感知。
-    //
-    //   普通用户 → 记文件属主（fileRecord.userId）。文件是从谁的配额里出的就记谁，
-    //     这样属主能看到自己的流量在被谁消耗。
-    const quotaOwnerId = adminMode ? Number(me.userId) : Number(fileRecord.userId)
 
     // ========== 并发安全：原子预占下载额度 ==========
     // 逻辑：直接用一条 UPDATE 做 check+incr。
@@ -134,7 +128,7 @@ export default defineEventHandler(async (event) => {
     if (!reserved) {
       throw createError({
         statusCode: 403,
-        message: await quotaExceededMessage(db, quotaOwnerId, Number(me.userId), adminMode)
+        message: await quotaExceededMessage(db, quotaOwnerId, actorId, session?.adminMode === true)
       })
     }
     // ========== 原子预占结束 ==========

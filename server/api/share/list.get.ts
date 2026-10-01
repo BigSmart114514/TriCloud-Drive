@@ -8,6 +8,7 @@ import {
   listGrantsWithUsers,
   resolveShareTarget
 } from '~~/server/utils/share'
+import { listShareLinks, withShareLinkUrls } from '~~/server/utils/share-link'
 import { isShareBoundary, PERMISSION_LABELS, SHARE_MODE_LABELS } from '~~/types/share'
 
 export default defineEventHandler(async (event) => {
@@ -30,6 +31,11 @@ export default defineEventHandler(async (event) => {
     // 目标自身的共享状态，方便前端直接渲染三态选择器
     const state = await getShareState(db, target)
 
+    // 分享链接。一节点可以挂多个，所以是数组 —— 精确撤销某一个。
+    // url 在这里拼好而不是让前端拼：前缀是服务端的约定，前端拼错的表现是
+    // 「复制出来的地址点开 404」，很难定位。
+    const links = await listShareLinks(db, target)
+
     return {
       success: true,
       targetType: type,
@@ -42,7 +48,8 @@ export default defineEventHandler(async (event) => {
       grants: grants.map((g) => ({
         ...g,
         label: PERMISSION_LABELS[g.permission] ?? String(g.permission)
-      }))
+      })),
+      links: withShareLinkUrls(event, links)
     }
   } catch (error: any) {
     console.error('Share list error:', error)

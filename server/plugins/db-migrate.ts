@@ -109,6 +109,66 @@ const OWNER_GUARD_TRIGGERS = [
   }
 ]
 
+const SQLITE_SHARE_LINKS = `
+  CREATE TABLE share_links (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    link        TEXT    NOT NULL,
+    target_type TEXT    NOT NULL,
+    target_id   INTEGER NOT NULL,
+    created_at  TEXT    DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE (link),
+    CHECK (target_type IN ('file', 'folder'))
+  )
+`
+
+const MYSQL_SHARE_LINKS = `
+  CREATE TABLE share_links (
+    id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    link        VARCHAR(64) NOT NULL,
+    target_type VARCHAR(8)  NOT NULL,
+    target_id   BIGINT UNSIGNED NOT NULL,
+    created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    UNIQUE KEY ux_share_links_link (link),
+    KEY ix_share_links_target (target_type, target_id)
+  )
+`
+
+/**
+ * 目标删除时清掉它的分享链接。
+ *
+ * 用触发器而不是外键：share_links 的目标是**多态引用**（target_type + target_id），
+ * 单列外键表达不了，外键也不能同时声明在 files 和 folders 上。所以级联删除
+ * 只能靠触发器 —— 而这个行为不能省：留下孤儿 token 会让「它到底指向什么」
+ * 变成不确定的事，持有者拿着它能探到 id 已复用后的别的东西。
+ *
+ * 两种方言的这段语法一样，所以不像 OWNER_GUARD_TRIGGERS 那样只对 SQLite 建。
+ */
+const SHARE_LINK_PURGE_TRIGGERS = [
+  {
+    name: 'trg_share_links_purge_file',
+    sql: `
+      CREATE TRIGGER trg_share_links_purge_file
+      AFTER DELETE ON files
+      WHEN EXISTS (SELECT 1 FROM share_links WHERE target_type = 'file' AND target_id = OLD.id)
+      BEGIN
+        DELETE FROM share_links WHERE target_type = 'file' AND target_id = OLD.id;
+      END`
+  },
+  {
+    name: 'trg_share_links_purge_folder',
+    sql: `
+      CREATE TRIGGER trg_share_links_purge_folder
+      AFTER DELETE ON folders
+      WHEN EXISTS (SELECT 1 FROM share_links WHERE target_type = 'folder' AND target_id = OLD.id)
+      BEGIN
+        DELETE FROM share_links WHERE target_type = 'folder' AND target_id = OLD.id;
+      END`
+  }
+]
+
 export default defineNitroPlugin(async () => {
   // D1 没有 event 上下文，只能用 wrangler d1 execute 迁移，这里跳过避免误建空 sqlite 文件
   if ((process.env.NITRO_PRESET || '').startsWith('cloudflare')) {
@@ -167,7 +227,24 @@ export default defineNitroPlugin(async () => {
       console.log(`[db-migrate] ${index} created`)
     }
 
-    // 3) 所有者守卫触发器
+    // 3) 分享链接表
+    //
+    // 新表而不是新列，所以只需 tableExists 判断，天然幂等。
+    // 单独一张表而不是往 files/folders 上加列：链接是 0..n 的（挂几个 token 都行），
+    // 而 token 是随机串、要按 token 查、还要跟删除级联 —— 列存不下，拆不开。
+    //
+    // 只建表，不回填任何数据：链接是运行时生成的，没有「旧链接」可迁。
+    if (!(await tableExists(db, 'share_links'))) {
+      await db.prepare(mysql ? MYSQL_SHARE_LINKS : SQLITE_SHARE_LINKS).bind().run()
+      console.log('[db-migrate] share_links created')
+    }
+    // MySQL 的 DDL 里已经带了 ix_share_links_target，只在 SQLite/D1 补
+    if (!mysql && !(await indexExists(db, 'ix_share_links_target'))) {
+      await db.prepare('CREATE INDEX ix_share_links_target ON share_links(target_type, target_id)').bind().run()
+      console.log('[db-migrate] ix_share_links_target created')
+    }
+
+    // 4) 所有者守卫触发器
     if (!mysql) {
       for (const trigger of OWNER_GUARD_TRIGGERS) {
         if (await triggerExists(db, trigger.name)) continue
@@ -176,7 +253,14 @@ export default defineNitroPlugin(async () => {
       }
     }
 
-    // 4) 共享模式三态化：**这里原本有一段数据回填，已于 2026-09-29 整段删除，不要再加回来。**
+    // 5) 分享链接的级联删除。两种方言语法相同，所以不加 !mysql 守卫
+    for (const trigger of SHARE_LINK_PURGE_TRIGGERS) {
+      if (await triggerExists(db, trigger.name)) continue
+      await db.prepare(trigger.sql).bind().run()
+      console.log(`[db-migrate] ${trigger.name} created`)
+    }
+
+    // 6) 共享模式三态化：**这里原本有一段数据回填，已于 2026-09-29 整段删除，不要再加回来。**
     //
     //    删掉的原因（踩过的坑，记下来免得重犯）：
     //    那段回填的前提是「旧两态语义下 Shared=1 ⟺ folder_access 里有授权行」，
