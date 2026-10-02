@@ -65,6 +65,24 @@
               <span class="hidden sm:ml-1.5 sm:inline">分享管理</span>
             </NuxtLink>
 
+            <!--
+              子账户：与「分享管理」同样的口径 —— **所有登录用户都看得到**，
+              因为谁都有可能是主账号。没开通建号能力时页面会把「添加子账户」
+              换成提示，但已有的子账户照常看得见、改得了、删得掉。
+
+              放在导航栏而不是只在 /shares 里加一块：那页管的是「分享」，
+              账号的存废是另一件事，混在一起以后各自都不好维护。
+            -->
+            <NuxtLink
+              to="/accounts"
+              class="flex items-center rounded-md p-2 text-gray-700 transition-colors hover:bg-gray-100 hover:text-gray-900 sm:px-3 sm:py-2 sm:text-sm sm:font-medium"
+              aria-label="子账户"
+              title="子账户"
+            >
+              <UserGroupIcon class="h-5 w-5 shrink-0" />
+              <span class="hidden sm:ml-1.5 sm:inline">子账户</span>
+            </NuxtLink>
+
             <!-- 管理入口：仅管理员渲染，普通用户导航栏完全看不到 -->
             <UiManageMenu v-if="isAdmin" />
 
@@ -108,7 +126,8 @@ import {
   ArrowRightOnRectangleIcon,
   HomeIcon,
   ShareIcon,
-  ShieldExclamationIcon
+  ShieldExclamationIcon,
+  UserGroupIcon
 } from '@heroicons/vue/24/outline'
 import UiManageMenu from '~/components/UiManageMenu.vue'
 import UiSettingsMenu from '~/components/UiSettingsMenu.vue'

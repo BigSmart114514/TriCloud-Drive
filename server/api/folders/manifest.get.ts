@@ -8,11 +8,14 @@
 //      ?targetUserId=5 就能拿到**用户 5** 视角的清单。
 //   3. 额度预检查的是**真正会被扣的人**。以前查 targetUserId，实际预占记的是
 //      文件属主，于是提示「不会超限」点下去却被拒。
+//   4. 额度归属那一行过期时预检也要说不行。以前只看流量，于是过期账号
+//      预检「不会超」，点下去第一份文件就 403。
 import { getMeAndTarget, optionalAuth } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
 import type { ManifestFile } from '~~/server/utils/db'
-import { quotaExceededMessage, resolveQuotaOwnerId } from '~~/server/utils/quota'
+import { quotaFailMessage, resolveQuotaOwnerId } from '~~/server/utils/quota'
+import { precheckDownload, resolveQuotaChain } from '~~/server/utils/sub-account'
 import {
   linkGrantsFolder,
   linkNotActiveMessage,
@@ -94,19 +97,16 @@ export default defineEventHandler(async (event) => {
 
   const totalBytes = files.reduce((s, f) => s + Number(f.fileSize || 0), 0)
 
-  // 预检（不预占）：检查总大小是否会超出**真正会被扣的那个人的**下载额度。
-  // 与 download.post.ts 的预占条件保持一致，否则这里说「不会超」点下去却被拒。
-  const quotaRow = await db
-    .prepare('SELECT COALESCE(usedDownload, 0) AS usedDownload, COALESCE(maxDownload, 0) AS maxDownload FROM users WHERE id = ?')
-    .bind(quotaOwnerId)
-    .first()
-
-  const used = Number(quotaRow?.usedDownload ?? 0)
-  const max = Number(quotaRow?.maxDownload ?? 0)
-  const unlimited = max <= 0
-  const remaining = unlimited ? Number.MAX_SAFE_INTEGER : Math.max(0, max - used)
-  const allowed = unlimited || used + totalBytes <= max
-  const exceedBytes = allowed ? 0 : Math.max(0, used + totalBytes - max)
+  /**
+   * 预检（不预占）。与 reserveDownload 用同一套判定，避免
+   * 「这里说不会超，点下去第一份文件就 403」——那个 bug 吃过一次。
+   *
+   * 额度归属可能是子账户，于是要同时看：他自己的上限 + 主账号的池。
+   * 返回的 used/max 是**池**的口径（主账号那层），调用方要能说清
+   * 「这个额度是谁的」—— quotaOwnerId 字段一直就带着这个用途。
+   */
+  const quotaChain = await resolveQuotaChain(db, quotaOwnerId)
+  const pre = await precheckDownload(db, quotaChain, totalBytes)
 
   return {
     success: true,
@@ -120,19 +120,25 @@ export default defineEventHandler(async (event) => {
     skipped,
     // 仅用于提示的总量预检，不进行额度预占
     precheck: {
-      allowed,                 // true=总量不超；false=总量会超
-      unlimited,               // true=不限流
+      allowed: pre.allowed,
+      unlimited: pre.unlimited,
       requiredBytes: totalBytes,
-      remainingBytes: unlimited ? -1 : remaining,
-      exceedBytes,             // 将超出的字节数
-      usedDownload: used,
-      maxDownload: max,
-      // 这两个让调用方能解释「这个额度是谁的」——分享链接场景下它不是访问者的
+      remainingBytes: pre.unlimited ? -1 : Math.max(0, pre.max - pre.used),
+      exceedBytes: pre.allowed ? 0 : Math.max(0, pre.used + totalBytes - pre.max),
+      usedDownload: pre.used,
+      maxDownload: pre.max,
+      /**
+       * 额度归属那一行已过期。与 allowed 分开，因为「过期」不是「不够」——
+       * 用户看到「额度不足」会去调限额，而过期要做的续费。
+       * fail 就是用来区分这两种的（storage/download × self/parent）。
+       */
+      expired: String(pre.fail ?? '').startsWith('expired'),
+      /** 这次是谁的不够：'download_self' | 'download_parent' | null */
+      fail: pre.fail,
+      // 这个让调用方能解释「这个额度是谁的」——分享链接场景下它不是访问者的
       quotaOwnerId,
       /** 不 allowed 时的现成文案，与真正被拒时的提示同源（同一个函数出来的） */
-      message: allowed
-        ? null
-        : await quotaExceededMessage(db, quotaOwnerId, actorId, adminMode)
+      message: pre.allowed ? null : await quotaFailMessage(db, pre.fail!, quotaOwnerId, actorId, adminMode)
     }
   }
 })

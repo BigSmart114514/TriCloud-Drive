@@ -53,8 +53,29 @@ CREATE TABLE users (
   usedDownload  BIGINT DEFAULT 0,
   maxDownload   BIGINT DEFAULT 1,
   expire_at     TEXT DEFAULT CURRENT_TIMESTAMP,
-  canChangePassword BOOLEAN DEFAULT 1
+  canChangePassword BOOLEAN DEFAULT 1,
+
+  -- -------- 子账户 --------
+  -- 父账号 id。NULL = 不是任何人的子账户（绝大多数行都是这个）。
+  -- **故意不加外键**：SQLite 的 ON DELETE CASCADE 会把子账户整行悄悄删掉，
+  -- 而 COS 物理删和配额退额都不在 SQLite 的级联里 —— 留下孤儿对象和漂移的账。
+  -- 改成应用层拦截：删父账号时若还有子账户就拒绝（manage/deleteUser）。
+  --
+  -- **只允许一层**：parent_id 指向的行自己的 parent_id 必须为 NULL，
+  -- 由 server/api/accounts/index.post.ts 校验。所以配额链最长 2 环。
+  parent_id     INTEGER,
+
+  -- 能不能建子账户。由管理员在「用户管理」里给，不是自己开的。
+  -- 默认 0：不给这个开关，任何登录用户都能建子账号、再把文件分享出去，
+  -- 外面的访客下载消耗的是他（作为主账号）的池。
+  canSubAccount BOOLEAN DEFAULT 0,
+
+  -- 最多能建几个子账户。0 = 不限（与 maxStorage/maxDownload 的口径一致）。
+  -- 防滥用主要靠 canSubAccount 这个管理员开关，这个是第二道。
+  maxSubAccount INTEGER DEFAULT 0
 );
+
+CREATE INDEX IF NOT EXISTS ix_users_parent_id ON users (parent_id);
 
 -- -------- folders (tree) --------
 CREATE TABLE folders (

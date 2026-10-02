@@ -4,6 +4,8 @@ import { getDb } from '~~/server/utils/db-adapter';
 import { requireAdmin } from '~~/server/utils/auth-middleware';
 
 // 定义用户接口
+// 与 users 表同步。canChangePassword 原先漏在这里，导致 UserEditDialog
+// 拿不到它（前端只能靠「改完密码才生效」这种间接方式绕）。
 interface User {
   id: number;
   email: string;
@@ -16,6 +18,11 @@ interface User {
   usedDownload: number;
   maxDownload: number;
   expire_at: string;
+  canChangePassword: boolean;
+  /** 父账号 id。null = 不是子账户。列表要靠它显示「谁的子账户」 */
+  parent_id: number | null;
+  canSubAccount: boolean;
+  maxSubAccount: number;
 }
 
 // 定义响应接口（移除了分页相关的字段）
@@ -37,7 +44,8 @@ export default defineEventHandler(async (event) => {
     
     // 构建基础SQL查询
     let sql = `
-      SELECT id, email, username, created_at, IsAdmin, IsSuperAdmin, usedStorage, maxStorage, usedDownload, maxDownload, expire_at
+      SELECT id, email, username, created_at, IsAdmin, IsSuperAdmin, usedStorage, maxStorage, usedDownload, maxDownload, expire_at,
+             canChangePassword, parent_id, canSubAccount, maxSubAccount
       FROM users 
       WHERE 1=1
     `;

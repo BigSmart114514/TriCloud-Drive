@@ -12,6 +12,7 @@ import {
   SHARE_SHARED
 } from '~~/types/share'
 import type { AccessGrant, PermSource, ShareMode } from '~~/types/share'
+import { recalculateChainStorage } from '~~/server/utils/sub-account'
 
 export type { PermSource } from '~~/types/share'
 
@@ -29,6 +30,12 @@ export interface User {
   maxDownload: number
   expire_at: string
   canChangePassword: boolean
+  /** 父账号 id。null = 不是任何人的子账户。 */
+  parent_id: number | null
+  /** 能不能建子账户（管理员在用户管理里给） */
+  canSubAccount: boolean
+  /** 最多能建几个子账户，0 = 不限 */
+  maxSubAccount: number
 }
 
 export interface Database {
@@ -1423,14 +1430,20 @@ export class FileService {
     return this.folders.assertOwned(userId, folderId)
   }
 
+  /**
+   * 重算存储记账。**整条链**（删文件/移动/复制之后调用）。
+   *
+   * 每层的 usedStorage 只算它自己名下的文件 —— 这是 sub-account.ts 里
+   * 「池 = 主账号自己那份 + 实时 SUM 孩子」的前提。两处算得不一样就会
+   * 出现「池明明还有余量却传不进去」。
+   *
+   * 委托出去而不是就地实现：链的语义只有一处定义。这里再抄一份，
+   * 四个调用点就会各算各的（其中一个是 paste 的兜底，错了很难查）。
+   *
+   * 另有一个同名的自由函数在 server/utils/file.ts，当前没有任何调用点。
+   * 留着不影响，但别照着它写 —— 它是链版之前的版本。
+   */
   async recalculateUsedStorage(userId: number): Promise<void> {
-    const total = await this.db
-      .prepare('SELECT COALESCE(SUM(file_size), 0) AS totalSize FROM files WHERE user_id = ?')
-      .bind(userId)
-      .first()
-    await this.db
-      .prepare('UPDATE users SET usedStorage = ? WHERE id = ?')
-      .bind(Number(total?.totalSize ?? 0), userId)
-      .run()
+    await recalculateChainStorage(this.db, userId)
   }
 }

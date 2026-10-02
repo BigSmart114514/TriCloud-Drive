@@ -33,5 +33,9 @@ export interface FolderManifest {
     exceedBytes: number
     usedDownload: number
     maxDownload: number
+    /** 额度归属那一行已过期。与 allowed 分开：过期不是「流量不够」 */
+    expired: boolean
+    /** 这次是谁的不够：'download_self' | 'download_parent' | null */
+    fail: string | null
   }
 }

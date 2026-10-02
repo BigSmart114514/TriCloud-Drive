@@ -22,7 +22,9 @@ Node ≥ 22.6（`.ts` 靠 `--experimental-strip-types` 直接 import，需要 22
 | `file-key-namespace.test.mjs` | `fileKey` 的属主命名空间校验：跨用户写路径被拒（安全修复的回归） | sqlite3 + 库副本 |
 | `search.test.mjs` | 搜索的两种范围、`LIKE` 转义、路径折叠、接口权限边界、前端接线 | sqlite3 + 库副本 |
 | `share-management.test.mjs` | 分享管理列表的判据/生效判定/摘要 + 批量三个动作 + 归属校验 + 祖先链 | sqlite3 + 库副本 |
-| `server-time.test.mjs` | `server/utils/time.ts` 的时间推导（跨时区、时区偏移） | 无 |
+| `quota-expiry.test.mjs` | 配额预占里的过期判据：四条路都判、空白值语义、文案分流 | sqlite3 + 库副本 |
+| `sub-accounts.test.mjs` | 子账户配额链（自己上限 + 主账号池）+ 建号/改额度/改密的权限白名单 + 删主账号拦截 | sqlite3 + 库副本 |
+| `server-time.test.mjs` | `server/utils/time.ts` 的时间推导（跨时区、时区偏移）、`isSqlDateTimeString` | 无 |
 | `datetime-local.test.mjs` | `datetime-local` 与 ISO 字符串互转（编辑框回填） | 无 |
 
 ## helpers

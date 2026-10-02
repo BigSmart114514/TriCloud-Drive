@@ -3,9 +3,12 @@ import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { assertFileKeyOwner } from '~~/server/utils/file-key'
-import { userExpiredError, userNotFindError, dbConnectionError, upload403Error } from '~~/types/error'
+// upload403Error 不再由预占失败抛出 —— 失败原因现在分得出是哪一层不够，
+// 走 quotaFailMessage 给对应文案（见下面两处 reserveStorage）。
+import { userExpiredError, userNotFindError, dbConnectionError } from '~~/types/error'
 import { DEFAULT_SHARE_MODE, PERM_WRITE } from '~~/types/share'
-import { isExpired, nowSqlString } from '~~/server/utils/time'
+import { quotaFailMessage } from '~~/server/utils/quota'
+import { chainExpired, reserveStorage, resolveQuotaChain } from '~~/server/utils/sub-account'
 
 export default defineEventHandler(async (event) => {
   // parseSqlDateTime / isExpired / nowSqlString 都搬到 server/utils/time.ts 了。
@@ -67,9 +70,23 @@ export default defineEventHandler(async (event) => {
     assertFileKeyOwner(fileKey, userId)
 
     // 额度与过期一律按**属主**判定：文件落在谁的树里，就占谁的容量、算谁过期。
-    const userRow: any = await db.prepare('SELECT expire_at FROM users WHERE id = ?').bind(userId).first()
+    const userRow: any = await db.prepare('SELECT id FROM users WHERE id = ?').bind(userId).first()
     if (!userRow) throw userNotFindError
-    if (isExpired(userRow.expire_at)) throw userExpiredError
+
+    /**
+     * 过期判定按**整条链**：属主是子账户时，主账号套餐过期也会挡住他上传。
+     * 逐层判断在 chainExpired 里，各判各的 expire_at —— 子账户自己过期不影响
+     * 兄弟，主账号过期则整条池冻住。
+     */
+    const quotaChain = await resolveQuotaChain(db, userId)
+    const expiredOn = await chainExpired(db, quotaChain)
+    if (expiredOn.self) throw userExpiredError
+    if (expiredOn.parent) {
+      throw createError({
+        statusCode: 403,
+        message: await quotaFailMessage(db, 'expired_parent', userId, null, false)
+      })
+    }
 
     await db.prepare('SAVEPOINT upload_tx').bind().run()
     try {
@@ -80,18 +97,16 @@ export default defineEventHandler(async (event) => {
           const oldSize = exist.fileSize
           const delta = size - oldSize
 
-          const upd = await db.prepare(`
-            UPDATE users
-            SET usedStorage = usedStorage + ?
-            WHERE id = ?
-              AND (maxStorage = 0 OR usedStorage + ? <= maxStorage)
-              AND (expire_at IS NULL OR expire_at > ?)
-          `).bind(delta, userId, delta, nowSqlString()).run()
-          const changes = (upd as any)?.meta?.changes ?? 0
-          if (changes !== 1) {
+          // delta 可以是负数（覆盖更小的文件会释放容量）。reserveStorage
+          // 把 delta 原样带进池的判定，于是「池快满了但这次是缩小」不会被误拒。
+          const fail = await reserveStorage(db, quotaChain, delta)
+          if (fail) {
             await db.prepare('ROLLBACK TO upload_tx').bind().run()
             await db.prepare('RELEASE upload_tx').bind().run()
-            throw upload403Error
+            throw createError({
+              statusCode: 403,
+              message: await quotaFailMessage(db, fail, userId, null, false)
+            })
           }
 
           await fileService.updateContent(userId, exist.id, {
@@ -109,18 +124,14 @@ export default defineEventHandler(async (event) => {
 
       let { name: finalName, base, ext, nextN } = await resolveUniqueFilename(db, userId, folderId, filename)
 
-      const upd = await db.prepare(`
-        UPDATE users
-        SET usedStorage = usedStorage + ?
-        WHERE id = ?
-          AND (maxStorage = 0 OR usedStorage + ? <= maxStorage)
-          AND (expire_at IS NULL OR expire_at > ?)
-      `).bind(size, userId, size, nowSqlString()).run()
-      const changes = (upd as any)?.meta?.changes ?? 0
-      if (changes !== 1) {
+      const fail = await reserveStorage(db, quotaChain, size)
+      if (fail) {
         await db.prepare('ROLLBACK TO upload_tx').bind().run()
         await db.prepare('RELEASE upload_tx').bind().run()
-        throw upload403Error
+        throw createError({
+          statusCode: 403,
+          message: await quotaFailMessage(db, fail, userId, null, false)
+        })
       }
 
       let file: any | null = null

@@ -61,7 +61,7 @@
             <!-- 角色 -->
             <fieldset :disabled="readOnly">
               <legend class="mb-2 text-xs font-medium uppercase tracking-wider text-gray-500">角色</legend>
-              <div class="grid grid-cols-2 gap-2">
+              <div class="grid grid-cols-2 gap-2 sm:grid-cols-3">
                 <label
                   class="flex cursor-pointer items-center gap-2.5 rounded-lg border border-gray-200 bg-white px-3 py-2.5 transition-colors has-[:checked]:border-amber-300 has-[:checked]:bg-amber-50"
                   :class="readOnly ? 'cursor-not-allowed opacity-60' : 'hover:bg-gray-50'"
@@ -94,99 +94,73 @@
                     超级管理员
                   </span>
                 </label>
+
+                <!--
+                  「可创建子账户」放在角色这一栏里，而不是额度那几段下面 ——
+                  它管的是「这个人能不能管别人的账号」，和「管理员/超管」是同一类
+                  开关。默认关：不给这个开关，任何登录用户都能建子账号、把文件分享
+                  出去，外部访客下载消耗的是他（作为主账号）的池。
+                  这一格只读时给 title 说明为什么，不能只置灰。
+                -->
+                <label
+                  class="flex items-center gap-2.5 rounded-lg border border-gray-200 bg-white px-3 py-2.5 transition-colors has-[:checked]:border-indigo-300 has-[:checked]:bg-indigo-50"
+                  :class="subFieldClass"
+                  :title="subTitle"
+                >
+                  <input
+                    v-model="draft.canSubAccount"
+                    type="checkbox"
+                    :disabled="readOnly || isChild"
+                    class="h-4 w-4 rounded border-gray-300 text-indigo-600"
+                  />
+                  <span class="flex min-w-0 items-center gap-1.5 text-sm text-gray-800">
+                    <UserGroupIcon class="h-4 w-4 shrink-0 text-indigo-500" />
+                    可创建子账户
+                  </span>
+                </label>
               </div>
             </fieldset>
 
-            <!-- 套餐过期时间 -->
+            <!--
+              「最多子账户数」独立一块，因为它是数量不是角色：勾不勾
+              canSubAccount 都���先填好，上限才有意义（关掉开关时已建的
+              孩子仍然可见可管，见 /accounts）。
+
+              0 = 不限，与 maxStorage/maxDownload 同口径。**不写 1 那种默认值**：
+              users 表的默认是 1，写死成 1 等于「只能建一个」，用户还以为是 bug。
+            -->
             <div :class="readOnly ? 'opacity-60' : ''">
               <label class="mb-2 block text-xs font-medium uppercase tracking-wider text-gray-500">
-                套餐过期时间
+                可创建子账户数
               </label>
               <input
-                v-model="draft.expire_at"
-                type="datetime-local"
+                v-model.number="draft.maxSubAccount"
+                type="number"
+                min="0"
                 step="1"
-                :disabled="readOnly"
+                inputmode="numeric"
+                :disabled="readOnly || isChild"
                 class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none disabled:bg-gray-50"
-                title="选择日期时间；清空表示不过期"
-                @blur="normalizeExpire"
+                placeholder="0（不限）"
+                :title="isChild ? '子账户不能再创建下级账户' : '0 表示不限。已创建的子账户不会因为调小这个数而消失'"
               />
-              <p class="mt-1.5 text-xs text-gray-400">清空表示永不过期</p>
+              <p class="mt-1.5 text-xs text-gray-400">
+                0 表示不限。调小这个数不会删掉已建的子账户，只会挡住新建。
+              </p>
             </div>
 
-            <!-- 容量 -->
-            <div :class="readOnly ? 'opacity-60' : ''">
-              <p class="mb-2 text-xs font-medium uppercase tracking-wider text-gray-500">容量</p>
-              <div class="grid grid-cols-2 gap-3">
-                <div>
-                  <label class="mb-1 block text-xs text-gray-500" :for="`maxStorage-${draft.id}`">限制</label>
-                  <input
-                    :id="`maxStorage-${draft.id}`"
-                    v-model="draft.maxStorage"
-                    type="text"
-                    inputmode="decimal"
-                    autocomplete="off"
-                    :disabled="readOnly"
-                    class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none disabled:bg-gray-50"
-                    placeholder="如 10 GB"
-                    title="支持单位：B, KB, MB, GB, TB；填 0 表示不限"
-                    @blur="normalizeSize('maxStorage')"
-                  />
-                </div>
-                <div>
-                  <label class="mb-1 block text-xs text-gray-500" :for="`usedStorage-${draft.id}`">已使用</label>
-                  <input
-                    :id="`usedStorage-${draft.id}`"
-                    v-model="draft.usedStorage"
-                    type="text"
-                    inputmode="decimal"
-                    autocomplete="off"
-                    :disabled="readOnly"
-                    class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none disabled:bg-gray-50"
-                    placeholder="如 512 MB"
-                    title="支持单位：B, KB, MB, GB, TB"
-                    @blur="normalizeSize('usedStorage')"
-                  />
-                </div>
-              </div>
-            </div>
+            <!--
+              额度三段抽到 QuotaFields 里了：/accounts 的子账户弹窗要同一套控件。
+              抄一份的代价是「0 表示不限」这个约定、@blur 归一化、单位解析
+              都要改两个文件 —— 而漏改的那个不报错，只是用户填的 10GB 变成
+              10 字节。
+            -->
+            <QuotaFields
+              v-model="draft"
+              :read-only="readOnly"
+              :show-used="true"
+            />
 
-            <!-- 下载 -->
-            <div :class="readOnly ? 'opacity-60' : ''">
-              <p class="mb-2 text-xs font-medium uppercase tracking-wider text-gray-500">下载</p>
-              <div class="grid grid-cols-2 gap-3">
-                <div>
-                  <label class="mb-1 block text-xs text-gray-500" :for="`maxDownload-${draft.id}`">限制</label>
-                  <input
-                    :id="`maxDownload-${draft.id}`"
-                    v-model="draft.maxDownload"
-                    type="text"
-                    inputmode="decimal"
-                    autocomplete="off"
-                    :disabled="readOnly"
-                    class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none disabled:bg-gray-50"
-                    placeholder="如 100 GB"
-                    title="支持单位：B, KB, MB, GB, TB；填 0 表示不限"
-                    @blur="normalizeSize('maxDownload')"
-                  />
-                </div>
-                <div>
-                  <label class="mb-1 block text-xs text-gray-500" :for="`usedDownload-${draft.id}`">已使用</label>
-                  <input
-                    :id="`usedDownload-${draft.id}`"
-                    v-model="draft.usedDownload"
-                    type="text"
-                    inputmode="decimal"
-                    autocomplete="off"
-                    :disabled="readOnly"
-                    class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-500/20 focus:outline-none disabled:bg-gray-50"
-                    placeholder="如 1.5 GB"
-                    title="支持单位：B, KB, MB, GB, TB"
-                    @blur="normalizeSize('usedDownload')"
-                  />
-                </div>
-              </div>
-            </div>
           </div>
 
           <!-- 底部 -->
@@ -260,12 +234,10 @@ import {
   ShieldCheckIcon,
   ShieldExclamationIcon,
   StarIcon,
+  UserGroupIcon,
   XMarkIcon
 } from '@heroicons/vue/24/outline'
-import { formatBytes, parseBytes } from '~/utils/size'
-import { parseExpireAt } from '~/utils/datetimeLocal'
-
-type SizeKey = 'maxStorage' | 'usedStorage' | 'maxDownload' | 'usedDownload'
+import QuotaFields from '~/components/QuotaFields.vue'
 
 const props = defineProps<{
   open: boolean
@@ -290,6 +262,25 @@ const emit = defineEmits<{
 const displayName = computed(() => props.user?.username || props.user?.email || '未命名')
 
 /**
+ * 这一行本身是不是子账户。子账户不能再有下级（服务端强制一层），
+ * 所以「可创建子账户」这两个控件对它是死设置 —— 置灰并说清为什么，
+ * 而不是让管理员勾上一个服务端会忽略的值。
+ */
+const isChild = computed(() => props.user?.parent_id != null)
+
+const subFieldClass = computed(() => {
+  if (props.readOnly) return 'cursor-not-allowed opacity-60'
+  if (isChild.value) return 'cursor-not-allowed opacity-60'
+  return 'cursor-pointer hover:bg-gray-50'
+})
+
+const subTitle = computed(() => {
+  if (isChild.value) return '子账户不能再创建下级账户'
+  if (props.readOnly) return '当前为只读'
+  return undefined
+})
+
+/**
  * 草稿是弹窗内部的一份拷贝，不是直接改列表行。
  * 这样关掉弹窗就等于放弃改动 —— 之前行内 v-model 绑 u.maxStorage 的时候，
  * 改到一半点别处就存进去了，没有「取消」这个概念。
@@ -308,7 +299,11 @@ watch(
     draft.value = {
       ...u,
       IsAdmin: !!u.IsAdmin,
-      IsSuperAdmin: !!u.IsSuperAdmin
+      IsSuperAdmin: !!u.IsSuperAdmin,
+      // 后端用 COALESCE 兜底：老前端不传这两个时不清零。
+      // 这里仍然要显式带上，否则管理员改一次额度会顺手把人的建号能力关了。
+      canSubAccount: !!u.canSubAccount,
+      maxSubAccount: Number(u.maxSubAccount ?? 0)
     }
     confirmingDelete.value = false
   },
@@ -331,39 +326,6 @@ function onDeleteClick() {
   emit('delete')
 }
 
-/** 失焦时把「1024 kb」规范成「1 MB」 */
-function normalizeSize(key: SizeKey) {
-  if (!draft.value) return
-  draft.value[key] = formatBytes(parseBytes(draft.value[key] as string | number))
-}
-
-/**
- * blur 时只做**格式校验 + 补秒**，不做时区转换。
- *
- * 以前这里调 fromDatetimeLocal 再把结果写回 v-model，于是用户输入的本地墙钟
- * 被减掉 TimeZone 偏移后**直接显示在输入框里** —— 填「明天 9 点」，松手变成
- * 「明天 1 点」。时区转换只在保存时做一次（父组件的 submit），输入框里始终
- * 是用户填的本地时间。
- *
- * 秒位要先补再校验：datetime-local 在没碰秒的时候给的是 "2027-01-01T09:00"，
- * 而 parseExpireAt 的正则要求 6 段（含秒）。不补就等于把用户刚填的值判成非法
- * 然后清空 —— 表现就是「改了没反应」。
- */
-function normalizeExpire() {
-  if (!draft.value) return
-  const raw = (draft.value.expire_at ?? '').toString().trim()
-  if (!raw) {
-    draft.value.expire_at = ''
-    return
-  }
-  // 与 fromDatetimeLocal 同一套规则：补秒后再校验
-  const withSeconds = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(raw) ? `${raw}:00` : raw
-  if (!parseExpireAt(withSeconds)) {
-    draft.value.expire_at = ''
-    return
-  }
-  draft.value.expire_at = withSeconds
-}
 </script>
 
 <style scoped>

@@ -3,6 +3,7 @@ import { defineEventHandler, readBody, createError, getMethod } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
 import { requireAdmin } from '~~/server/utils/auth-middleware'
+import { enableForeignKeys, purgeUserFiles } from '~~/server/utils/purge-user'
 
 function toBool(v: any) {
   return v === true || v === 1 || v === '1'
@@ -61,76 +62,30 @@ export default defineEventHandler(async (event) => {
     }
   }
 
-  // 读取待删除用户的全部文件 key（用于 COS 删除）
-  const ownedFiles = await new FileService(db).listOwnedByUser(userId)
-  const keys: string[] = Array.from(
-    new Set(ownedFiles.map((f) => String(f.fileKey)).filter(Boolean))
-  )
-
-  // 处理 COS 删除
-  const config = useRuntimeConfig()
-  let cosAttempted = false
-  let cosDeleteAll = false
-
-  const hasCosCreds =
-    !!config.tencentSecretId &&
-    !!config.tencentSecretKey &&
-    config.tencentSecretId !== 'your_secret_id_here' &&
-    config.tencentSecretKey !== 'your_secret_key_here' &&
-    !!config.cosBucket &&
-    !!config.cosRegion
-
-  if (keys.length > 0 && hasCosCreds) {
-    cosAttempted = true
-    try {
-      const COS = (await import('cos-nodejs-sdk-v5')).default
-      const cos = new COS({
-        SecretId: config.tencentSecretId,
-        SecretKey: config.tencentSecretKey,
-      })
-
-      const chunkSize = 1000
-      let deletedCount = 0
-
-      for (let i = 0; i < keys.length; i += chunkSize) {
-        const batch = keys.slice(i, i + chunkSize).map((k) => ({ Key: k }))
-        await new Promise((resolve, reject) => {
-          cos.deleteMultipleObject(
-            {
-              Bucket: config.cosBucket,
-              Region: config.cosRegion,
-              Objects: batch,
-              Quiet: true,
-            },
-            (err: any, data: any) => {
-              if (err) {
-                console.error('COS batch delete error (deleteUser):', err)
-                reject(err)
-              } else {
-                deletedCount += batch.length
-                resolve(data)
-              }
-            }
-          )
-        })
-      }
-
-      cosDeleteAll = deletedCount === keys.length
-      if (cosDeleteAll) {
-        console.log(`COS: deleted ${deletedCount}/${keys.length} object(s) for user ${userId}`)
-      } else {
-        console.warn(`COS: partial deletion ${deletedCount}/${keys.length} for user ${userId}`)
-      }
-    } catch (e: any) {
-      console.error('COS delete error (deleteUser):', e)
-      cosDeleteAll = false
-    }
+  /**
+   * 还有子账户的主账号不许删。
+   *
+   * parent_id **故意没加 ON DELETE CASCADE**（理由在 schema.sql），因为
+   * SQLite 的级联只认识数据库：它会把子账户的 users 行悄悄删掉，但
+   *   - 那个孩子的 COS 对象还在（物理删不在 SQLite 的级联里）→ 孤儿对象，
+   *     花了钱存的东西既列不出来也删不掉
+   *   - 主账号的池是「实时 SUM 孩子」，级联删完会**自动**把额度还回去，
+   *     于是账上看着干净，孤儿对象一个不少
+   *
+   * 所以在这里挡下来，让用户先把子账户一个个删掉（那���接口会正经清 COS）。
+   */
+  const childCount = Number((await db
+    .prepare('SELECT COUNT(*) AS n FROM users WHERE parent_id = ?')
+    .bind(userId)
+    .first())?.n ?? 0)
+  if (childCount > 0) {
+    throw createError({
+      statusCode: 400,
+      message: `该账号还有 ${childCount} 个子账户，请先删除它们`
+    })
   }
 
-  // 确保开启外键（SQLite 本地），D1 失败就忽略
-  try {
-    await db.prepare('PRAGMA foreign_keys = ON;').run()
-  } catch {}
+  const purge = await purgeUserFiles(db, userId, useRuntimeConfig())
 
   // 删除用户（files、folders 表通过 ON DELETE CASCADE 自动级联删除）
   try {
@@ -142,10 +97,10 @@ export default defineEventHandler(async (event) => {
   return {
     success: true,
     statusMessage:
-      cosAttempted && !cosDeleteAll
+      purge.attempted && !purge.complete
         ? '用户已删除，但 COS 文件删除可能失败'
         : '用户及其 COS 文件已删除',
-    cosAttempted,
-    cosDeleteAll,
+    cosAttempted: purge.attempted,
+    cosDeleteAll: purge.complete,
   }
 })

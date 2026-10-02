@@ -26,7 +26,9 @@ export default defineEventHandler(async (event) => {
       usedStorage,
       maxDownload,
       usedDownload,
-      expire_at
+      expire_at,
+      canSubAccount,
+      maxSubAccount
     } = body || {}
 
     if (!id && id !== 0) {
@@ -72,6 +74,17 @@ export default defineEventHandler(async (event) => {
       return Number.isFinite(n) && n >= 0 ? n : 0
     }
 
+    /**
+     * 这里**故意不写 parent_id**。
+     *
+     * 能改 parent_id 就等于两件不该有的能力：把任意普通用户改写成别人的子账户
+     * （然后就能花那个人的池），或者单方面解除父子关系（凭空释放一个池额度）。
+     * 父子关系只有两个入口能改：建号（accounts/index.post）和删除
+     * （accounts/delete），两个都带 parent_id = 我 的判定。
+     *
+     * 另外 canSubAccount / maxSubAccount 用 COALESCE 兜底：老前端不传这两个
+     * 字段时不该把它们清零，否则改一次额度顺手把他的建号能力关了。
+     */
     const sql = `
       UPDATE users
       SET
@@ -81,7 +94,9 @@ export default defineEventHandler(async (event) => {
         usedStorage = ?,
         maxDownload = ?,
         usedDownload = ?,
-        expire_at = ?
+        expire_at = ?,
+        canSubAccount = COALESCE(?, canSubAccount),
+        maxSubAccount = COALESCE(?, maxSubAccount)
       WHERE id = ?
     `
     const stmt = db.prepare(sql)
@@ -94,6 +109,8 @@ export default defineEventHandler(async (event) => {
         toNonNegativeNumber(maxDownload),
         toNonNegativeNumber(usedDownload),
         expire_at,
+        canSubAccount === undefined || canSubAccount === null ? null : (toBool(canSubAccount) ? 1 : 0),
+        maxSubAccount === undefined || maxSubAccount === null ? null : toNonNegativeNumber(maxSubAccount),
         id
       )
       .run()

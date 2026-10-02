@@ -3,7 +3,8 @@ import crypto from 'crypto'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
 import type { OwnedFile } from '~~/server/utils/db'
-import { quotaExceededMessage, resolveQuotaOwnerId } from '~~/server/utils/quota'
+import { quotaFailMessage, resolveQuotaOwnerId } from '~~/server/utils/quota'
+import { releaseDownload, resolveQuotaChain, reserveDownload } from '~~/server/utils/sub-account'
 import { findFileByLink } from '~~/server/utils/share-link'
 import { dbConnectionError } from '~~/types/error'
 import { normalizeShareLink, PERM_DOWNLOAD } from '~~/types/share'
@@ -108,38 +109,31 @@ export default defineEventHandler(async (event) => {
 
     const fileSize = fileRecord.fileSize
 
-    // ========== 并发安全：原子预占下载额度 ==========
-    // 逻辑：直接用一条 UPDATE 做 check+incr。
-    // 约定：maxDownload <= 0 表示不限流量，但仍会累计 usedDownload（如不需要可自行改为不累计）。
-    const reserveRes = await db
-      .prepare(`
-        UPDATE users
-        SET usedDownload = COALESCE(usedDownload, 0) + ?
-        WHERE id = ?
-          AND (
-            COALESCE(maxDownload, 0) <= 0
-            OR COALESCE(usedDownload, 0) + ? <= COALESCE(maxDownload, 0)
-          )
-      `)
-      .bind(fileSize, quotaOwnerId, fileSize)
-      .run()
-
-    const reserved = getAffectedRows(reserveRes) > 0
-    if (!reserved) {
+    /**
+     * 预占下载额度。额度归属可能是**一条链**：文件属主若是子账户，
+     * 他的额度是「他分到的上限 + 主账号的池」，两层都要过。
+     *
+     * 换成 server/utils/sub-account.ts 的 reserveDownload 之后：
+     *   - 两层判定在**同一条 UPDATE** 里，原子，没有两段式的补偿窗口
+     *   - 失败原因是查出来的（过期_self / 过期_parent / 不够_self / 不够_parent），
+     *     文案能说清是哪一层，而不是一律「额度不足」
+     *   - 没有主账号时（chain.parentId == null）走的就是原来那条语句
+     */
+    const quotaChain = await resolveQuotaChain(db, quotaOwnerId)
+    const quotaFail = await reserveDownload(db, quotaChain, fileSize)
+    if (quotaFail) {
       throw createError({
         statusCode: 403,
-        message: await quotaExceededMessage(db, quotaOwnerId, actorId, session?.adminMode === true)
+        message: await quotaFailMessage(db, quotaFail, quotaOwnerId, actorId, session?.adminMode === true)
       })
     }
+
     // ========== 原子预占结束 ==========
 
     // 后续如果出现异常，尝试回滚预占
     const safeFail = async (err: any) => {
       try {
-        await db
-          .prepare('UPDATE users SET usedDownload = COALESCE(usedDownload, 0) - ? WHERE id = ?')
-          .bind(fileSize, quotaOwnerId)
-          .run()
+        await releaseDownload(db, quotaChain, fileSize)
       } catch (_) {
         // 忽略回滚失败
       }

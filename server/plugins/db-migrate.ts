@@ -195,7 +195,34 @@ export default defineNitroPlugin(async () => {
       }
     }
 
-    // 2) 授权表
+    // 2) 子账户
+    // 三列都是「加不改」：ALTER TABLE ADD COLUMN 对已有库安全，对新库是空操作
+    // （schema.sql 里已经带了），两种情况都靠 columnExists 判定。
+    // parent_id 故意不加外键，理由写在 schema.sql 的 users 表定义里。
+    for (const col of ['parent_id', 'canSubAccount', 'maxSubAccount']) {
+      if (await columnExists(db, 'users', col)) continue
+      const ddl = col === 'parent_id'
+        ? 'ALTER TABLE users ADD COLUMN parent_id INTEGER'
+        : col === 'canSubAccount'
+          ? 'ALTER TABLE users ADD COLUMN canSubAccount BOOLEAN DEFAULT 0'
+          : 'ALTER TABLE users ADD COLUMN maxSubAccount INTEGER DEFAULT 0'
+      await db.prepare(ddl).bind().run()
+      console.log(`[db-migrate] users.${col} added`)
+    }
+    {
+      const res = await db
+        .prepare(isMysqlDb()
+          ? "SELECT 1 AS ok FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND INDEX_NAME = 'ix_users_parent_id'"
+          : "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'ix_users_parent_id'")
+        .bind()
+        .all()
+      if (!res?.results?.length) {
+        await db.prepare('CREATE INDEX ix_users_parent_id ON users (parent_id)').bind().run()
+        console.log('[db-migrate] ix_users_parent_id created')
+      }
+    }
+
+    // 3) 授权表
     if (!(await tableExists(db, 'file_access'))) {
       await db.prepare(mysql ? MYSQL_FILE_ACCESS : SQLITE_FILE_ACCESS).bind().run()
       console.log('[db-migrate] file_access created')
@@ -227,7 +254,7 @@ export default defineNitroPlugin(async () => {
       console.log(`[db-migrate] ${index} created`)
     }
 
-    // 3) 分享链接表
+    // 4) 分享链接表
     //
     // 新表而不是新列，所以只需 tableExists 判断，天然幂等。
     // 单独一张表而不是往 files/folders 上加列：链接是 0..n 的（挂几个 token 都行），
@@ -244,7 +271,7 @@ export default defineNitroPlugin(async () => {
       console.log('[db-migrate] ix_share_links_target created')
     }
 
-    // 4) file_key 唯一索引
+    // 5) file_key 唯一索引
     //
     // 为什么要：file_key 是 COS 里的真实对象路径，权限判定又是「按它查一行」。
     // 没有唯一约束时同一个路径可以有多行，命中哪一行由 SQLite 自己决定
@@ -272,7 +299,7 @@ export default defineNitroPlugin(async () => {
       }
     }
 
-    // 5) 所有者守卫触发器
+    // 6) 所有者守卫触发器
     if (!mysql) {
       for (const trigger of OWNER_GUARD_TRIGGERS) {
         if (await triggerExists(db, trigger.name)) continue
@@ -281,14 +308,14 @@ export default defineNitroPlugin(async () => {
       }
     }
 
-    // 5) 分享链接的级联删除。两种方言语法相同，所以不加 !mysql 守卫
+    // 7) 分享链接的级联删除。两种方言语法相同，所以不加 !mysql 守卫
     for (const trigger of SHARE_LINK_PURGE_TRIGGERS) {
       if (await triggerExists(db, trigger.name)) continue
       await db.prepare(trigger.sql).bind().run()
       console.log(`[db-migrate] ${trigger.name} created`)
     }
 
-    // 6) 共享模式三态化：**这里原本有一段数据回填，已于 2026-09-29 整段删除，不要再加回来。**
+    // 8) 共享模式三态化：**这里原本有一段数据回填，已于 2026-09-29 整段删除，不要再加回来。**
     //
     //    删掉的原因（踩过的坑，记下来免得重犯）：
     //    那段回填的前提是「旧两态语义下 Shared=1 ⟺ folder_access 里有授权行」，

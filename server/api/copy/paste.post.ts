@@ -15,6 +15,13 @@ import {
   resolveLinkTarget
 } from '~~/server/utils/share-link'
 import { skipAndOverwriteError } from '~~/types/error'
+import { quotaFailMessage } from '~~/server/utils/quota'
+import {
+  chainExpired,
+  releaseStorage,
+  resolveQuotaChain,
+  reserveStorage
+} from '~~/server/utils/sub-account'
 import { DEFAULT_SHARE_MODE, hasPermission, normalizeShareLink, PERM_WRITE } from '~~/types/share'
 
 function sanitizeForKey(name: string): string {
@@ -372,14 +379,28 @@ export default defineEventHandler(async (event) => {
 
   // 原子预占空间（净新增：复制总和 - 覆盖释放）
   const reserveBytes = Math.max(0, bytesToCopy - bytesToFreeByOverwrite)
+
+  /**
+   * 预占空间。过期与容量按**整条链**判：userId 是子账户时，
+   * 主账号的池也参与，两层在同一条 UPDATE 里。
+   *
+   * 过期判定放在 `if (reserveBytes > 0)` 之外：净增为 0 的纯覆盖
+   * （目标目录里已有同名同大小的文件）原来会整段跳过判据 ——
+   * 过期账号只要满足这个条件就能一直覆盖复制下去。
+   */
+  const quotaChain = await resolveQuotaChain(db, userId)
+  const expiredOn = await chainExpired(db, quotaChain)
+  if (expiredOn.self || expiredOn.parent) {
+    return {
+      success: false,
+      statusMessage: await quotaFailMessage(db, expiredOn.self ? 'expired_self' : 'expired_parent', userId, null, false)
+    }
+  }
+
   if (reserveBytes > 0) {
-    const res = await db
-      .prepare('UPDATE users SET usedStorage = usedStorage + ? WHERE id = ? AND (maxStorage = 0 OR usedStorage + ? <= maxStorage)')
-      .bind(reserveBytes, userId, reserveBytes)
-      .run()
-    const changed = Number(res?.meta?.changes || res?.meta?.rows_affected || 0)
-    if (!changed) {
-      return { success: false, statusMessage: '存储空间不足，无法完成复制' }
+    const fail = await reserveStorage(db, quotaChain, reserveBytes)
+    if (fail) {
+      return { success: false, statusMessage: await quotaFailMessage(db, fail, userId, null, false) }
     }
   }
 

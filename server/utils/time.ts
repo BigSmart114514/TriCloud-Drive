@@ -60,6 +60,21 @@ export function isExpired(expireAt: any, now: Date = new Date()): boolean {
   return now.getTime() >= dt.getTime()
 }
 
+/**
+ * 这个串能不能被 parseSqlDateTime 解析成合法时间。
+ *
+ * 用在**写入**侧（不是判定侧）。已有代码一律是把 expire_at 原样透传，
+ * 于是畸形值（"不是时间"）能存进库。而 `isExpired` 对畸形值返回 false
+ * （当没过期），SQL 侧的字符串比较却可能判成已过期 —— 两边不一致，
+ * 表现是「页面显示额度够，传的时候报额度不足」，非常难查。
+ *
+ * 判定标准直接用 parseSqlDateTime：它拒绝非法、放行合法格式（含带时区的），
+ * 不另立一套规则，免得又出现两种口径。
+ */
+export function isSqlDateTimeString(v: any): boolean {
+  return parseSqlDateTime(v) !== null
+}
+
 export function formatToUTC8(dateString?: string): string {
   if (!dateString) return ''
 

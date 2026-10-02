@@ -451,7 +451,11 @@ const saveUser = async (draft: DbUser) => {
         maxDownload: parseBytes(draft.maxDownload as string | number),
         usedDownload: parseBytes(draft.usedDownload as string | number),
         // 从 datetime-local 的 "T" 格式转回后端要的空格格式；空 = 永不过期
-        expire_at: fromDatetimeLocal((draft.expire_at as string | null) ?? null)
+        expire_at: fromDatetimeLocal((draft.expire_at as string | null) ?? null),
+        // 子账户能力。服务端用 COALESCE 兜底，所以这两位不传也不会被清零，
+        // 但这里显式传，避免以后有人加个「只传部分字段」的调用点时忘了它。
+        canSubAccount: draft.parent_id != null ? undefined : (draft.canSubAccount ? 1 : 0),
+        maxSubAccount: draft.parent_id != null ? undefined : Number(draft.maxSubAccount ?? 0)
       }
     })
 
