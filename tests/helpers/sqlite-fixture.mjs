@@ -81,15 +81,17 @@ export async function openRawDb() {
   // 注意顺序：sqlite3 单句是顺序执行的，serialize 保证下面几条排队，
   // 否则并发跑语句会串（项目硬约束，见 README）。
   raw.serialize()
-  return {
-    raw,
-    all: (q, p = []) =>
-      new Promise((res, rej) => raw.all(q, p, (e, r) => (e ? rej(e) : res(r || [])))),
-    run: (q, p = []) =>
-      new Promise((res, rej) => raw.run(q, p, (e) => (e ? rej(e) : res()))),
-    get: async (q, p = []) => (await this.all(q, p))[0] ?? null,
-    close: () => new Promise((res) => raw.close(res)),
-  }
+
+  // 这三个函数单独定义，不写在返回对象的方法里 ——
+  // 方法体里用 this.all 的话，调用方一解构（const { get } = db）this 就是
+  // undefined，报 "Cannot read properties of undefined"。踩过一次。
+  const all = (q, p = []) =>
+    new Promise((res, rej) => raw.all(q, p, (e, r) => (e ? rej(e) : res(r || []))))
+  const run = (q, p = []) =>
+    new Promise((res, rej) => raw.run(q, p, (e) => (e ? rej(e) : res())))
+  const get = async (q, p = []) => (await all(q, p))[0] ?? null
+
+  return { raw, all, run, get, close: () => new Promise((res) => raw.close(res)) }
 }
 
 export async function createShareFixture() {

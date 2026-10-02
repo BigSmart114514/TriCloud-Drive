@@ -52,6 +52,17 @@ CREATE TABLE users (
   maxStorage    BIGINT DEFAULT 1,
   usedDownload  BIGINT DEFAULT 0,
   maxDownload   BIGINT DEFAULT 1,
+  -- 「出生即过期」是**故意的**，不是 bug。
+  --
+  -- 自助注册的账号一律先做成哑巴：额度 1B、流量 1B（上面两个默认值）、
+  -- 且 expire_at 等于创建时刻 → 一出生就是过期账号，任何操作都被拒。
+  -- 管理员要开通，才显式给一个未来的 expire_at 与真实额度。
+  --
+  -- 也就是说「注册成功」≠「能用」，中间隔着管理员这一道。
+  -- 改成 DEFAULT NULL 会让每个自助注册的人拿到一个**永不过期**的账号，
+  -- 那就等于拆掉这道门。
+  --
+  -- **这三个默认值（1 / 1 / CURRENT_TIMESTAMP）谁都不许改。**
   expire_at     TEXT DEFAULT CURRENT_TIMESTAMP,
   canChangePassword BOOLEAN DEFAULT 1,
 

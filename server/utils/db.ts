@@ -57,11 +57,22 @@ export class UserService {
 
   async createUser(email: string, username: string, passwordHash: string): Promise<User | null> {
     try {
+      // **刻意不写 expire_at**，让它吃到 schema 的 `DEFAULT CURRENT_TIMESTAMP`。
+      //
+      // 那是设计，不是疏漏：自助注册出来的账号一律先做成哑巴 ——
+      // 额度 1B、流量 1B、且出生即过期，任何操作都被拒，等管理员开通。
+      // 「注册成功」不等于「能用」，中间隔着管理员这一道闸门。
+      //
+      // 曾经有人（或 AI）把这当成 bug「修」过：给 expire_at 显式写 NULL、
+      // 并把 schema 默认值改成 NULL —— 结果是每个自助注册的人都拿到
+      // 一个**永不过期**的账号。等于把门拆了。
+      //
+      // tests/registration-expiry.test.mjs 现在钉住这三个默认值不许被放宽。
       const result = await this.db
         .prepare('INSERT INTO users (email, username, password_hash) VALUES (?, ?, ?) RETURNING *')
         .bind(email, username, passwordHash)
         .first()
-      
+
       return result as User
     } catch (error) {
       console.error('Error creating user:', error)

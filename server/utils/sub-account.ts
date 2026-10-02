@@ -112,6 +112,30 @@ export function poolWithinSql(col: 'usedStorage' | 'usedDownload', bytesParam: s
 }
 
 /**
+ * 「自己这一层够不够」：`max <= 0` 表示不限。
+ *
+ * ## 为什么抽出来
+ *
+ * reserveStorage 与 precheckStorage 必须给出**同一个答案** —— 预检说够、预占说
+ * 不够，用户就白传了一遍字节；反过来则是放行了一个注定失败的请求。
+ *
+ * 原先两处各写一份 `COALESCE(s.maxStorage, 0) = 0 OR COALESCE(s.usedStorage, 0) + ? <= ...`，
+ * 靠人记着同步。这里改成共用一个片段生成器：改一处，两处一起变。
+ *
+ * 这正是 upload/credentials.post.ts 出事的根因那一类问题 —— 判定条件散在各处、
+ * 各写各的。这次把「新接口必须复用这些片段」写进 tests/quota-wiring.test.mjs。
+ */
+export function ownWithinSql(
+  col: 'usedStorage' | 'usedDownload',
+  prefix = '',
+  bytesParam = '?'
+): string {
+  const p = prefix ? `${prefix}.` : ''
+  const name = col.slice(4)
+  return `(COALESCE(${p}max${name}, 0) = 0 OR COALESCE(${p}${col}, 0) + ${bytesParam} <= COALESCE(${p}max${name}, 0))`
+}
+
+/**
  * 「未过期」条件、指定列前缀的版本。
  *
  * 不做成 `NOT_EXPIRED_SQL.replace(...)` 那种拼法：那是把一段 SQL 当字符串
@@ -148,11 +172,21 @@ export async function reserveStorage(
         SET usedStorage = usedStorage + ?
         WHERE id = ?
           AND ${notExpiredSql()}
-          AND (maxStorage = 0 OR usedStorage + ? <= maxStorage)
+          AND ${ownWithinSql('usedStorage')}
       `)
       .bind(bytes, chain.selfId, now, bytes)
       .run()
-    return affected(r) > 0 ? null : 'storage_self'
+    if (affected(r) > 0) return null
+
+    // 0 行：可能是不够，**也可能只是过期**。
+    //
+    // 原来这里直接 `return 'storage_self'`，不查过期 —— 于是已过期的普通用户
+    // 会被告知「存储空间不足」，让他去调额度，而真正的原因是账号到期了。
+    // 有主账号的那条分支一直有 chainExpired 分流，只有这条漏了；
+    // 是 precheckStorage 的一致性测试把它照出来的（预检说 expired_self、
+    // 预占说 storage_self）。
+    const exp = await chainExpired(db, chain)
+    return exp.self ? 'expired_self' : 'storage_self'
   }
 
   const r = await db
@@ -161,7 +195,7 @@ export async function reserveStorage(
       SET usedStorage = COALESCE(s.usedStorage, 0) + ?
       WHERE s.id = ?
         AND ${notExpiredSql('s')}
-        AND (COALESCE(s.maxStorage, 0) = 0 OR COALESCE(s.usedStorage, 0) + ? <= COALESCE(s.maxStorage, 0))
+        AND ${ownWithinSql('usedStorage', 's')}
         AND EXISTS (
           SELECT 1 FROM users p WHERE p.id = ?
             AND ${notExpiredSql('p')}
@@ -287,6 +321,111 @@ export async function recalculateChainStorage(db: any, userId: number): Promise<
 
   await recalc(selfId)
   if (parentId != null) await recalc(parentId)
+}
+
+/**
+ * 预检存储：这次会超吗？返回原因，**不预占**。
+ *
+ * ## 存在的理由
+ *
+ * upload/credentials.post.ts 在发 STS 临时凭证之前要判断「够不够」。这个判断原先
+ * 是它自己写的单行 `maxStorage > 0 && usedForCheck + size > maxStorage`，
+ * 完全不看主账号池 —— 而子账户建号时 maxStorage 故意给 0（不限），于是
+ * `maxStorage > 0` 恒为 false，**这层闸门对子账户等于不存在**。
+ * 凭证照发 → COS 里真落字节 → /api/files/save 的 reserveStorage 才失败 →
+ * 数据库没记录，桶里留一个用户看不见也删不掉的文件。
+ *
+ * ## 口径必须与 reserveStorage 一致
+ *
+ * 所以这里的 WHERE 用的是 reserveStorage 那几个**同样的片段生成器**
+ * （notExpiredSql / ownWithinSql / poolWithinSql），不是另抄一份。
+ * 两者分叉过一次，代价就是上面那个孤儿对象。
+ *
+ * ## 只是预检，不预占
+ *
+ * 真正的扣减永远发生在 save.post.ts 的 reserveStorage。这里挡掉的只是「注定失败」
+ * 的那部分，避免白传一遍字节。**存在竞态窗口**（预检通过后、save 之前池可能被
+ * 别人占满），那属于「save 时拒绝」，不是预检的锅。
+ *
+ * ## bytes 可以是负数
+ *
+ * 覆盖上传时传 `新大小 - 旧大小`（可能是负数），与 save.post.ts 里
+ * reserveStorage 收到的是同一个值。两边口径一致，覆盖才不会一边放行一边拒绝。
+ */
+export async function precheckStorage(
+  db: any,
+  chain: QuotaChain,
+  bytes: number
+): Promise<{ allowed: boolean; fail: QuotaFail | null; used: number; max: number; unlimited: boolean }> {
+  const exp = await chainExpired(db, chain)
+  if (exp.self) return { allowed: false, fail: 'expired_self', used: 0, max: 0, unlimited: false }
+  if (exp.parent) return { allowed: false, fail: 'expired_parent', used: 0, max: 0, unlimited: false }
+
+  // 与 reserveStorage 的 WHERE 同构：有行 = 放行，无行 = 至少一个条件不满足
+  const sql =
+    chain.parentId == null
+      ? `SELECT 1 AS ok FROM users
+          WHERE id = ?
+            AND ${notExpiredSql()}
+            AND ${ownWithinSql('usedStorage')}`
+      : `SELECT 1 AS ok FROM users s
+          WHERE s.id = ?
+            AND ${notExpiredSql('s')}
+            AND ${ownWithinSql('usedStorage', 's')}
+            AND EXISTS (
+              SELECT 1 FROM users p WHERE p.id = ?
+                AND ${notExpiredSql('p')}
+                AND (COALESCE(p.maxStorage, 0) = 0 OR ${poolWithinSql('usedStorage', '?')})
+            )`
+  const now = nowSqlString()
+  const args =
+    chain.parentId == null
+      ? [chain.selfId, now, bytes]
+      : [chain.selfId, now, bytes, chain.parentId, now, bytes]
+  const row = await db.prepare(sql).bind(...args).first()
+  if (row) {
+    const pool =
+      chain.parentId != null
+        ? await poolUsage(db, chain.parentId, 'usedStorage')
+        : await ownUsage(db, chain.selfId, 'usedStorage')
+    return {
+      allowed: true,
+      fail: null,
+      used: pool.total,
+      max: pool.max,
+      unlimited: pool.max <= 0
+    }
+  }
+
+  // 无行：说清是哪一层不够，别让用户去调错的那一层
+  const own = await ownUsage(db, chain.selfId, 'usedStorage')
+  if (own.max > 0 && own.total + bytes > own.max) {
+    return { allowed: false, fail: 'storage_self', used: own.total, max: own.max, unlimited: false }
+  }
+  if (chain.parentId != null) {
+    const pool = await poolUsage(db, chain.parentId, 'usedStorage')
+    if (pool.max > 0 && pool.total + bytes > pool.max) {
+      return {
+        allowed: false,
+        fail: 'storage_parent',
+        used: pool.total,
+        max: pool.max,
+        unlimited: false
+      }
+    }
+  }
+  // 两个额度数字都够，却仍然无行 —— 只可能是过期（已在上面排除），
+  // 或者有人并发改过额度。保守起见按自己这层不够报，让 save 去给最终答案。
+  return { allowed: false, fail: 'storage_self', used: own.total, max: own.max, unlimited: false }
+}
+
+/** 单个账号自己那一行的 used / max。给预检的「放行后回填 used/max」用 */
+async function ownUsage(db: any, userId: number, col: 'usedStorage' | 'usedDownload') {
+  const row = await db
+    .prepare(`SELECT COALESCE(${col}, 0) AS u, COALESCE(max${col.slice(4)}, 0) AS m FROM users WHERE id = ?`)
+    .bind(userId)
+    .first()
+  return { total: Number((row as any)?.u ?? 0), max: Number((row as any)?.m ?? 0) }
 }
 
 /** 预检：这次会超吗？返回原因，不预占。用于 manifest 的 precheck。 */

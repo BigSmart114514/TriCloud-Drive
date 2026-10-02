@@ -208,7 +208,15 @@ export const useFileUpload = (options?: {
       setProgress(totalBytes, totalBytes)
       return
     } catch (error) {
-      notifyError(error, '上传失败')
+      // 这里**不弹 toast**：本函数只跑在 useDnDUpload 的 handleFiles / handleEntries
+      // 里面，那才是这条链的终点，由它弹。
+      //
+      // 原来两层都调 notifyError，于是同一个 error 对象被提示两次、屏幕上出现
+      // 两句一模一样的话（403 自带 message，notifyError 的 fallback 不生效，
+      // 所以两遍显示的都是服务端原文，例如「存储空间不足，上传该文件将超出配额」）。
+      //
+      // uploadError.value 仍然要设：那是 FileBrowser 里的红条横幅，
+      // 与 toast 是两回事，重复赋同一个值看不出问题。
       uploadError.value = toMessage(error, '上传失败')
       throw error
 

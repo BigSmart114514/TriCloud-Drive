@@ -5,6 +5,8 @@ import { UserService, FileService, FolderService } from '~~/server/utils/db'
 import { PERM_WRITE } from '~~/types/share'
 import { isExpired } from '~~/server/utils/time'
 import { dbConnectionError } from '~~/types/error'
+import { precheckStorage, resolveQuotaChain } from '~~/server/utils/sub-account'
+import { quotaFailMessage } from '~~/server/utils/quota'
 
 export default defineEventHandler(async (event) => {
   // 处理 CORS 预检
@@ -94,22 +96,45 @@ export default defineEventHandler(async (event) => {
       throw createError({ statusCode: 403, message: '账号已过期，禁止上传' })
     }
 
-    const usedStorage = Number(user.usedStorage ?? 0) || 0
-    const maxStorage = Number(user.maxStorage ?? 0) || 0
-
-    // 若选择覆盖且存在同名文件，则抵扣旧文件大小
-    let usedForCheck = usedStorage
+    /**
+     * 配额预检。**必须走配额链**（server/utils/sub-account.ts）。
+     *
+     * 这里原先是本地一句：
+     *
+     *     if (maxStorage > 0 && usedForCheck + size > maxStorage) { throw 403 }
+     *
+     * 只看**属主自己那一行**，完全不看主账号池。而子账户建号时 maxStorage 故意给 0
+     * （不限，见 accounts/index.post.ts 的注释：给 1 的话「新建就立刻什么都传不了」），
+     * 于是 `maxStorage > 0` 对子账户恒为 false —— **这层闸门对子账户等于不存在**。
+     * 后果：凭证照发 → COS 里真落字节 → /api/files/save 的 reserveStorage 才失败 →
+     * 数据库没记录，桶里留一个用户看不见也删不掉的文件。
+     *
+     * 判定条件与 reserveStorage 共用同一批 SQL 片段生成器，不是另抄一份 ——
+     * 这套逻辑已经因为「两处各写各的」出过事，见 tests/quota-wiring.test.mjs。
+     *
+     * `delta` 与 save.post.ts 里 reserveStorage 收到的值保持一致（覆盖时是
+     * 新减旧，可能为负），否则会出现「这里放行、那里拒绝」。
+     */
+    let delta = size
     if (overwrite === true || skipIfExist === true) {
       const row = await fileService.findByName(user.id, folderId, filename)
       if (row && overwrite === true) {
-        usedForCheck = Math.max(0, usedStorage - row.fileSize)
+        delta = size - Number(row.fileSize ?? 0)
       } else if (row && skipIfExist === true) {
         return { success: false, statusMessage: '当前目录下已存在该文件' }
       }
     }
 
-    if (maxStorage > 0 && usedForCheck + size > maxStorage) {
-      throw createError({ statusCode: 403, message: '存储空间不足，上传该文件将超出配额' })
+    const quotaChain = await resolveQuotaChain(db, userId)
+    const pre = await precheckStorage(db, quotaChain, delta)
+    // 判据用 `pre.fail` 而不是 `!pre.allowed`：allowed 与 fail 是两个独立字段，
+    // TypeScript 不会因为 allowed 为假就认为 fail 非空。而 fail 才是真正的判别式 ——
+    // precheckStorage 在不允许时必定给出原因。
+    if (pre.fail) {
+      throw createError({
+        statusCode: 403,
+        message: await quotaFailMessage(db, pre.fail, userId, userId, false)
+      })
     }
 
     // 目标目录归属校验（放在配额判断之后，与原逻辑保持一致）

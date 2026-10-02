@@ -3,6 +3,7 @@ import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { dedupeName } from '~~/server/utils/naming'
+import { deleteCosObject } from '~~/server/utils/cos'
 import { assertFileKeyOwner } from '~~/server/utils/file-key'
 // upload403Error 不再由预占失败抛出 —— 失败原因现在分得出是哪一层不够，
 // 走 quotaFailMessage 给对应文案（见下面两处 reserveStorage）。
@@ -100,6 +101,10 @@ export default defineEventHandler(async (event) => {
           if (fail) {
             await db.prepare('ROLLBACK TO upload_tx').bind().run()
             await db.prepare('RELEASE upload_tx').bind().run()
+            // 事务回滚了，数据库仍指向**旧** fileKey；而这次新传上去的那个对象
+            // 没人认领 —— 桶里多一份字节，用户看不见、也删不掉。这里主动清掉。
+            // 清不掉也不抛：抛了会盖掉上面那个真正的配额原因。
+            await deleteCosObject(fileKey)
             throw createError({
               statusCode: 403,
               message: await quotaFailMessage(db, fail, userId, null, false)
@@ -125,6 +130,8 @@ export default defineEventHandler(async (event) => {
       if (fail) {
         await db.prepare('ROLLBACK TO upload_tx').bind().run()
         await db.prepare('RELEASE upload_tx').bind().run()
+        // 同上：字节已经在 COS 里了，数据库这侧没记录。清掉，别留孤儿。
+        await deleteCosObject(fileKey)
         throw createError({
           statusCode: 403,
           message: await quotaFailMessage(db, fail, userId, null, false)
