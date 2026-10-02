@@ -1,4 +1,4 @@
-export type ArchiveFormat = 'zip' | '7z'
+export type ArchiveFormat = 'zip' | '7z' | 'archive'
 
 export interface ArchiveFileItem {
   id: string

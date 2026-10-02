@@ -48,17 +48,14 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, triggerRef, watch } from 'vue'
+// 7z / rar / tar 等走 7z-wasm。目录树逻辑在 useArchiveTree（与 zip 预览共用），
+// 这里只负责「用 7z 引擎把 blob 读成记录」—— 包括 `l -slt` 文本的解析，
+// 那部分与 zip.js 没有交集，留在本文件。
+import { onBeforeUnmount, watch } from 'vue'
 import FileList from '~/components/FileList.vue'
-import type { FileListFile, FileListFolder } from '~~/types/file-list'
+import type { FileListFile } from '~~/types/file-list'
 import type { ArchiveFileItem } from '~~/types/zip'
 import type { SevenZipModule } from '7z-wasm'
-
-interface DirectoryNode extends FileListFolder {
-  path: string
-  children: DirectoryNode[]
-  files: ArchiveFileItem[]
-}
 
 interface ListingRecord {
   path: string
@@ -79,81 +76,37 @@ const emit = defineEmits<{
 }>()
 
 const MAX_ENTRIES = 50000
-const loading = ref(false)
-const error = ref('')
-const search = ref('')
-const totalCount = ref(0)
-const skippedCount = ref(0)
-const currentPath = ref('')
-const treeRevision = ref(0)
-const root = shallowRef<DirectoryNode | null>(null)
-const directoryLookup = new Map<string, DirectoryNode>()
-const fileLookup = new Map<string, ArchiveFileItem>()
+
+const {
+  loading,
+  error,
+  search,
+  totalCount,
+  skippedCount,
+  visibleFolders,
+  visibleFiles,
+  visibleCount,
+  breadcrumbs,
+  beginLoad,
+  ingest,
+  failTree,
+  endLoad,
+  goToPath,
+  navigateFolder,
+  findFile
+} = useArchiveTree({ rootId: 'sevenzip-root', maxEntries: MAX_ENTRIES })
+
 let sevenZip: SevenZipModule | null = null
 let archivePath = '/archive.7z'
 let output = ''
 let extractId = 0
 let loadId = 0
 
-const createRoot = (): DirectoryNode => ({
-  id: 'sevenzip-root',
-  name: '压缩包',
-  path: '',
-  createdAt: null,
-  children: [],
-  files: []
-})
-
-const normalizePath = (value: string): string | null => {
-  const raw = value.replace(/\\/g, '/')
-  if (!raw || raw.includes('\0') || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) return null
-  const normalized = raw.replace(/^\.\/+/, '').replace(/\/+/g, '/').replace(/\/+$/, '')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts.some(part => part === '.' || part === '..')) return null
-  return parts.join('/')
-}
-
+/** 7z 的 `l -slt` 里时间是 `YYYY-MM-DD hh:mm:ss`，Date 解析不了那个空格 */
 const formatDate = (value?: string) => {
   if (!value) return null
   const date = new Date(value.replace(' ', 'T'))
   return Number.isNaN(date.getTime()) ? null : date.toISOString()
-}
-
-const ensureDirectory = (path: string, createdAt: string | null): DirectoryNode => {
-  const existing = directoryLookup.get(path)
-  if (existing) {
-    if (!existing.createdAt && createdAt) existing.createdAt = createdAt
-    return existing
-  }
-
-  let current = root.value!
-  let currentPath = ''
-  for (const name of path ? path.split('/') : []) {
-    currentPath = currentPath ? `${currentPath}/${name}` : name
-    let child = current.children.find(item => item.name === name)
-    if (!child) {
-      child = {
-        id: `folder:${currentPath}`,
-        name,
-        path: currentPath,
-        createdAt,
-        children: [],
-        files: []
-      }
-      current.children.push(child)
-      directoryLookup.set(currentPath, child)
-    } else if (!child.createdAt && createdAt) {
-      child.createdAt = createdAt
-    }
-    current = child
-  }
-  return current
-}
-
-const sortNode = (node: DirectoryNode) => {
-  node.children.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-  node.files.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { sensitivity: 'base' }))
-  node.children.forEach(sortNode)
 }
 
 const run = (args: string[]) => {
@@ -169,6 +122,20 @@ const run = (args: string[]) => {
   return output
 }
 
+const runOnModule = (module: SevenZipModule, args: string[]) => {
+  if (sevenZip !== module) throw new Error('7z 会话已结束')
+  output = ''
+  try {
+    module.callMain(args)
+  } catch (e) {
+    const message = output.trim()
+    if (message) throw new Error(message)
+    throw e
+  }
+  return output
+}
+
+/** 解析 `7z l -slt` 的输出：每条记录是若干 `Key = value`，Path 开头 */
 const parseListing = (value: string): ListingRecord[] => {
   const text = value.includes('\n') ? value : value.replace(/\\n/g, '\n')
   const records: ListingRecord[] = []
@@ -200,6 +167,7 @@ const parseListing = (value: string): ListingRecord[] => {
   return records
 }
 
+/** 解压到一个临时目录，读完删掉。递归删除，失败就放弃（引擎有自己的沙箱） */
 const removeTree = (module: SevenZipModule, path: string) => {
   try {
     const entries = module.FS.readdir(path)
@@ -227,6 +195,7 @@ const closeEngine = () => {
   }
 }
 
+/** 单条解压。整个包已经在引擎里了，按路径取出其中一个文件 */
 const createRead = (module: SevenZipModule, path: string) => async ({ password, signal }: { password?: string; signal?: AbortSignal } = {}) => {
   if (signal?.aborted) throw new DOMException('Aborted', 'AbortError')
   const destination = `/__extract_${++extractId}`
@@ -242,36 +211,13 @@ const createRead = (module: SevenZipModule, path: string) => async ({ password, 
   }
 }
 
-const runOnModule = (module: SevenZipModule, args: string[]) => {
-  if (sevenZip !== module) throw new Error('7z 会话已结束')
-  output = ''
-  try {
-    module.callMain(args)
-  } catch (e) {
-    const message = output.trim()
-    if (message) throw new Error(message)
-    throw e
-  }
-  return output
-}
-
 const load = async () => {
   if (typeof window === 'undefined') return
   const requestId = ++loadId
-  loading.value = true
-  error.value = ''
   closeEngine()
   if (requestId !== loadId) return
 
-  search.value = ''
-  currentPath.value = ''
-  totalCount.value = 0
-  skippedCount.value = 0
-  directoryLookup.clear()
-  fileLookup.clear()
-  root.value = createRoot()
-  directoryLookup.set('', root.value)
-  treeRevision.value += 1
+  beginLoad()
 
   try {
     const factory = (await import('7z-wasm')).default
@@ -286,101 +232,28 @@ const load = async () => {
     const listingOutput = run(['l', '-slt', archivePath])
     const records = parseListing(listingOutput)
     if (!listingOutput.includes('Type =')) throw new Error('7z 引擎未返回有效的目录信息')
-    const availableRecords = records.slice(0, MAX_ENTRIES)
-    skippedCount.value = Math.max(0, records.length - availableRecords.length)
-    totalCount.value = records.length
 
-    availableRecords.forEach((record, index) => {
-      const normalized = normalizePath(record.path)
-      if (normalized === null) {
-        skippedCount.value += 1
-        return
-      }
-      const segments = normalized ? normalized.split('/') : []
-      if (record.directory) {
-        for (let i = 0; i < segments.length; i += 1) {
-          ensureDirectory(segments.slice(0, i + 1).join('/'), record.modified || null)
-        }
-        return
-      }
-      if (segments.length === 0) return
-      const filename = segments.pop()!
-      const parent = ensureDirectory(segments.join('/'), record.modified || null)
-      const key = `entry:${index}`
-      const item: ArchiveFileItem = {
-        id: key,
-        key,
-        path: normalized,
-        filename,
+    ingest(
+      records.map(record => ({
+        path: record.path,
+        directory: record.directory,
         fileSize: record.size,
         compressedSize: record.packedSize,
         modifiedAt: record.modified,
         encrypted: record.encrypted,
-        format: '7z',
-        read: createRead(module, normalized)
-      }
-      parent.files.push(item)
-      fileLookup.set(key, item)
-    })
-
-    sortNode(root.value)
-    treeRevision.value += 1
-    triggerRef(root)
+        read: createRead(module, record.path)
+      })),
+      '7z'
+    )
   } catch (e: any) {
-    error.value = e?.message || '无法读取压缩包内容'
-    root.value = createRoot()
-    treeRevision.value += 1
+    failTree(e?.message || '无法读取压缩包内容')
   } finally {
-    if (requestId === loadId) loading.value = false
+    if (requestId === loadId) endLoad()
   }
 }
 
-const currentDirectory = computed(() => {
-  const tree = root.value
-  return directoryLookup.get(currentPath.value) || tree || createRoot()
-})
-const filteredChildren = computed(() => {
-  treeRevision.value
-  const query = search.value.trim().toLocaleLowerCase()
-  const children = currentDirectory.value.children
-  const files = currentDirectory.value.files
-  if (!query) return { folders: children, files }
-  return {
-    folders: children.filter(folder => folder.name.toLocaleLowerCase().includes(query)),
-    files: files.filter(file => file.filename.toLocaleLowerCase().includes(query))
-  }
-})
-const visibleFolders = computed<FileListFolder[]>(() => filteredChildren.value.folders.map(folder => ({
-  id: folder.id,
-  name: folder.name,
-  createdAt: folder.createdAt
-})))
-const visibleFiles = computed<FileListFile[]>(() => filteredChildren.value.files.map(file => ({
-  id: file.id,
-  filename: file.filename,
-  fileSize: Number.isFinite(file.fileSize) ? Math.max(0, file.fileSize) : 0,
-  createdAt: file.modifiedAt || null,
-  contentType: ''
-})))
-const visibleCount = computed(() => visibleFolders.value.length + visibleFiles.value.length)
-const breadcrumbs = computed(() => {
-  const result = [{ name: '压缩包根目录', path: '' }]
-  let path = ''
-  for (const part of currentPath.value ? currentPath.value.split('/') : []) {
-    path = path ? `${path}/${part}` : part
-    result.push({ name: part, path })
-  }
-  return result
-})
-
-const goToPath = (path: string) => {
-  if (directoryLookup.has(path)) currentPath.value = path
-}
-const navigateFolder = (folder: FileListFolder) => {
-  goToPath(String(folder.id).replace(/^folder:/, ''))
-}
 const openFile = (file: FileListFile) => {
-  const item = fileLookup.get(String(file.id))
+  const item = findFile(file)
   if (item) emit('open-entry', item)
 }
 

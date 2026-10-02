@@ -48,16 +48,12 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, triggerRef, watch } from 'vue'
+// zip / zip64 预览。目录树逻辑在 useArchiveTree（与 7z 预览共用），
+// 这里只负责「用 zip.js 把 blob 读成记录」。
+import { onBeforeUnmount, watch } from 'vue'
 import FileList from '~/components/FileList.vue'
-import type { FileListFile, FileListFolder } from '~~/types/file-list'
+import type { FileListFile } from '~~/types/file-list'
 import type { ArchiveFileItem } from '~~/types/zip'
-
-interface DirectoryNode extends FileListFolder {
-  path: string
-  children: DirectoryNode[]
-  files: ArchiveFileItem[]
-}
 
 interface ZipReaderLike {
   getEntries: () => Promise<any[]>
@@ -74,77 +70,32 @@ const emit = defineEmits<{
 }>()
 
 const MAX_ENTRIES = 50000
-const loading = ref(false)
-const error = ref('')
-const search = ref('')
-const totalCount = ref(0)
-const skippedCount = ref(0)
-const currentPath = ref('')
-const treeRevision = ref(0)
-const root = shallowRef<DirectoryNode | null>(null)
-const directoryLookup = new Map<string, DirectoryNode>()
-const fileLookup = new Map<string, ArchiveFileItem>()
+
+const {
+  loading,
+  error,
+  search,
+  totalCount,
+  skippedCount,
+  visibleFolders,
+  visibleFiles,
+  visibleCount,
+  breadcrumbs,
+  beginLoad,
+  ingest,
+  failTree,
+  endLoad,
+  goToPath,
+  navigateFolder,
+  findFile
+} = useArchiveTree({ rootId: 'zip-root', maxEntries: MAX_ENTRIES })
+
 let reader: ZipReaderLike | null = null
 let loadId = 0
-
-const createRoot = (): DirectoryNode => ({
-  id: 'zip-root',
-  name: '压缩包',
-  path: '',
-  createdAt: null,
-  children: [],
-  files: []
-})
-
-const normalizePath = (value: string): string | null => {
-  const raw = value.replace(/\\/g, '/')
-  if (!raw || raw.includes('\0') || raw.startsWith('/') || /^[A-Za-z]:/.test(raw)) return null
-  const normalized = raw.replace(/^\.\/+/, '').replace(/\/+/g, '/').replace(/\/+$/, '')
-  const parts = normalized.split('/').filter(Boolean)
-  if (parts.some(part => part === '.' || part === '..')) return null
-  return parts.join('/')
-}
 
 const formatDate = (date: Date) => {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null
   return date.toISOString()
-}
-
-const ensureDirectory = (path: string, createdAt: string | null): DirectoryNode => {
-  const existing = directoryLookup.get(path)
-  if (existing) {
-    if (!existing.createdAt && createdAt) existing.createdAt = createdAt
-    return existing
-  }
-
-  let current = root.value!
-  let currentPath = ''
-  for (const name of path ? path.split('/') : []) {
-    currentPath = currentPath ? `${currentPath}/${name}` : name
-    let child = current.children.find(item => item.name === name)
-    if (!child) {
-      child = {
-        id: `folder:${currentPath}`,
-        name,
-        path: currentPath,
-        createdAt,
-        children: [],
-        files: []
-      }
-      current.children.push(child)
-      directoryLookup.set(currentPath, child)
-    } else if (!child.createdAt && createdAt) {
-      child.createdAt = createdAt
-    }
-    current = child
-  }
-  return current
-}
-
-const sortNode = (node: DirectoryNode) => {
-  node.children.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }))
-  node.files.sort((a, b) => a.filename.localeCompare(b.filename, undefined, { sensitivity: 'base' }))
-  node.children.forEach(sortNode)
 }
 
 const closeReader = async () => {
@@ -165,17 +116,8 @@ const load = async () => {
   await closeReader()
   if (requestId !== loadId) return
 
-  loading.value = true
-  error.value = ''
-  search.value = ''
-  currentPath.value = ''
-  totalCount.value = 0
-  skippedCount.value = 0
-  directoryLookup.clear()
-  fileLookup.clear()
-  root.value = createRoot()
-  directoryLookup.set('', root.value)
-  treeRevision.value += 1
+  // 先清空旧树再解析：换包时界面立刻反映「正在加载新内容」
+  beginLoad()
 
   try {
     const zip = await import('@zip.js/zip.js')
@@ -187,115 +129,39 @@ const load = async () => {
       return
     }
 
-    const availableEntries = entries.slice(0, MAX_ENTRIES)
-    skippedCount.value = Math.max(0, entries.length - availableEntries.length)
-    totalCount.value = entries.length
-
-    availableEntries.forEach((entry, index) => {
-      const rawName = String(entry.filename || '')
-      const normalized = normalizePath(rawName)
-      if (normalized === null) {
-        skippedCount.value += 1
-        return
-      }
-
-      const isDirectory = !!entry.directory || /[\\/]$/.test(rawName)
-      const segments = normalized ? normalized.split('/') : []
-      const createdAt = formatDate(entry.lastModDate)
-      if (isDirectory) {
-        for (let i = 0; i < segments.length; i += 1) {
-          const directoryPath = segments.slice(0, i + 1).join('/')
-          ensureDirectory(directoryPath, createdAt)
-        }
-        return
-      }
-
-      if (segments.length === 0) return
-      const filename = segments.pop()!
-      const parent = ensureDirectory(segments.join('/'), createdAt)
-      const key = `entry:${index}`
-      const item: ArchiveFileItem = {
-        id: key,
-        key,
-        path: normalized,
-        filename,
-        fileSize: Math.max(0, Number(entry.uncompressedSize) || 0),
-        compressedSize: Math.max(0, Number(entry.compressedSize) || 0),
-        modifiedAt: createdAt || '',
-        encrypted: !!entry.encrypted,
-        format: 'zip',
-        read: async ({ password, signal } = {}) => {
-          const options: Record<string, unknown> = {
-            checkSignature: true,
-            useWebWorkers: false
+    ingest(
+      entries.map((entry: any) => {
+        const rawName = String(entry.filename || '')
+        return {
+          path: rawName,
+          // 末尾带分隔符的条目是目录，zip.js 有些版本不给 directory 标志
+          directory: !!entry.directory || /[\\/]$/.test(rawName),
+          fileSize: Math.max(0, Number(entry.uncompressedSize) || 0),
+          compressedSize: Math.max(0, Number(entry.compressedSize) || 0),
+          modifiedAt: formatDate(entry.lastModDate) || '',
+          encrypted: !!entry.encrypted,
+          read: async ({ password, signal }: { password?: string; signal?: AbortSignal } = {}) => {
+            const options: Record<string, unknown> = {
+              checkSignature: true,
+              useWebWorkers: false
+            }
+            if (signal) options.signal = signal
+            if (password !== undefined) options.password = password
+            return entry.getData(new zip.BlobWriter(), options)
           }
-          if (signal) options.signal = signal
-          if (password !== undefined) options.password = password
-          return entry.getData(new zip.BlobWriter(), options)
         }
-      }
-      parent.files.push(item)
-      fileLookup.set(key, item)
-    })
-
-    sortNode(root.value)
-    treeRevision.value += 1
-    triggerRef(root)
+      }),
+      'zip'
+    )
   } catch (e: any) {
-    error.value = e?.message || '无法读取压缩包内容'
-    root.value = createRoot()
-    treeRevision.value += 1
+    failTree(e?.message || '无法读取压缩包内容')
   } finally {
-    if (requestId === loadId) loading.value = false
+    if (requestId === loadId) endLoad()
   }
 }
 
-const currentDirectory = computed(() => {
-  const tree = root.value
-  return directoryLookup.get(currentPath.value) || tree || createRoot()
-})
-const filteredChildren = computed(() => {
-  treeRevision.value
-  const query = search.value.trim().toLocaleLowerCase()
-  const children = currentDirectory.value.children
-  const files = currentDirectory.value.files
-  if (!query) return { folders: children, files }
-  return {
-    folders: children.filter(folder => folder.name.toLocaleLowerCase().includes(query)),
-    files: files.filter(file => file.filename.toLocaleLowerCase().includes(query))
-  }
-})
-const visibleFolders = computed<FileListFolder[]>(() => filteredChildren.value.folders.map(folder => ({
-  id: folder.id,
-  name: folder.name,
-  createdAt: folder.createdAt
-})))
-const visibleFiles = computed<FileListFile[]>(() => filteredChildren.value.files.map(file => ({
-  id: file.id,
-  filename: file.filename,
-  fileSize: Number.isFinite(file.fileSize) ? Math.max(0, file.fileSize) : 0,
-  createdAt: file.modifiedAt || null,
-  contentType: ''
-})))
-const visibleCount = computed(() => visibleFolders.value.length + visibleFiles.value.length)
-const breadcrumbs = computed(() => {
-  const result = [{ name: '压缩包根目录', path: '' }]
-  let path = ''
-  for (const part of currentPath.value ? currentPath.value.split('/') : []) {
-    path = path ? `${path}/${part}` : part
-    result.push({ name: part, path })
-  }
-  return result
-})
-
-const goToPath = (path: string) => {
-  if (directoryLookup.has(path)) currentPath.value = path
-}
-const navigateFolder = (folder: FileListFolder) => {
-  goToPath(String(folder.id).replace(/^folder:/, ''))
-}
 const openFile = (file: FileListFile) => {
-  const item = fileLookup.get(String(file.id))
+  const item = findFile(file)
   if (item) emit('open-entry', item)
 }
 
