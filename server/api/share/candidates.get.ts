@@ -2,6 +2,7 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
 import { placeholders } from '~~/server/utils/functions'
+import { escapeLike } from '~~/server/utils/escape'
 import { getQuery } from 'h3'
 
 /**
@@ -42,12 +43,12 @@ export default defineEventHandler(async (event) => {
       .prepare(`
         SELECT id, username, email
         FROM users
-        WHERE (username LIKE ? OR email LIKE ?)
+        WHERE (username LIKE ? ESCAPE '\\' OR email LIKE ? ESCAPE '\\')
           ${keep.length ? `AND id NOT IN (${placeholders(keep.length)})` : ''}
         ORDER BY username ASC
         LIMIT 20
       `)
-      .bind(`%${keyword}%`, `%${keyword}%`, ...keep)
+      .bind(`%${escapeLike(keyword)}%`, `%${escapeLike(keyword)}%`, ...keep)
       .all()
 
     return {

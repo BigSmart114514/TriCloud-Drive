@@ -66,6 +66,32 @@ export function fakeLink(seed) {
   return String(seed).padStart(32, '0')
 }
 
+/**
+ * 开一个**内存** sqlite，返回极简的 all/run/get/close。
+ *
+ * 跟 createShareFixture 的区别：那个复制 data.sqlite 到临时目录并清表，
+ * 适合测业务；这个什么都不要，只要一个能执行 SQL 的库 —— 用来验证
+ * 「这条 SQL 在真 sqlite 上到底返回什么」，比如 LIKE 的 ESCAPE 语义。
+ * 内存库不碰任何文件。
+ */
+export async function openRawDb() {
+  const raw = await new Promise((res, rej) => {
+    const d = new sqlite3.Database(':memory:', (e) => (e ? rej(e) : res(d)))
+  })
+  // 注意顺序：sqlite3 单句是顺序执行的，serialize 保证下面几条排队，
+  // 否则并发跑语句会串（项目硬约束，见 README）。
+  raw.serialize()
+  return {
+    raw,
+    all: (q, p = []) =>
+      new Promise((res, rej) => raw.all(q, p, (e, r) => (e ? rej(e) : res(r || [])))),
+    run: (q, p = []) =>
+      new Promise((res, rej) => raw.run(q, p, (e) => (e ? rej(e) : res()))),
+    get: async (q, p = []) => (await this.all(q, p))[0] ?? null,
+    close: () => new Promise((res) => raw.close(res)),
+  }
+}
+
 export async function createShareFixture() {
   const dir = mkdtempSync(join(tmpdir(), 'share-fixture-'))
   const path = join(dir, 'test.sqlite')

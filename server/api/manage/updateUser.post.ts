@@ -2,6 +2,7 @@
 import { getMethod, readBody } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
 import { requireAdmin } from '~~/server/utils/auth-middleware'
+import { dbConnectionError } from '~~/types/error'
 
 function toBool(v: any) {
   return v === true || v === 1 || v === '1'
@@ -36,7 +37,7 @@ export default defineEventHandler(async (event) => {
     }
 
     const db = getDb(event)
-    if (!db) throw createError({ statusCode: 500, message: '数据库连接失败' })
+    if (!db) throw dbConnectionError
 
     // 角色校验。原来这里只有 requireAdmin，然后直接 UPDATE，**不看目标是谁、
     // 也不看请求想把谁变成什么角色**，于是有两个提权口：

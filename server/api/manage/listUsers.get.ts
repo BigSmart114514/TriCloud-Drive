@@ -2,6 +2,7 @@
 import { defineEventHandler, getQuery } from 'h3';
 import { getDb } from '~~/server/utils/db-adapter';
 import { requireAdmin } from '~~/server/utils/auth-middleware';
+import { escapeLike } from '~~/server/utils/escape';
 
 // 定义用户接口
 // 与 users 表同步。canChangePassword 原先漏在这里，导致 UserEditDialog
@@ -58,10 +59,15 @@ export default defineEventHandler(async (event) => {
     const countParams = []; // 用于计数查询的参数
     
     if (queryParams.username) {
-      sql += ` AND username LIKE ?`;
-      countSql += ` AND username LIKE ?`;
-      params.push(`%${queryParams.username}%`);
-      countParams.push(`%${queryParams.username}%`);
+      // ESCAPE 必须和 escapeLike 配对：只转义不声明的话，反斜杠会被当普通字符匹配
+      // String() 是必需的：getQuery 的值类型是 QueryValue 联合（string | string[] | …），
+      // escapeLike 只接受 string。原来靠模板字面量隐式转换，现在不行。
+      // 数组会变成 "a,b" —— 恰好也是我们想要的（username 里本来就没逗号）。
+      const pattern = `%${escapeLike(String(queryParams.username))}%`;
+      sql += ` AND username LIKE ? ESCAPE '\\'`;
+      countSql += ` AND username LIKE ? ESCAPE '\\'`;
+      params.push(pattern);
+      countParams.push(pattern);
     }
     
     // 添加排序

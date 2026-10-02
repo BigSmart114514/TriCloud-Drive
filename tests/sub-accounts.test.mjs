@@ -860,19 +860,35 @@ describe('/accounts 列表只列 parent_id = 自己', () => {
     assert.ok(/poolUsage\(db, meId, 'usedDownload'\)/.test(src), '下载池的归属传错了')
   })
 
-  test('【已知缺陷】用户名搜索未转义 LIKE 通配符', async () => {
-    // 与 share/candidates.get.ts、manage/listUsers.get.ts 同一个老问题：
-    // `%${username}%` 直接拼进 LIKE，而 LIKE 里的 % 和 _ 是通配符。
-    // 所以搜 '%' 会列出全部孩子，而不是「名字里含 % 的孩子」。
-    // 这不是本次引入的，是既有模式；记在这里以免被当成新 bug 重复报。
-    const LIKE_SQL = 'SELECT id FROM users WHERE parent_id = ? AND username LIKE ?'
-    const all = (await fx.all(LIKE_SQL, [BOSS, '%%%'])).map((r) => Number(r.id))
-    assert.deepEqual(all.sort((a, b) => a - b), [KID, SIB].sort((a, b) => a - b),
-      '搜 %% 竟然精确匹配了 —— 说明实现里做了转义，这条可以改成正式回归测试')
-    assert.ok(
-      read('server/api/accounts/index.get.ts').includes('%${q.username}%'),
-      '没看到未转义的拼接 —— 那说明上面那条行为已经变了，本条的注释要一起改'
+  test('用户名搜索会转义 LIKE 通配符（原先的缺陷，已修）', async () => {
+    // **这条原先是「【已知缺陷】」测试**，记的是 `%${username}%` 不转义的老问题。
+    // 现在三个 users 搜索接口都补上了 escapeLike + ESCAPE，所以把它转成正式回归测试。
+    //
+    // 下面两条是行为证据：在真 sqlite 上，裸拼 `%%%` 会匹配全部孩子，
+    // 转义后的模式只匹配名字里**真的**含 % 的孩子。KID/SIB 的名字里没有 %，
+    // 所以转义后应该是空集 —— 这就是「修复生效」的证据。
+    const rawLike = await fx.all(
+      'SELECT id FROM users WHERE parent_id = ? AND username LIKE ?',
+      [BOSS, '%%%']
     )
+    assert.equal(rawLike.length, 2, '裸拼接 %% 应当匹配到全部两个孩子（这是修复前的行为）')
+
+    const { escapeLike } = await import('../server/utils/escape.ts')
+    const fixedLike = await fx.all(
+      "SELECT id FROM users WHERE parent_id = ? AND username LIKE ? ESCAPE '\\'",
+      [BOSS, `%${escapeLike('%')}%`]
+    )
+    assert.deepEqual(fixedLike, [], '转义后搜 %% 不该匹配到任何孩子')
+
+    // 并列断言：源码里两件事必须同时成立 —— 过了 escapeLike，且声明了 ESCAPE。
+    // 只做其中一件是另一个错（转义但不声明 ESCAPE 的话，反斜杠会被当普通字符）。
+    const src = codeOnly(read('server/api/accounts/index.get.ts'))
+    assert.ok(/escapeLike\(q\.username\)/.test(src), '搜索模式没有过 escapeLike')
+    assert.ok(/username LIKE \? ESCAPE/.test(src), 'LIKE 没有声明 ESCAPE')
+    // 顺带钉住：同文件里 LIKE 与 ESCAPE 的数量一一对应，防止漏掉其中一处
+    const likes = (src.match(/LIKE \?/g) ?? []).length
+    const escapes = (src.match(/LIKE \? ESCAPE/g) ?? []).length
+    assert.equal(escapes, likes, `${likes} 处 LIKE 只有 ${escapes} 处声明了 ESCAPE`)
   })
 })
 

@@ -12,13 +12,14 @@ import { requireAuth } from '~~/server/utils/auth-middleware'
 import { hashPassword, validateEmail, validatePassword, validateUsername } from '~~/server/utils/auth'
 import { checkNonNegative, GATE_MESSAGES, subAccountGate } from '~~/server/utils/account'
 import { isSqlDateTimeString } from '~~/server/utils/time'
+import { dbConnectionError } from '~~/types/error'
 
 export default defineEventHandler(async (event) => {
   // 鉴权必须在读 body 之前
   const me = await requireAuth(event)
   const meId = Number(me.userId)
   const db = getDb(event)
-  if (!db) throw createError({ statusCode: 500, message: '数据库连接失败' })
+  if (!db) throw dbConnectionError
 
   const gate = await subAccountGate(db, meId)
   if (!gate.allowed) {

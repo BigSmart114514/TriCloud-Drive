@@ -4,6 +4,7 @@ import crypto from 'crypto'
 import { UserService, FileService, FolderService } from '~~/server/utils/db'
 import { PERM_WRITE } from '~~/types/share'
 import { isExpired } from '~~/server/utils/time'
+import { dbConnectionError } from '~~/types/error'
 
 export default defineEventHandler(async (event) => {
   // 处理 CORS 预检
@@ -43,7 +44,7 @@ export default defineEventHandler(async (event) => {
     
 
     if (!db) {
-      throw createError({ statusCode: 500, message: '数据库连接失败' })
+      throw dbConnectionError
     }
     const userService = new UserService(db)
     const fileService = new FileService(db)

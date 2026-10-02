@@ -2,6 +2,7 @@
 import { getCookie } from 'h3'
 import { verifyToken } from './auth'
 import { getDb } from '~~/server/utils/db-adapter'
+import { dbConnectionError } from '~~/types/error'
 
 export interface AuthenticatedUser {
   userId: number
@@ -56,7 +57,7 @@ export async function requireAuth(event: any, opts?: { withUser?: boolean }): Pr
   // 需要更多信息时查库
   const db = getDb(event)
   if (!db) {
-    throw createError({ statusCode: 500, message: '数据库连接失败' })
+    throw dbConnectionError
   }
   const row = await db
     .prepare('SELECT id, username, email, IsAdmin, IsSuperAdmin, canChangePassword, password_hash FROM users WHERE id = ?')
@@ -222,7 +223,7 @@ async function resolveIdentity(
   // 否则普通管理员只要不传 useAdmin、只传 targetUserId 就能绕过它。
   if (adminMode && !me.isSuperAdmin) {
     const db = getDb(event)
-    if (!db) throw createError({ statusCode: 500, message: '数据库连接失败' })
+    if (!db) throw dbConnectionError
     const row = await db
       .prepare('SELECT IsSuperAdmin FROM users WHERE id = ?')
       .bind(targetUserId)

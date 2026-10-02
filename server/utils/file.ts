@@ -3,19 +3,12 @@ import { DEFAULT_SHARE_MODE } from '~~/types/share'
 import { FileRecord } from '~~/types/files'
 import { GeneralResponse } from '~~/types/auth'
 import { skipAndOverwriteError, ServerError } from '~~/types/error'
+import { escapeLike, escapeRegExp } from '~~/server/utils/escape'
 
 export function splitName(filename: string): { base: string, ext: string } {
     const i = filename.lastIndexOf('.')
     if (i <= 0) return { base: filename, ext: '' }
     return { base: filename.slice(0, i), ext: filename.slice(i) }
-}
-
-export function escapeLike(input: string): string {
-    return input.replace(/([%_\\])/g, '\\$1')
-}
-
-export function escapeRegExp(input: string): string {
-    return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 export async function resolveUniqueFilename(db: Database, userId: number, folderId: number | null, desired: string): Promise<{ name: string, base: string, ext: string, nextN: number }> {

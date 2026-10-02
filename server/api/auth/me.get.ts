@@ -1,6 +1,7 @@
 import { UserService } from '~~/server/utils/db'
 import { requireAuth } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
+import { dbConnectionError } from '~~/types/error'
 export default defineEventHandler(async (event) => {
   try {
     // 验证用户认证
@@ -10,10 +11,7 @@ export default defineEventHandler(async (event) => {
     //const db = event.context.cloudflare?.env?.DB
     const db = getDb(event)
     if (!db) {
-      throw createError({
-        statusCode: 500,
-        message: '数据库连接失败'
-      })
+      throw dbConnectionError
     }
 
     const userService = new UserService(db)

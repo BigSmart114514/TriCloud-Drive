@@ -8,13 +8,15 @@ import { getQuery } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
 import { requireAuth } from '~~/server/utils/auth-middleware'
 import { poolUsage } from '~~/server/utils/sub-account'
+import { escapeLike } from '~~/server/utils/escape'
 import { isExpired } from '~~/server/utils/time'
+import { dbConnectionError } from '~~/types/error'
 
 export default defineEventHandler(async (event) => {
   const me = await requireAuth(event)
   const meId = Number(me.userId)
   const db = getDb(event)
-  if (!db) throw createError({ statusCode: 500, message: '数据库连接失败' })
+  if (!db) throw dbConnectionError
 
   const q = getQuery(event) as { username?: string }
 
@@ -25,10 +27,10 @@ export default defineEventHandler(async (event) => {
              usedStorage, usedDownload, maxDownload
       FROM users
       WHERE parent_id = ?
-        ${q.username ? 'AND username LIKE ?' : ''}
+        ${q.username ? "AND username LIKE ? ESCAPE '\\'" : ''}
       ORDER BY created_at DESC
     `)
-    .bind(...(q.username ? [meId, `%${q.username}%`] : [meId]))
+    .bind(...(q.username ? [meId, `%${escapeLike(q.username)}%`] : [meId]))
     .all()
 
   const children = (rows?.results ?? []).map((r: any) => ({

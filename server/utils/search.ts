@@ -2,10 +2,10 @@
 //
 // 抽成独立文件而不是塞进 db.ts 的 FolderService / FileService，有两个原因：
 //
-//   1. db.ts 不能 import escapeLike —— server/utils/file.ts 已经 import 了
-//      db.ts（用具 Database 类型 + FolderService），反向再引会成环。
-//      而 LIKE 模式**必须**转义：% 和 _ 是通配符，不转义的话搜 "50%" 会
-//      命中 "50abc"，搜 "_" 会命中所有单字符名字。
+//   1. LIKE 模式**必须**转义（escapeLike，见 server/utils/escape.ts）：% 和 _
+//      是通配符，不转义的话搜 "50%" 会命中 "50abc"，搜 "_" 会命中所有单字符名字。
+//      escapeLike 原先住在 file.ts，而 file.ts import 了 db.ts，反向再引会成环；
+//      现在挪进自己的模块，依赖是单向的。
 //   2. 搜索是横切：它同时读 folders 和 files，还要左连 users 取属主名，
 //      不属于任何一侧的 service。
 //
@@ -36,7 +36,7 @@
 // 路径停在断点，而不是把别人的目录名带出来。
 
 import type { Database } from '~~/server/utils/db'
-import { escapeLike } from '~~/server/utils/file'
+import { escapeLike } from '~~/server/utils/escape'
 import {
   collectHits,
   fileRelDir,

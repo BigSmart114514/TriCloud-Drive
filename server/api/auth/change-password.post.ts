@@ -3,6 +3,7 @@ import { readBody, createError } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
 import { getMeAndTargetStrict } from '~~/server/utils/auth-middleware'
 import { validatePassword, verifyPassword, hashPassword } from '~~/server/utils/auth'
+import { dbConnectionError } from '~~/types/error'
 
 /**
  * 改密码。两条路径：
@@ -36,10 +37,7 @@ export default defineEventHandler(async (event) => {
   const db = getDb(event)
 
   if (!db) {
-    throw createError({
-      statusCode: 500,
-      message: '数据库连接失败'
-    })
+    throw dbConnectionError
   }
   const userService = new UserService(db)
   const user = await userService.getUserById(Number(authUserId))

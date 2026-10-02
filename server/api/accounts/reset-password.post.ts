@@ -11,12 +11,13 @@ import { getDb } from '~~/server/utils/db-adapter'
 import { requireAuth } from '~~/server/utils/auth-middleware'
 import { requireOwnChild } from '~~/server/utils/account'
 import { hashPassword, validatePassword } from '~~/server/utils/auth'
+import { dbConnectionError } from '~~/types/error'
 
 export default defineEventHandler(async (event) => {
   const me = await requireAuth(event)
   const meId = Number(me.userId)
   const db = getDb(event)
-  if (!db) throw createError({ statusCode: 500, message: '数据库连接失败' })
+  if (!db) throw dbConnectionError
 
   const body = await readBody(event).catch(() => null)
   const id = Number(body?.id)

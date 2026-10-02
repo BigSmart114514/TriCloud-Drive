@@ -22,9 +22,15 @@ function stripComments(src) {
   return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '')
 }
 
-// 复刻 server/utils/file.ts:13 的 escapeLike。
-// 注意 '\\$1' 在 JS 字面量里就是「反斜杠 + 捕获组」，与源码逐字一致。
-const escapeLike = (input) => input.replace(/([%_\\])/g, '\\$1')
+// escapeLike 直接 import 服务端真函数（server/utils/escape.ts），不手抄。
+//
+// 以前这里是复刻一份 `input.replace(/([%_\\])/g, '\\$1')`，注释还特意说明
+// 「与源码逐字一致」—— 那测的是「我抄对了没有」。真函数是个纯字符串函数，
+// 没有任何依赖，所以挂上 resolve hook 就能直接 import，没有理由再抄。
+//
+// 注意上面那段关于「SQL 是复刻」的说明仍然成立：search.ts 里的 SQL 依赖
+// Database 类型和 db.ts，import 不了，所以那部分还是复刻。
+const escapeLike = await import('../server/utils/escape.ts').then((m) => m.escapeLike)
 
 const likePattern = (keyword) => `%${escapeLike(keyword)}%`
 
