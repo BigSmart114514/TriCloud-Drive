@@ -1,4 +1,5 @@
 import { ref, readonly, type Ref } from 'vue'
+import { withScopeRef } from '~/utils/scope'
 import COS from 'cos-js-sdk-v5'
 
 interface UploadCredentials {
@@ -63,8 +64,7 @@ export const useFileUpload = (options?: {
       overwrite: !!params.overwrite,
       skipIfExist: !!params.skip
     }
-    if (tRef?.value) body.targetUserId = tRef.value
-        if (useAdmin?.value) body.useAdmin = 1
+    withScopeRef(body, tRef, useAdmin)
     const response = await $fetch<{ success: boolean; data: UploadConfig }>('/api/upload/credentials', {
       method: 'POST',
       body
@@ -108,8 +108,7 @@ export const useFileUpload = (options?: {
           folderId,
           overwrite
         }
-        if (tRef?.value) body.targetUserId = tRef.value
-        if (useAdmin?.value) body.useAdmin = 1
+        withScopeRef(body, tRef, useAdmin)
         await $fetch('/api/files/save', { method: 'POST', body })
         return config.fileKey
       }
@@ -157,8 +156,7 @@ export const useFileUpload = (options?: {
           folderId,
           overwrite
         }
-        if (tRef?.value) body.targetUserId = tRef.value
-        if (useAdmin?.value) body.useAdmin = 1
+        withScopeRef(body, tRef, useAdmin)
         await $fetch('/api/files/save', { method: 'POST', body })
       }
       //console.log(fileUrl)

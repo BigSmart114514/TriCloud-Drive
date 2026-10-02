@@ -1,3 +1,4 @@
+import { withScope } from '~/utils/scope'
 import type { FileRecord } from '~/types/files.ts'
 
 export const FilesService = {
@@ -16,8 +17,7 @@ export const FilesService = {
     // useAdmin 独立传：首页选人浏览要「分享权限」视角（不传），
     // /manage/files 要「管理权限」视角（传 true）。服务端据此决定
     // authUserId 是我还是属主。与 targetUserId 无关，别绑在一起。
-    if (targetUserId) params.targetUserId = targetUserId
-    if (useAdmin) params.useAdmin = 1
+    withScope(params, { targetUserId, useAdmin })
     if (link) params.link = link
     return await $fetch<{
       success: boolean
@@ -52,8 +52,7 @@ export const FilesService = {
     link?: string | null
   ) {
     const body: any = { fileKey: file.fileKey, filename: file.filename }
-    if (targetUserId) body.targetUserId = targetUserId
-    if (useAdmin) body.useAdmin = 1
+    withScope(body, { targetUserId, useAdmin })
     return await $fetch<{ success: boolean; data: { downloadUrl: string; filename: string } }>(
       '/api/files/download',
       { method: 'POST', body, query: link ? { link } : undefined }
@@ -62,8 +61,7 @@ export const FilesService = {
 
   async delete(id: number, targetUserId?: number | null, useAdmin?: boolean) {
     const body: any = { fileId: id }
-    if (targetUserId) body.targetUserId = targetUserId
-    if (useAdmin) body.useAdmin = 1
+    withScope(body, { targetUserId, useAdmin })
     return await $fetch<{ success: boolean; statusMessage?: string }>('/api/files/delete', {
       method: 'POST',
       body
@@ -72,8 +70,7 @@ export const FilesService = {
 
   async rename(id: number, newName: string, targetUserId?: number | null, useAdmin?: boolean) {
     const body: any = { fileId: id, newName }
-    if (targetUserId) body.targetUserId = targetUserId
-    if (useAdmin) body.useAdmin = 1
+    withScope(body, { targetUserId, useAdmin })
     return await $fetch<{ success: boolean; file?: FileRecord; statusMessage?: string }>('/api/files/rename', {
       method: 'POST',
       body

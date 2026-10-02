@@ -1,3 +1,4 @@
+import { withScope } from '~/utils/scope'
 export const CopyService = {
   /**
    * `link` 走 query：分享链接的匿名放行由中间件判定，中间件只读 query、
@@ -18,8 +19,7 @@ export const CopyService = {
     link?: string | null
   ) {
     const body: any = { targetFolderId, folderIds, fileIds, overwrite: overwriteExisting, skipIfExist: skipExisting }
-    if (targetUserId) body.targetUserId = targetUserId
-    if (useAdmin) body.useAdmin = 1
+    withScope(body, { targetUserId, useAdmin })
     return $fetch('/api/copy/paste', {
       method: 'POST',
       body,
