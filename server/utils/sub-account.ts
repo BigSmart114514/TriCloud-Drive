@@ -27,7 +27,6 @@
 //
 // 每层各判各的：**先过期，再限额**。主账号过期 → 整条链冻住（子账户额度
 // 还在，但一样用不了）；子账户自己过期 → 只冻它自己，不影响兄弟。
-import { createError } from 'h3'
 import { isExpired, nowSqlString } from '~~/server/utils/time'
 
 /** 一次预占失败时的原因。用来选文案 —— 「过期」和「不够」要分开说。 */
@@ -236,14 +235,6 @@ export async function reserveDownload(
   return ex ? 'download_self' : 'download_parent'
 }
 
-/** 回滚一次预占（失败路径专用）。链长 2 时两层都要退。 */
-export async function releaseStorage(db: any, chain: QuotaChain, bytes: number): Promise<void> {
-  await db
-    .prepare('UPDATE users SET usedStorage = COALESCE(usedStorage, 0) - ? WHERE id = ?')
-    .bind(bytes, chain.selfId)
-    .run()
-}
-
 export async function releaseDownload(db: any, chain: QuotaChain, bytes: number): Promise<void> {
   await db
     .prepare('UPDATE users SET usedDownload = COALESCE(usedDownload, 0) - ? WHERE id = ?')
@@ -327,25 +318,4 @@ export async function precheckDownload(
   }
 
   return { allowed: true, fail: null, used: u, max: m, unlimited: m <= 0 }
-}
-
-/** 预占失败时抛 403，文案由本函数按失败原因选。 */
-export function throwQuotaError(fail: QuotaFail, detail?: { poolParentName?: string | null }): never {
-  const pool = detail?.poolParentName ? `「${detail.poolParentName}」的` : '主账号的'
-  switch (fail) {
-    case 'expired_self':
-      throw createError({ statusCode: 403, message: '账号已过期，无法继续操作' })
-    case 'expired_parent':
-      throw createError({ statusCode: 403, message: `账号已过期：${pool}套餐已过期，无法继续操作` })
-    case 'storage_self':
-      throw createError({ statusCode: 403, message: '存储空间不足，无法继续操作' })
-    case 'storage_parent':
-      throw createError({ statusCode: 403, message: `存储空间不足：${pool}共享容量已用尽` })
-    case 'download_self':
-      throw createError({ statusCode: 403, message: '下载额度不足：下载该文件将超过您的下载流量上限' })
-    case 'download_parent':
-      throw createError({ statusCode: 403, message: `下载额度不足：${pool}共享下载流量已用尽` })
-    default:
-      throw createError({ statusCode: 403, message: '额度不足' })
-  }
 }

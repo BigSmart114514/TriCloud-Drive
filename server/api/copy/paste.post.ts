@@ -18,7 +18,6 @@ import { skipAndOverwriteError } from '~~/types/error'
 import { quotaFailMessage } from '~~/server/utils/quota'
 import {
   chainExpired,
-  releaseStorage,
   resolveQuotaChain,
   reserveStorage
 } from '~~/server/utils/sub-account'
