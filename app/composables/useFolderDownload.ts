@@ -4,7 +4,7 @@ import { FoldersService } from '~/services/folders.service'
 import { FilesService } from '~/services/files.service'
 import { createZipSink } from '~/utils/zipper'
 import { formatFileSize } from '~/utils/format'
-import type { FolderRecord } from '~/types/file-browser'
+import type { FolderRecord } from '~/types/files'
 
 export function useFolderDownload(options?: {
   targetUserId?: Ref<number | null | undefined>

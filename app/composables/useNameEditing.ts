@@ -2,7 +2,7 @@
 import { type Ref } from 'vue'
 import { FilesService } from '~/services/files.service'
 import { FoldersService } from '~/services/folders.service'
-import type { FolderRecord, FileRecord } from '~/types/file-browser'
+import type { FolderRecord, FileRecord } from '~/types/files'
 
 export function useNameEditing(
   folders: Ref<FolderRecord[]>,

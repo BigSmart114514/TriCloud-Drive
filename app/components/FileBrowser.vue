@@ -319,7 +319,7 @@ import FilePreviewer from '~/components/FilePreviewer.vue'
 import ShareDialog from '~/components/ShareDialog.vue'
 import type { FileListFile, FileListFolder } from '~~/types/file-list'
 import type { SearchFileHit, SearchPathNode } from '~/services/search.service'
-import type { FileRecord, FolderRecord } from '~~/types/file-browser'
+import type { FileRecord, FolderRecord } from '~~/types/files'
 import {
   ArrowDownTrayIcon,
   ArrowLeftIcon,
@@ -428,8 +428,12 @@ const showPaste = computed(() => {
 /** 拖拽上传要一个可写的当前目录 */
 const canDropUpload = computed(() => canWriteHere.value && !isFlatSharedList.value)
 const selectedItems = computed(() => {
-  const fs = (folders.value as any[]).filter((f) => selectedFolderIds.value.has(Number(f.id)))
-  const fl = (files.value as any[]).filter((f) => selectedFileIds.value.has(Number(f.id)))
+  // 以前这里是 `(folders.value as any[])`：因为 composable 要的
+  // FileRecord 来自 types/files.ts，而 FileList.vue 给的是 FileListFile，
+  // 两份不同源的类型逼出了那两个 any。types/files.ts 合并之后，
+  // FileListFile 已经是 FileRecord 的子集（多的只是角标字段），可以直接合。
+  const fs = folders.value.filter((f) => selectedFolderIds.value.has(Number(f.id)))
+  const fl = files.value.filter((f) => selectedFileIds.value.has(Number(f.id)))
   return [...fs, ...fl]
 })
 /**
@@ -634,6 +638,13 @@ const conflictStrategy = computed<'overwrite' | 'skip' | 'rename'>({
 })
 const mobileMoreOpen = ref(false)
 
+// composable 要的是 FolderRecord/FileRecord，而 FileList 发的是
+// FileListFolder/FileListFile。两边字段基本一致，差的只是：
+//   id:        FileListId（string | number）对 number
+//   createdAt: 可选、可 null            对必填 string
+// composable 里一律用 Number(x.id) 取、从不直接依赖 createdAt，所以这个
+// 放宽是安全的。这里显式写成两个函数而不是散在 14 个回调里，是为了让
+// 「哪里做了这个放宽」有唯一落点。
 const asFolder = (folder: FileListFolder) => folder as unknown as FolderRecord
 const asFile = (file: FileListFile) => file as unknown as FileRecord
 const onNavigateFolder = (folder: FileListFolder) => {

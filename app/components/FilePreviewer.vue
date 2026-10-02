@@ -182,7 +182,7 @@ import { FilesService } from '~/services/files.service'
 import { useFileUpload } from '~/composables/useFileUpload'
 import { formatFileSize } from '~/utils/format'
 import { notify } from '~/utils/notify'
-import type { FileRecord } from '~~/types/file-browser'
+import type { FileRecord } from '~~/types/files'
 import type { ArchiveFileItem } from '~~/types/zip'
 import { NO_DOWNLOAD_MESSAGE } from '~~/types/share'
 

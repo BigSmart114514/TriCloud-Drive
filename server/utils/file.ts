@@ -54,7 +54,13 @@ export async function save(db: Database, file: FileRecord, overwrite: boolean | 
         throw skipAndOverwriteError
     }
     const folderId = file.folderId
+    // FileRecord.user_id 现在是可选的（前端拿到的行里没这个字段，见 types/files.ts
+    // 的注释）。但走到 save() 的记录一定是从 DB 读出来的，属主必然存在 ——
+    // 缺了就说明调用方传错了东西，直接抛错，别让它变成 undefined 流进 SQL。
     const userId = file.user_id
+    if (userId == null) {
+        throw createError({ statusCode: 500, message: '保存文件时缺少 user_id' })
+    }
     // 将 0/undefined 视为根目录（NULL）
     const folderIdVal =
         Number.isFinite(folderId) && Number(folderId) > 0 ? Number(folderId) : null
