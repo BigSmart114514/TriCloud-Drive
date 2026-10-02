@@ -1,4 +1,3 @@
-import { SHARE_INHERIT, SHARE_SHARED } from '~~/types/share'
 import type { ShareMode } from '~~/types/share'
 
 export interface ShareTargetType {
@@ -155,11 +154,12 @@ export const ShareService = {
   /**
    * 分享管理列表：我设置过分享的全部文件与文件夹（默认态的反面）。
    * 只涉及自己，服务端不接受任何用户参数。
+   *
+   * 原先有个 `limit` 形参，但唯一调用方（pages/shares.vue）从不传 —— 服务端
+   * 自己有默认上限，前端再传一遍只是多一个没人用的入口，去掉了。
    */
-  async settings(limit?: number) {
-    return await $fetch<ShareSettingsResult>('/api/share/settings', {
-      params: limit ? { limit } : undefined
-    })
+  async settings() {
+    return await $fetch<ShareSettingsResult>('/api/share/settings')
   },
 
   /**
@@ -177,16 +177,7 @@ export const ShareService = {
     })
   },
 
-  /** 一个目录的祖先链（根在前）。首页据此重建面包屑，/?at=<id> 用 */
-  async lineage(folderId: number) {
-    return await $fetch<{
-      success: boolean
-      folderId: number
-      lineage: Array<{ id: number; name: string }>
-    }>('/api/folders/lineage', { params: { id: folderId } })
-  },
-
-  async list(target: ShareTargetType) {
+    async list(target: ShareTargetType) {
     return await $fetch<ShareState & { success: boolean; targetId: number; ownerId: number }>(
       '/api/share/list',
       { params: scopeParams(target) }
@@ -275,5 +266,3 @@ export const ShareService = {
     }>('/api/share/link/resolve', { params: { link } })
   }
 }
-
-export { SHARE_INHERIT, SHARE_SHARED }

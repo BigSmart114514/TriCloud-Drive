@@ -19,7 +19,11 @@ export default defineNuxtRouteMiddleware(async (to) => {
     }
   }
 
-  const whitelist = new Set(['/', '/login', '/old/loginold', '/old/registerold', '/register'])
+  // 白名单只留现役页面。app/pages/old/ 下的 loginold / registerold 已删除
+  // （功能被 login.vue / register.vue 取代，且全项目没有任何入口链接它们），
+  // 所以这里原先那两项一并去掉 —— 留着会让已登录用户访问 /old/* 时不被重定向，
+  // 而那些路由已经 404，属于白名单里的幽灵条目。
+  const whitelist = new Set(['/', '/login', '/register'])
 
   // 未登录且不在白名单 => 去登录
   if (!auth.isLoggedIn.value && !whitelist.has(to.path)) {
@@ -27,7 +31,7 @@ export default defineNuxtRouteMiddleware(async (to) => {
   }
 
   // 可选：已登录就别进登录页
-  if (auth.isLoggedIn.value && whitelist.has(to.path) && (to.path === '/login' || to.path === '/old/loginold')) {
+  if (auth.isLoggedIn.value && whitelist.has(to.path) && to.path === '/login') {
     return navigateTo('/')
   }
 

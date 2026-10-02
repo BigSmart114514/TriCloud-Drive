@@ -27,7 +27,6 @@ export function useBulkActions(
   const link = () => options?.link?.value || null
   const bulkDeleting = ref(false)
   const bulkDownloading = ref(false)
-  const downloadingFolderId = ref<number | null>(null)
 
   const downloadFile = async (file: FileRecord) => {
     // 服务端不给没有下载位的人 fileKey（那是 COS 真实路径，见 types/share.ts
@@ -187,7 +186,7 @@ export function useBulkActions(
   }
 
   return {
-    bulkDeleting, bulkDownloading, downloadingFolderId,
+    bulkDeleting, bulkDownloading,
     downloadFile, deleteFile, deleteFolder,
     deleteSelected, downloadSelected
   }

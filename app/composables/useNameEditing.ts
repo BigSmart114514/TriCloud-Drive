@@ -85,9 +85,10 @@ export function useNameEditing(
     }
   }
 
+  // keepExtIfNone / validateName 只在本 composable 内部用（renameFile 与
+  // createFolder/renameFolder 都调它们），所以不放进返回值 —— 放进来的话
+  // 每个消费方都能看到，却只有这里用。
   return {
-    keepExtIfNone,
-    validateName,
     createFolder,
     renameFolder,
     renameFile

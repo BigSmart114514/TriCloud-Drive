@@ -44,11 +44,14 @@ export function useDualSelection(folders: Ref<FolderRecord[]>, files: Ref<FileRe
     if (masterCheckboxRef.value) masterCheckboxRef.value.indeterminate = v
   }, { immediate: true })
 
+  // totalItemCount / isIndeterminate 只服务于内部那三个 computed 与
+  // indeterminate 的 watch，外层拿到它们也没用 —— 主复选框的 indeterminate
+  // 由本 composable 自己写进 DOM（masterCheckboxRef），不需要调用方再传回去。
   return {
     masterCheckboxRef,
     selectedFolderIds, selectedFileIds,
-    totalItemCount, selectedCount,
-    isAllSelected, isIndeterminate,
+    selectedCount,
+    isAllSelected,
     clearSelection, reconcileSelection,
     toggleSelectAll, toggleSelectFolder, toggleSelectFile
   }

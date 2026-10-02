@@ -107,12 +107,7 @@ export const useShareLinks = () => {
     writeRaw(next)
   }
 
-  const hasLink = (raw: any) => {
-    const token = sanitizeToken(raw)
-    return !!token && tokens.value.includes(token)
-  }
-
-  /**
+    /**
    * 校验一条链接，并**按需**把它从收藏里删掉。
    *
    * ## 唯一的删除依据是 `valid === false`
@@ -162,9 +157,6 @@ export const useShareLinks = () => {
     hydrateLinks,
     addLink,
     removeLink,
-    hasLink,
-    verifyLink,
-    SHARE_LINKS_MAX,
-    SHARE_LINK_TOKEN_BYTES
+    verifyLink
   }
 }

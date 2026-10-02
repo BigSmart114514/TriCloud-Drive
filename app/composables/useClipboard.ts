@@ -77,13 +77,7 @@ export function useClipboard(
   const clipboardActionLabel = computed(() =>
     !clipboard.value ? '' : (clipboard.value.mode === 'cut' ? '已剪贴' : '已复制')
   )
-  const pasteBtnText = computed(() => {
-    if (!clipboard.value) return '粘贴'
-    if (pasting.value) return clipboard.value.mode === 'cut' ? '移动中...' : '复制中...'
-    return '粘贴'
-  })
-
-  const setClipboard = (mode: 'cut' | 'copy', folderIds: number[], fileIds: number[]) => {
+    const setClipboard = (mode: 'cut' | 'copy', folderIds: number[], fileIds: number[]) => {
     clipboard.value = {
       mode,
       folderIds,
@@ -160,7 +154,6 @@ export function useClipboard(
     hasClipboard,
     clipboardCount,
     clipboardActionLabel,
-    pasteBtnText,
     clipSelection,
     copySelection,
     clipFolder,
