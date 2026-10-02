@@ -115,13 +115,14 @@ async function onSearchPick(payload: { ownerId: number; path: SearchPathNode[]; 
   drawerOpen.value = false
 }
 
-// 搜索词变化即查询，去抖避免逐字符打接口；回车可立即查
-let timer: ReturnType<typeof setTimeout> | undefined
-watch(userSearch, () => {
-  clearTimeout(timer)
-  timer = setTimeout(fetchUsers, 250)
+// 搜索词变化即查询，去抖避免逐字符打接口；回车可立即查。
+// 序号守卫由 useDebounced 白得（原先只有 setTimeout + clearTimeout，慢的旧请求
+// 会覆盖新结果）。见 app/composables/useDebounced.ts。
+const { schedule: scheduleUserSearch } = useDebounced<void>({
+  delay: 250,
+  run: () => fetchUsers()
 })
-onBeforeUnmount(() => clearTimeout(timer))
+watch(userSearch, () => scheduleUserSearch())
 
 await fetchUsers()
 </script>

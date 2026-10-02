@@ -120,6 +120,7 @@
 
 import { useRouter } from 'vue-router'
 import { toMessage } from '~/utils/notify'
+import { isStrongPassword, PASSWORD_RULE_TEXT } from '~/utils/password'
 
 useHead({ title: '修改密码' })
 const router = useRouter()
@@ -148,8 +149,11 @@ const validate = () => {
   if (!form.currentPassword || !form.newPassword || !form.confirmPassword) {
     return '请填写所有字段'
   }
-  if (form.newPassword.length < 8) {
-    return '新密码至少 8 位'
+  // 强度规则与服务端 validatePassword 一致（app/utils/password.ts 是同一套）。
+  // 原来这里只查长度，于是「自己改密码」能填一个纯 8 位数字，提交后被服务端
+  // 400 —— 而管理员重置密码时却被前端拦着不让填。同一个规则两种待遇。
+  if (!isStrongPassword(form.newPassword)) {
+    return `新密码${PASSWORD_RULE_TEXT}`
   }
   if (form.newPassword === form.currentPassword) {
     return '新密码不能与当前密码相同'

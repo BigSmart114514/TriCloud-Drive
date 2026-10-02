@@ -286,14 +286,16 @@ const subTitle = computed(() => {
  * 改到一半点别处就存进去了，没有「取消」这个概念。
  */
 const draft = ref<DbUser | null>(null)
-const confirmingDelete = ref(false)
+// 两段式删除确认的实现在 app/composables/useTwoStepConfirm.ts（与 AccountEditDialog 共用）
+const { confirming: confirmingDelete, reset: resetDeleteConfirm, click: clickDeleteConfirm } =
+  useTwoStepConfirm()
 
 watch(
   () => [props.open, props.user] as const,
   ([open, u]) => {
     if (!open || !u) {
       draft.value = null
-      confirmingDelete.value = false
+      resetDeleteConfirm()
       return
     }
     draft.value = {
@@ -305,25 +307,20 @@ watch(
       canSubAccount: !!u.canSubAccount,
       maxSubAccount: Number(u.maxSubAccount ?? 0)
     }
-    confirmingDelete.value = false
+    resetDeleteConfirm()
   },
   { immediate: true }
 )
 
 function close() {
   if (props.saving || props.deleting) return
-  confirmingDelete.value = false
+  resetDeleteConfirm()
   emit('close')
 }
 
 /** 两段式删除确认：第一次点变成「确认删除？」，再点才真发请求 */
 function onDeleteClick() {
-  if (!confirmingDelete.value) {
-    confirmingDelete.value = true
-    return
-  }
-  confirmingDelete.value = false
-  emit('delete')
+  clickDeleteConfirm(() => emit('delete'))
 }
 
 </script>

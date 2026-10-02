@@ -156,9 +156,18 @@ const searching = ref(false)
 const searched = ref(false)
 const truncated = ref(false)
 const inputRef = ref<HTMLInputElement | null>(null)
-let searchTimer: ReturnType<typeof setTimeout> | undefined
-/** 请求序号。去抖不等于串行 —— 慢的那次可能后到，把新的结果覆盖掉 */
-let requestId = 0
+/**
+ * 去抖 + 请求序号一体。去抖不等于串行 —— 慢的那次可能后到，把新的结果覆盖掉，
+ * 所以 run 拿到 seq 后必须自己判 `if (id !== latest()) return`。见 useDebounced。
+ */
+const {
+  schedule: scheduleSearch,
+  cancel: cancelSearch,
+  latest: latestSeq
+} = useDebounced<string>({
+  delay: 250,
+  run: (q, id) => runSearch(q, id)
+})
 
 const folderRows = computed<FileListFolder[]>(() =>
   folders.value.map((f) => ({
@@ -184,8 +193,7 @@ function close() {
 }
 
 function reset() {
-  clearTimeout(searchTimer)
-  requestId += 1
+  cancelSearch()
   keyword.value = ''
   folders.value = []
   files.value = []
@@ -201,10 +209,9 @@ function clearKeyword() {
 }
 
 function onInput() {
-  clearTimeout(searchTimer)
+  cancelSearch()
   const q = keyword.value.trim()
   if (!q) {
-    requestId += 1
     folders.value = []
     files.value = []
     searching.value = false
@@ -213,26 +220,29 @@ function onInput() {
     return
   }
   searching.value = true
-  searchTimer = setTimeout(() => void runSearch(q), 250)
+  scheduleSearch(q)
 }
 
-async function runSearch(q: string) {
-  const id = ++requestId
+/** 最近一次调用的序号。在飞的回调拿它跟自己手里的 id 比，对不上就放弃写状态 */
+const latest = () => latestSeq()
+
+// runSearch 由 useDebounced 调度；id 是本次调用的序号
+async function runSearch(q: string, id: number) {
   try {
     const res = await SearchService.search(q, props.scope)
     // 后到的旧请求直接丢弃：它的关键词已经不是输入框里那个了
-    if (id !== requestId) return
+    if (id !== latest()) return
     folders.value = res.folders ?? []
     files.value = res.files ?? []
     truncated.value = !!res.truncated
     if (res.limit) resultLimit.value = res.limit
   } catch {
-    if (id !== requestId) return
+    if (id !== latest()) return
     folders.value = []
     files.value = []
     truncated.value = false
   } finally {
-    if (id === requestId) {
+    if (id === latest()) {
       searching.value = false
       searched.value = true
     }
@@ -275,7 +285,6 @@ if (typeof window !== 'undefined') {
   window.addEventListener('keydown', onKeydown)
   onBeforeUnmount(() => {
     window.removeEventListener('keydown', onKeydown)
-    clearTimeout(searchTimer)
   })
 }
 </script>

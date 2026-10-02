@@ -120,14 +120,16 @@ const emit = defineEmits<{
 const displayName = computed(() => props.child?.username || props.child?.email || '未命名')
 
 const draft = ref<AccountDraft | null>(null)
-const confirmingDelete = ref(false)
+// 两段式删除确认的实现在 app/composables/useTwoStepConfirm.ts（与 UserEditDialog 共用）
+const { confirming: confirmingDelete, reset: resetDeleteConfirm, click: clickDeleteConfirm } =
+  useTwoStepConfirm()
 
 watch(
   () => [props.open, props.child] as const,
   ([open, c]) => {
     if (!open || !c) {
       draft.value = null
-      confirmingDelete.value = false
+      resetDeleteConfirm()
       return
     }
     draft.value = {
@@ -140,25 +142,20 @@ watch(
       usedDownload: formatBytes(c.usedDownload),
       expire_at: toDatetimeLocal(c.expireAt)
     }
-    confirmingDelete.value = false
+    resetDeleteConfirm()
   },
   { immediate: true }
 )
 
 function close() {
   if (props.saving || props.deleting) return
-  confirmingDelete.value = false
+  resetDeleteConfirm()
   emit('close')
 }
 
 /** 两段式删除确认，与 UserEditDialog 同一套：第一次变成「确认删除？」 */
 function onDeleteClick() {
-  if (!confirmingDelete.value) {
-    confirmingDelete.value = true
-    return
-  }
-  confirmingDelete.value = false
-  emit('delete')
+  clickDeleteConfirm(() => emit('delete'))
 }
 </script>
 

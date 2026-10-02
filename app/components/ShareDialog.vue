@@ -411,7 +411,17 @@ const keyword = ref('')
 const candidates = ref<ShareCandidate[]>([])
 const searching = ref(false)
 const searched = ref(false)
-let searchTimer: ReturnType<typeof setTimeout> | undefined
+/**
+ * 去抖 + 请求序号一体，见 app/composables/useDebounced.ts。
+ */
+const {
+  schedule: scheduleCandidateSearch,
+  cancel: cancelCandidateSearch,
+  latest: latestCandidateSearch
+} = useDebounced<string>({
+  delay: 250,
+  run: (q, id) => runCandidateSearch(q, id)
+})
 
 watch(
   () => [props.open, props.targetId, props.targetType] as const,
@@ -649,7 +659,7 @@ async function removeGrant(userId: number) {
 }
 
 function searchCandidates() {
-  clearTimeout(searchTimer)
+  cancelCandidateSearch()
   const q = keyword.value.trim()
   if (!q) {
     candidates.value = []
@@ -657,21 +667,37 @@ function searchCandidates() {
     return
   }
   searching.value = true
-  searchTimer = setTimeout(async () => {
-    try {
-      // 属主本人不能进授权名单（服务端 assertGrantees 会 400）。
-      // 管理视角下属主是 targetUserId，不是「我」，所以要单独塞进去。
-      const exclude = grants.value.map((g) => g.userId)
-      if (props.useAdmin && props.targetUserId != null) exclude.push(props.targetUserId)
-      const res = await ShareService.candidates(q, exclude)
-      candidates.value = res.candidates ?? []
-    } catch {
-      candidates.value = []
-    } finally {
+  scheduleCandidateSearch(q)
+}
+
+/**
+ * 候选搜索。**这里原先漏了 SearchDialog 已有的序号守卫** —— 只有 setTimeout +
+ * clearTimeout，于是慢的旧请求会覆盖新结果：搜「张」慢、搜「张三」快，
+ * 「张」的结果后到把候选列表刷成旧的。
+ *
+ * SearchDialog 早修好了这个 bug（它的 runSearch 里有 `if (id !== latest()) return`），
+ * ShareDialog 上没跟上 —— 两个组件把同一套逻辑各抄一遍、只修了一处的典型后果。
+ * 现在两边共用 useDebounced，守卫不可能再被忘掉。
+ */
+async function runCandidateSearch(q: string, id: number) {
+  try {
+    // 属主本人不能进授权名单（服务端 assertGrantees 会 400）。
+    // 管理视角下属主是 targetUserId，不是「我」，所以要单独塞进去。
+    const exclude = grants.value.map((g) => g.userId)
+    if (props.useAdmin && props.targetUserId != null) exclude.push(props.targetUserId)
+    const res = await ShareService.candidates(q, exclude)
+    // 过期的那次直接丢弃：它的关键词已经不是输入框里那个了
+    if (id !== latestCandidateSearch()) return
+    candidates.value = res.candidates ?? []
+  } catch {
+    if (id !== latestCandidateSearch()) return
+    candidates.value = []
+  } finally {
+    if (id === latestCandidateSearch()) {
       searching.value = false
       searched.value = true
     }
-  }, 250)
+  }
 }
 
 function onKeydown(e: KeyboardEvent) {
@@ -681,7 +707,7 @@ if (typeof window !== 'undefined') {
   window.addEventListener('keydown', onKeydown)
   onBeforeUnmount(() => {
     window.removeEventListener('keydown', onKeydown)
-    clearTimeout(searchTimer)
+    // 定时器与在飞请求由 useDebounced 自己在 onBeforeUnmount 里取消
   })
 }
 </script>

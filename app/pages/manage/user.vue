@@ -214,6 +214,7 @@
 
 import { formatDateTime } from '~/utils/time'
 import { notify, notifyError, toMessage } from '~/utils/notify'
+import { promptNewPassword } from '~/utils/password'
 import { formatBytes, parseBytes } from '~/utils/size'
 import { fromDatetimeLocal, toDatetimeLocal } from '~/utils/datetimeLocal'
 import { PencilSquareIcon, ShieldCheckIcon, StarIcon } from '@heroicons/vue/24/outline'
@@ -240,15 +241,8 @@ const changingPwdId = ref<number | null>(null)
 const changePassword = async (u: DbUser) => {
   if (!u?.id) return
 
-  const input = window.prompt(`为用户「${u.username}」设置新密码（至少8位，包含字母和数字）：`, '')
-  if (input === null) return // 取消
-  const newPassword = input.trim()
-
-  // 简单校验：至少8位，且包含字母和数字
-  if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
-    notify('密码不符合要求：至少8位，且需包含字母和数字','error')
-    return
-  }
+  const newPassword = promptNewPassword(`用户「${u.username}」`)
+  if (newPassword === null) return // 取消或不符合要求（后者已经提示过了）
 
   changingPwdId.value = u.id
   try {

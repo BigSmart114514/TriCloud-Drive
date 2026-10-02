@@ -276,6 +276,7 @@ import { formatFileSize } from '~/utils/format'
 import { formatBytes, parseBytes } from '~/utils/size'
 import { fromDatetimeLocal } from '~/utils/datetimeLocal'
 import { notify, notifyError, toMessage } from '~/utils/notify'
+import { promptNewPassword } from '~/utils/password'
 
 useHead({ title: '子账户' })
 
@@ -412,13 +413,8 @@ const deleteEditingChild = async () => {
  * 的 targetUserId —— 那条路要求 isStaff（见 resolveIdentity），主账号不是管理员。
  */
 const resetPassword = async (c: SubAccount) => {
-  const input = window.prompt(`为子账户「${c.username}」设置新密码（至少8位，包含字母和数字）：`, '')
-  if (input === null) return
-  const newPassword = input.trim()
-  if (newPassword.length < 8 || !/[A-Za-z]/.test(newPassword) || !/\d/.test(newPassword)) {
-    notify('密码不符合要求：至少8位，且需包含字母和数字', 'error')
-    return
-  }
+  const newPassword = promptNewPassword(`子账户「${c.username}」`)
+  if (newPassword === null) return
   try {
     await AccountService.resetPassword(c.id, newPassword)
     notify('密码已重置', 'success')

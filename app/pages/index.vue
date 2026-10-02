@@ -620,12 +620,14 @@ onMounted(() => {
   if (tokens.value.length) void refreshLinks()
 })
 
-let timer: ReturnType<typeof setTimeout> | undefined
-watch(userSearch, () => {
-  clearTimeout(timer)
-  timer = setTimeout(loadPeople, 250)
+// 去抖 + 请求序号一体。序号守卫是顺带白得的：原来只有 setTimeout + clearTimeout，
+// 慢的旧请求会覆盖新结果（搜「张」慢、搜「张三」快，「张」的结果后到把侧栏刷旧）。
+// 见 app/composables/useDebounced.ts。
+const { schedule: schedulePeople } = useDebounced<void>({
+  delay: 250,
+  run: () => loadPeople()
 })
-onBeforeUnmount(() => clearTimeout(timer))
+watch(userSearch, () => schedulePeople())
 
 definePageMeta({ layout: false })
 </script>

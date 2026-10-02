@@ -402,9 +402,35 @@ describe('前端接线', () => {
   })
 
   test('弹窗去抖且丢弃过期响应（慢的旧请求可能后到）', () => {
+    // 去抖与序号守卫都搬进了 app/composables/useDebounced.ts（ShareDialog 与
+    // index/manage-files 现在共用同一份）。所以这里改成断言「用上了那个共用
+    // 实现」+「回调里真的判了自己的序号是否过期」—— 后者才是行为所在，
+    // 只断言「用上了 useDebounced」的话，把守卫删掉也照样过。
+    for (const f of [
+      'app/components/SearchDialog.vue',
+      // 下面两个原先**没有**序号守卫，是共用之后白得的修复
+      'app/components/ShareDialog.vue',
+      'app/pages/index.vue',
+      'app/pages/manage/files.vue',
+    ]) {
+      const src = read(f)
+      // 带泛型参数（useDebounced<string>({…}）也认，所以不能用
+      // includes('useDebounced(') —— 第一版就栽在这，四处全是泛型写法，全被判失败
+      assert.ok(
+        /useDebounced\s*(<[^>]*>)?\s*\(\s*\{/.test(stripComments(src)),
+        f + ' 没有调用共用的去抖实现'
+      )
+    }
+
     const src = read('app/components/SearchDialog.vue')
-    assert.ok(src.includes('searchTimer'), '没有去抖')
-    assert.ok(/requestId/.test(src), '没有请求序号，后到的旧响应会覆盖新结果')
+    assert.ok(
+      /id !== latest\(\)/.test(src),
+      'SearchDialog 的搜索回调没有丢弃过期响应 —— 慢的旧请求会覆盖新结果'
+    )
+    assert.ok(
+      /id === latest\(\)/.test(src),
+      'finally 里也没有条件收尾，过期请求会把 searching 提前关掉'
+    )
     assert.ok(src.includes('searched'), '没有 searched 标记：会在没搜过时说「没有匹配项」')
   })
 
