@@ -28,6 +28,13 @@ export interface ArchiveDirectory extends FileListFolder {
   files: ArchiveFileItem[]
 }
 
+/** 面包屑上的一节。ArchiveBrowser.vue 的 props 用它，所以单独命名 */
+export interface ArchiveCrumb {
+  name: string
+  /** '' = 根。goToPath 收的就是这个值 */
+  path: string
+}
+
 export interface UseArchiveTreeOptions {
   /** 根节点 id。两个预览器给不同的值，避免 key 冲突（'zip-root' / 'sevenzip-root'） */
   rootId: string
@@ -272,7 +279,7 @@ export function useArchiveTree(options: UseArchiveTreeOptions) {
 
   const visibleCount = computed(() => visibleFolders.value.length + visibleFiles.value.length)
 
-  const breadcrumbs = computed(() => {
+  const breadcrumbs = computed<ArchiveCrumb[]>(() => {
     const result = [{ name: '压缩包根目录', path: '' }]
     let path = ''
     for (const part of currentPath.value ? currentPath.value.split('/') : []) {

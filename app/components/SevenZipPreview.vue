@@ -1,58 +1,29 @@
 <template>
-  <div class="flex h-full min-h-0 flex-col bg-gray-50">
-    <div class="border-b bg-white px-4 py-3">
-      <div class="flex flex-wrap items-center justify-between gap-3">
-        <div class="min-w-0">
-          <p class="text-xs text-gray-500">压缩包内容</p>
-          <p class="truncate text-sm font-medium text-gray-900">{{ archiveName }}</p>
-        </div>
-        <input
-          v-model="search"
-          class="w-full rounded-md border border-gray-200 px-3 py-2 text-sm outline-none focus:border-indigo-500 sm:w-56"
-          placeholder="搜索当前目录"
-          type="search"
-        />
-      </div>
-      <div class="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-gray-500">
-        <nav class="flex min-w-0 flex-wrap items-center gap-1">
-          <template v-for="(crumb, index) in breadcrumbs" :key="crumb.path">
-            <span v-if="index > 0" class="text-gray-300">/</span>
-            <button class="max-w-[12rem] truncate hover:text-indigo-600" :class="{ 'font-medium text-indigo-600': index === breadcrumbs.length - 1 }" @click="goToPath(crumb.path)">
-              {{ crumb.name }}
-            </button>
-          </template>
-        </nav>
-        <span>{{ totalCount }} 项<span v-if="visibleCount !== totalCount"> · 当前显示 {{ visibleCount }} 项</span></span>
-      </div>
-    </div>
-
-    <div class="min-h-0 flex-1 overflow-auto p-3 sm:p-4">
-      <div v-if="error" class="mb-3 rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{{ error }}</div>
-      <div v-if="skippedCount > 0" class="mb-3 rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-700">
-        已跳过 {{ skippedCount }} 个路径不安全或超出限制的条目。
-      </div>
-      <FileList
-        v-if="!error"
-        :folders="visibleFolders"
-        :files="visibleFiles"
-        :loading="loading"
-        :selectable="false"
-        :show-actions="false"
-        :empty-title="search.trim() ? '没有匹配项' : '压缩包为空'"
-        :empty-description="search.trim() ? '试试其他关键词。' : '当前目录没有文件或文件夹。'"
-        @navigate-folder="navigateFolder"
-        @preview-file="openFile"
-      />
-    </div>
-  </div>
+  <ArchiveBrowser
+    v-model:search="search"
+    :archive-name="archiveName"
+    :breadcrumbs="breadcrumbs"
+    :total-count="totalCount"
+    :visible-count="visibleCount"
+    :error="error"
+    :skipped-count="skippedCount"
+    :loading="loading"
+    :visible-folders="visibleFolders"
+    :visible-files="visibleFiles"
+    @go-to-path="goToPath"
+    @navigate-folder="navigateFolder"
+    @preview-file="openFile"
+  />
 </template>
 
 <script setup lang="ts">
-// 7z / rar / tar 等走 7z-wasm。目录树逻辑在 useArchiveTree（与 zip 预览共用），
+// 7z / rar / tar 等走 7z-wasm。
+//
+// 目录树逻辑在 useArchiveTree、界面在 ArchiveBrowser（两者都与 zip 预览共用），
 // 这里只负责「用 7z 引擎把 blob 读成记录」—— 包括 `l -slt` 文本的解析，
 // 那部分与 zip.js 没有交集，留在本文件。
 import { onBeforeUnmount, watch } from 'vue'
-import FileList from '~/components/FileList.vue'
+import ArchiveBrowser from '~/components/ArchiveBrowser.vue'
 import type { FileListFile } from '~~/types/file-list'
 import type { ArchiveFileItem } from '~~/types/zip'
 import type { SevenZipModule } from '7z-wasm'
@@ -77,6 +48,10 @@ const emit = defineEmits<{
 
 const MAX_ENTRIES = 50000
 
+// 这份解构**不能**改成 `const tree = useArchiveTree(...)` 然后 `:tree="tree"`：
+// setupState 只对顶层绑定解包 Ref，嵌套在普通对象里的 Ref 在模板里不解包，
+// `tree.search` 会渲染成 [object Object]，v-model 还会把 Ref 整个替换掉。
+// ArchiveBrowser.vue 那边有同样这段说明。
 const {
   loading,
   error,
