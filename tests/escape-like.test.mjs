@@ -258,11 +258,12 @@ describe('调用点：所有 LIKE 都配了 escape + ESCAPE', () => {
   test('原本就正确的几处仍然正确（防止整理时改坏）', () => {
     for (const file of [
       'server/utils/search.ts',
-      'server/utils/file.ts',
-      'server/utils/folders.ts',
+      // file.ts 的那两处 LIKE 搬到了 naming.ts（重名消解三份实现合并到一处），
+      // folders.ts 的两处也一起搬了。断言跟着搬 —— 这条测试在合并提交里立刻
+      // 就红了，报「file.ts 里没找到 LIKE ?」，正是它该做的事。
+      'server/utils/naming.ts',
     ]) {
       const code = codeOnly(read(file))
-      // 同样逐处核对：这三处每个都有多处 LIKE（file.ts / folders.ts 各 2 处）
       const likeCount = (code.match(/LIKE \?/g) ?? []).length
       const escapeCount = (code.match(/LIKE \? ESCAPE/g) ?? []).length
       assert.ok(likeCount > 0, file + ' 里没找到 LIKE ?')
@@ -280,8 +281,7 @@ describe('调用点：所有 LIKE 都配了 escape + ESCAPE', () => {
     // escapeLike(自身)、escapeRegExp(自身) 之外的地方都不该有。
     const files = [
       'server/utils/search.ts',
-      'server/utils/file.ts',
-      'server/utils/folders.ts',
+      'server/utils/naming.ts',
       'server/utils/escape.ts',
       'server/api/accounts/index.get.ts',
       'server/api/share/candidates.get.ts',

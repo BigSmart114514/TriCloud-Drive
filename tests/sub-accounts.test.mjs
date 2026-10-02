@@ -403,6 +403,22 @@ describe('四类预占都走链版，recalculate 也重算整条链', () => {
     assert.ok(/recalculateChainStorage\(this\.db, userId\)/.test(fn))
   })
 
+  test('server/utils/file.ts 里不再有同名自由函数（旧版会漏掉配额链）', () => {
+    // 曾经存在一份同名自由函数，零调用点，且是**子账户之前的语义** ——
+    // 只按 user_id 求和，不会把主账号那一份一起更新。谁要是哪天 import 了它，
+    // 子账户的额度就会静默失准。所以直接删掉，并在这里钉住。
+    //
+    // 注意断言的是「整个文件里都不许出现这个名字」，不是「不许有 free function」：
+    // file.ts 不该碰这件事，它是 db.ts 的 FileService 的职责。
+    const src = read('server/utils/file.ts')
+    assert.doesNotMatch(
+      src,
+      /recalculateUsedStorage/,
+      'server/utils/file.ts 里不该再有 recalculateUsedStorage —— ' +
+        'FileService 那份（db.ts）才是唯一入口，且它走配额链版'
+    )
+  })
+
   test('链版每层只算自己名下的文件（这是池实时 SUM 的前提）', () => {
     const sub = read('server/utils/sub-account.ts')
     assert.ok(

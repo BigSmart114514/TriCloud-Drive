@@ -4,46 +4,17 @@ import { FileRecord } from '~~/types/files'
 import { GeneralResponse } from '~~/types/auth'
 import { skipAndOverwriteError, ServerError } from '~~/types/error'
 import { escapeLike, escapeRegExp } from '~~/server/utils/escape'
+import { resolveUniqueName, FILE_NAMES } from '~~/server/utils/naming'
 
-export function splitName(filename: string): { base: string, ext: string } {
-    const i = filename.lastIndexOf('.')
-    if (i <= 0) return { base: filename, ext: '' }
-    return { base: filename.slice(0, i), ext: filename.slice(i) }
-}
-
+/**
+ * 给同目录里的文件找一个不冲突的名字。
+ *
+ * 算法本体在 server/utils/naming.ts —— 它原先在 file.ts 与 folders.ts 里各抄了
+ * 一份，而 save.post.ts 上还有第三份（buildName），三份已经开始分叉。
+ * 这里只保留薄壳，因为调用点用的是「文件」这个说法。
+ */
 export async function resolveUniqueFilename(db: Database, userId: number, folderId: number | null, desired: string): Promise<{ name: string, base: string, ext: string, nextN: number }> {
-    const { base, ext } = splitName(desired)
-    const likePattern = `${escapeLike(base)} (%)${escapeLike(ext)}`
-    let rows
-    if (folderId === null) {
-        rows = await db.prepare(`
-    SELECT filename FROM files
-    WHERE user_id = ? AND folder_id IS NULL
-        AND (filename = ? OR filename LIKE ? ESCAPE '\\')
-    `).bind(userId, desired, likePattern).all()
-    } else {
-        rows = await db.prepare(`
-    SELECT filename FROM files
-    WHERE user_id = ? AND folder_id = ?
-        AND (filename = ? OR filename LIKE ? ESCAPE '\\')
-    `).bind(userId, folderId, desired, likePattern).all()
-    }
-    const existing = new Set<string>((rows?.results || []).map((r: any) => String(r.filename)))
-    if (!existing.has(desired)) {
-        return { name: desired, base, ext, nextN: 1 }
-    }
-    // 找到现有最大 (n)
-    const re = new RegExp(`^${escapeRegExp(base)} \\((\\d+)\\)${escapeRegExp(ext)}$`)
-    let maxN = 1
-    for (const name of existing) {
-        const m = name.match(re)
-        if (m) {
-            const n = parseInt(m[1], 10)
-            if (Number.isFinite(n) && n > maxN) maxN = n
-        }
-    }
-    const nextN = maxN + 1
-    return { name: `${base} (${nextN})${ext}`, base, ext, nextN }
+    return resolveUniqueName(db, FILE_NAMES, userId, folderId, desired, true)
 }
 
 
@@ -281,22 +252,4 @@ export async function delEmptySubfolder(db: Database, userId: number, folderId: 
         // 理论上 deletedThisRound > 0，否则会提前 break
         if (deletedThisRound === 0) break
     }
-}
-
-export async function recalculateUsedStorage(db: Database, userId: number): Promise<void> {
-    // 计算用户所有文件的总大小
-    const result = await db.prepare(`
-    SELECT COALESCE(SUM(file_size), 0) as totalSize 
-    FROM files 
-    WHERE user_id = ?
-  `).bind(userId).first();
-
-    const totalSize = result?.totalSize || 0;
-
-    // 更新用户的 usedStorage 字段
-    await db.prepare(`
-    UPDATE users 
-    SET usedStorage = ? 
-    WHERE id = ?
-  `).bind(totalSize, userId).run();
 }

@@ -2,6 +2,7 @@
 import { createError } from 'h3'
 import { Database, FolderService } from '~~/server/utils/db'
 import { DEFAULT_SHARE_MODE } from '~~/types/share'
+import { resolveUniqueName, FOLDER_NAMES } from '~~/server/utils/naming'
 /*
 type DBLike = {
   prepare: (sql: string) => {
@@ -200,55 +201,22 @@ export async function ensurePaths(
   return result
 }
 
+/**
+ * 给同一父目录下的文件夹找一个不冲突的名字。
+ *
+ * 算法本体在 server/utils/naming.ts（原先这里与 file.ts 各抄了一份）。
+ *
+ * 目录名**不拆扩展名**：`v1.2 备份` 拆开点会得到 `v1 (2).2 备份`。这就是那个
+ * splitExt=false 的含义，不是「目录自动不拆」那种隐式约定。
+ */
 export async function resolveUniqueFolderName(
   db: Database,
   userId: number,
   parentId: number | null,
   desired: string
 ): Promise<{ name: string; base: string; nextN: number }> {
-  const base = desired
-  const likePattern = `${escapeLike(base)} (%)`
-
-  let rows: any
-  if (parentId === null) {
-    rows = await db
-      .prepare(`
-        SELECT name FROM folders
-        WHERE user_id = ?
-          AND parent_id IS NULL
-          AND (name = ? OR name LIKE ? ESCAPE '\\')
-      `)
-      .bind(userId, desired, likePattern)
-      .all()
-  } else {
-    rows = await db
-      .prepare(`
-        SELECT name FROM folders
-        WHERE user_id = ?
-          AND parent_id = ?
-          AND (name = ? OR name LIKE ? ESCAPE '\\')
-      `)
-      .bind(userId, parentId, desired, likePattern)
-      .all()
-  }
-
-  const existing = new Set<string>((rows?.results || []).map((r: any) => String(r.name)))
-  if (!existing.has(desired)) {
-    return { name: desired, base, nextN: 1 }
-  }
-
-  // 与文件一致：如果只存在原名，没有任何 (n)，则生成 (2)
-  const re = new RegExp(`^${escapeRegExp(base)} \\((\\d+)\\)$`)
-  let maxN = 1
-  for (const name of existing) {
-    const m = name.match(re)
-    if (m) {
-      const n = parseInt(m[1], 10)
-      if (Number.isFinite(n) && n > maxN) maxN = n
-    }
-  }
-  const nextN = maxN + 1
-  return { name: `${base} (${nextN})`, base, nextN }
+  const r = await resolveUniqueName(db, FOLDER_NAMES, userId, parentId, desired, false)
+  return { name: r.name, base: r.base, nextN: r.nextN }
 }
 
 function isUniqueConstraintError(err: any) {

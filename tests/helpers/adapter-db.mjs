@@ -27,11 +27,19 @@ const ROOT = new URL('../..', import.meta.url).pathname
 const sqlite3 = require(join(ROOT, 'node_modules/sqlite3'))
 
 /**
- * @param path sqlite 文件路径。**必须是副本** —— 本函数不做任何保护，
- *   传生产/开发库路径进去等于让真函数直接改线上数据。
+ * @param target sqlite 文件路径，或**已有的裸 sqlite3.Database 句柄**。
+ *   传路径时必须是副本 —— 本函数不做任何保护，传生产/开发库路径进去等于让
+ *   真函数直接改线上数据。
+ *   传句柄时适用于内存库（openRawDb 造的那种）：那种场景本来就没有文件，
+ *   让调用方另外落一个临时文件再传进来纯属多余。
  */
-export function openAdapterDb(path) {
-  const raw = new sqlite3.Database(path)
+export function openAdapterDb(target) {
+  const raw = typeof target === 'string' ? new sqlite3.Database(target) : target
+  if (!raw || typeof raw.all !== 'function') {
+    throw new TypeError(
+      'openAdapterDb 需要文件路径或裸 sqlite3.Database 句柄，收到的是 ' + typeof target
+    )
+  }
 
   const all = (sql, params = []) =>
     new Promise((res, rej) => raw.all(sql, params, (e, rows) => (e ? rej(e) : res(rows || []))))
@@ -72,7 +80,9 @@ export function openAdapterDb(path) {
     get,
 
     async close() {
-      await new Promise((res) => raw.close(res))
+      // 传进来的句柄由调用方负责关（openRawDb 会连内存库一起收），
+      // 所以这里只关自己开的那一个。
+      if (typeof target === 'string') await new Promise((res) => raw.close(res))
     }
   }
 

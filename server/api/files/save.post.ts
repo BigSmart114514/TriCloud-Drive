@@ -2,6 +2,7 @@ import { getMeAndTarget } from '~~/server/utils/auth-middleware'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
 import { resolveUniqueFilename } from '~~/server/utils/file'
+import { dedupeName } from '~~/server/utils/naming'
 import { assertFileKeyOwner } from '~~/server/utils/file-key'
 // upload403Error 不再由预占失败抛出 —— 失败原因现在分得出是哪一层不够，
 // 走 quotaFailMessage 给对应文案（见下面两处 reserveStorage）。
@@ -24,11 +25,7 @@ export default defineEventHandler(async (event) => {
 
   
 
-  function buildName(base: string, ext: string, n: number): string {
-    return n <= 1 ? `${base}${ext}` : `${base} (${n})${ext}`
-  }
-
-  try {
+    try {
     //const user = await requireAuth(event)
     const { authUserId } = await getMeAndTarget(event)
     // 鉴权身份：useAdmin 时是属主，否则是我（只往我有 write 的目录里写）
@@ -157,7 +154,7 @@ export default defineEventHandler(async (event) => {
           const msg = String(e?.message || e)
           if (msg.includes('UNIQUE') && msg.includes('files')) {
             nextN += 1
-            finalName = buildName(base, ext, nextN)
+            finalName = dedupeName(base, ext, nextN)
             continue
           }
           await db.prepare('ROLLBACK TO upload_tx').bind().run()
