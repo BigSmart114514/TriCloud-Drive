@@ -269,7 +269,6 @@ const changePassword = async (u: DbUser) => {
 
 const users = ref<DbUser[]>([])
 const totalCount = ref(0)
-const loading = ref(false)
 const lastRefreshed = ref<string | null>(null)
 
 const filters = reactive({
@@ -367,35 +366,32 @@ const deleteEditingUser = () => {
 
 /* -------- 数据加载 -------- */
 
-const fetchUsers = async () => {
-  loading.value = true
-  try {
-    const resp = await $fetch<{ users: ApiUser[]; totalCount: number }>('/api/manage/listUsers', {
-      query: filters.username ? { username: filters.username } : {}
-    })
-    users.value = (resp.users || []).map((u) => ({
-      ...u,
-      IsAdmin: !!u.IsAdmin,
-      IsSuperAdmin: !!u.IsSuperAdmin,
-      usedStorage: formatBytes(Number(u.usedStorage ?? 0)),
-      maxStorage: formatBytes(Number(u.maxStorage ?? 0)),
-      usedDownload: formatBytes(Number(u.usedDownload ?? 0)),
-      maxDownload: formatBytes(Number(u.maxDownload ?? 0)),
-      // 必须用 toDatetimeLocal，不能用 formatDateTime：后者输出的是
-      // 「2026年1月1日 00:00」这种本地化字符串，datetime-local 认不出来，
-      // 框里会显示为空，得手动重选一次才对。
-      expire_at: toDatetimeLocal(u.expire_at)
-    }))
-    totalCount.value = resp.totalCount || 0
-    lastRefreshed.value = new Date().toISOString()
-  } catch (err) {
-    console.error('获取用户失败:', err)
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(fetchUsers)
+// 失败时只 console.error 不弹提示 —— 这是这一页的既有行为：管理员改别人的
+// 额度，出错时表格还停着上一批数据，静默比弹一条「加载失败」更不打扰。
+// （别的页面用默认的 notifyError。）
+const { loading, reload: fetchUsers } = useAsyncResource(async () => {
+  const resp = await $fetch<{ users: ApiUser[]; totalCount: number }>('/api/manage/listUsers', {
+    query: filters.username ? { username: filters.username } : {}
+  })
+  users.value = (resp.users || []).map((u) => ({
+    ...u,
+    IsAdmin: !!u.IsAdmin,
+    IsSuperAdmin: !!u.IsSuperAdmin,
+    usedStorage: formatBytes(Number(u.usedStorage ?? 0)),
+    maxStorage: formatBytes(Number(u.maxStorage ?? 0)),
+    usedDownload: formatBytes(Number(u.usedDownload ?? 0)),
+    maxDownload: formatBytes(Number(u.maxDownload ?? 0)),
+    // 必须用 toDatetimeLocal，不能用 formatDateTime：后者输出的是
+    // 「2026年1月1日 00:00」这种本地化字符串，datetime-local 认不出来，
+    // 框里会显示为空，得手动重选一次才对。
+    expire_at: toDatetimeLocal(u.expire_at)
+  }))
+  totalCount.value = resp.totalCount || 0
+  lastRefreshed.value = new Date().toISOString()
+}, {
+  onError: (err) => console.error('获取用户失败:', err),
+  immediate: true
+})
 
 const resetFilters = () => {
   filters.email = ''

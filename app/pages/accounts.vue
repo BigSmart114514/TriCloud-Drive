@@ -262,7 +262,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, reactive, ref } from 'vue'
 import { PencilSquareIcon } from '@heroicons/vue/24/outline'
 import AppNavbar from '~/components/AppNavbar.vue'
 import AccountEditDialog, { type AccountDraft } from '~/components/AccountEditDialog.vue'
@@ -283,7 +283,6 @@ const { isLoggedIn } = useAuth()
 
 const children = ref<SubAccount[]>([])
 const totalCount = ref(0)
-const loading = ref(false)
 const lastRefreshed = ref<string | null>(null)
 
 const capability = ref<SubAccountCapability | null>(null)
@@ -314,22 +313,16 @@ const limitText = computed(() => {
   return m > 0 ? `${m}` : ''
 })
 
-const fetchAccounts = async () => {
-  loading.value = true
-  try {
-    const res = await AccountService.list(filters.username.trim() || undefined)
-    children.value = res.children
-    totalCount.value = res.totalCount
-    pool.storage = res.pool.storage
-    pool.download = res.pool.download
-    capability.value = res.capability
-    lastRefreshed.value = new Date().toISOString()
-  } catch (err: any) {
-    notifyError(err, '加载子账户失败')
-  } finally {
-    loading.value = false
-  }
-}
+// loading / 错误处理交给 useAsyncResource，这里只管把结果写进各个 ref。
+const { loading, reload: fetchAccounts } = useAsyncResource(async () => {
+  const res = await AccountService.list(filters.username.trim() || undefined)
+  children.value = res.children
+  totalCount.value = res.totalCount
+  pool.storage = res.pool.storage
+  pool.download = res.pool.download
+  capability.value = res.capability
+  lastRefreshed.value = new Date().toISOString()
+}, { errorMessage: '加载子账户失败', immediate: true })
 
 const resetFilters = () => {
   filters.username = ''
@@ -433,6 +426,4 @@ const resetPassword = async (c: SubAccount) => {
     notifyError(err, '重置密码失败')
   }
 }
-
-onMounted(fetchAccounts)
 </script>

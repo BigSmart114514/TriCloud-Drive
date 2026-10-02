@@ -22,7 +22,21 @@ await fetchUser()
 if (!isAdmin.value && process.client) navigateTo('/')
 
 const users = ref<UserSummary[]>([])
-const loadingUsers = ref(false)
+
+// 这一处原本**没有** catch —— 失败就让异常往上抛（页面整体报错）。
+// 所以既不给 errorMessage 也不给 onError，与原行为一致。
+const { loading: loadingUsers, reload: fetchUsers } = useAsyncResource(async () => {
+  const headers = process.server ? useRequestHeaders(['cookie']) : undefined
+  const res = await $fetch<{ users: UserSummary[]; totalCount: number }>(
+    '/api/manage/listUsers',
+    {
+      params: userSearch.value ? { username: userSearch.value } : undefined,
+      headers,
+      credentials: 'include'
+    }
+  )
+  users.value = res.users ?? []
+})
 const userSearch = ref('')
 const selectedUserId = ref<number | null>(null)
 const drawerOpen = ref(false)
@@ -30,24 +44,6 @@ const drawerOpen = ref(false)
 const selectedUser = computed(
   () => users.value.find((u) => u.id === selectedUserId.value) || null
 )
-
-async function fetchUsers() {
-  try {
-    loadingUsers.value = true
-    const headers = process.server ? useRequestHeaders(['cookie']) : undefined
-    const res = await $fetch<{ users: UserSummary[]; totalCount: number }>(
-      '/api/manage/listUsers',
-      {
-        params: userSearch.value ? { username: userSearch.value } : undefined,
-        headers,
-        credentials: 'include'
-      }
-    )
-    users.value = res.users ?? []
-  } finally {
-    loadingUsers.value = false
-  }
-}
 
 /**
  * 服务端 getMeAndTarget 已经拦了「非超管不得进入超管数据」（403）。

@@ -175,7 +175,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ArrowPathIcon, MagnifyingGlassIcon, XMarkIcon } from '@heroicons/vue/24/outline'
 import AppNavbar from '~/components/AppNavbar.vue'
 import ShareSettingList from '~/components/ShareSettingList.vue'
@@ -196,7 +196,6 @@ const folders = ref<ShareSettingRow[]>([])
 const files = ref<ShareSettingRow[]>([])
 const summary = ref<ShareSettingsSummary | null>(null)
 const truncated = ref(false)
-const loading = ref(false)
 const bulkBusy = ref(false)
 
 /** 分享设置弹窗当前打开的那一项 */
@@ -318,22 +317,13 @@ watch([typeFilter, stateFilter, keyword], () => {
 
 /* ---------------- 加载 ---------------- */
 
-async function load() {
-  loading.value = true
-  try {
-    const res = await ShareService.settings()
-    folders.value = res.folders ?? []
-    files.value = res.files ?? []
-    summary.value = res.summary ?? null
-    truncated.value = !!res.truncated
-  } catch (e: any) {
-    notifyError(e, '加载分享列表失败')
-  } finally {
-    loading.value = false
-  }
-}
-
-onMounted(load)
+const { loading, reload: load } = useAsyncResource(async () => {
+  const res = await ShareService.settings()
+  folders.value = res.folders ?? []
+  files.value = res.files ?? []
+  summary.value = res.summary ?? null
+  truncated.value = !!res.truncated
+}, { errorMessage: '加载分享列表失败', immediate: true })
 
 /* ---------------- 行内操作 ---------------- */
 

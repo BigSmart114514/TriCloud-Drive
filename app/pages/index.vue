@@ -241,7 +241,6 @@ type Person = {
  * 所以「用户入口下看不到只能通过链接访问的内容」在服务端天然成立。
  */
 const people = ref<Person[]>([])
-const loadingPeople = ref(false)
 const userSearch = ref('')
 /**
  * 侧栏选中态用「种类 + 值」两段表达，而不是一个 id。
@@ -541,28 +540,28 @@ function relationLabel(p: Person) {
   return ''
 }
 
-async function loadPeople() {
-  try {
-    loadingPeople.value = true
-    const headers = process.server ? useRequestHeaders(['cookie']) : undefined
-    const res = await $fetch<{ people: Person[] }>('/api/share/people', {
-      headers,
-      credentials: 'include'
-    })
-    const q = userSearch.value.trim().toLowerCase()
-    const list = res.people ?? []
-    people.value = q
-      ? list.filter(
-          (p) =>
-            (p.username || '').toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q)
-        )
-      : list
-  } catch {
+// 失败时把列表清空（而不是留着上一批）—— 侧栏「可分享给的人」是权限相关
+// 的信息，宁可空着也不能显示一份已经失效的名单。也不弹提示：这一处失败
+// 通常意味着接口没就绪，反复弹窗比空列表更烦。
+const { loading: loadingPeople, reload: loadPeople } = useAsyncResource(async () => {
+  const headers = process.server ? useRequestHeaders(['cookie']) : undefined
+  const res = await $fetch<{ people: Person[] }>('/api/share/people', {
+    headers,
+    credentials: 'include'
+  })
+  const q = userSearch.value.trim().toLowerCase()
+  const list = res.people ?? []
+  people.value = q
+    ? list.filter(
+        (p) =>
+          (p.username || '').toLowerCase().includes(q) || (p.email || '').toLowerCase().includes(q)
+      )
+    : list
+}, {
+  onError: () => {
     people.value = []
-  } finally {
-    loadingPeople.value = false
   }
-}
+})
 
 /**
  * 收到 ?share_link= 就收藏。**immediate 让首屏就带上**，否则用户从链接页刷新

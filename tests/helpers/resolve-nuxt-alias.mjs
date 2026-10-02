@@ -6,8 +6,17 @@
 //      node 不允许。顺序固定 .ts → .mjs → .js：服务端代码全是 .ts，而 types/ 下
 //      也是 .ts，但 helper 与少数脚本是 .mjs，两者都要能命中。
 //
-// 刻意**不做**的事：不解析 ~/ 与 @/（前端别名）。前端组件要 import .vue，
-// 裸 node 处理不了，硬接进来只会让 hook 变成半吊子 —— 前端部分继续用源码断言测。
+// ## 拦哪些前缀
+//
+// ~~/ = 项目根（Nuxt4 约定）。另外也拦 ~/ —— 那是前端别名，同样指向 srcDir。
+// 起初刻意只拦 ~~/，理由是「前端组件要 import .vue，裸 node 处理不了，接进来
+// 只会变成半吊子」。这个理由对 **.vue** 仍然成立，但拦 ~/ 与能不能处理 .vue
+// 无关：app/utils/ 与 app/composables/ 下全是纯 .ts（composable 只依赖 vue），
+// 完全可以直接 import。把别名接上之后 useAsyncResource / useArchiveTree /
+// withScope 这些才测得了真函数，而不用手抄。
+//
+// 仍然处理不了的：任何 import 到 .vue 的地方（组件本体）。前端组件继续用
+// 源码断言测，那部分没有变。
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -30,8 +39,19 @@ function withExtension(base) {
   return base
 }
 
+// ~~/ → 仓库根；~/ → app/（Nuxt4 里 srcDir 是 app/，所以这两个别名指向不同目录，
+// 不是同一个。第一版把 ~/ 也映射到根，于是 import '~/utils/notify' 去找
+// <root>/utils/notify，报 ENOENT —— 那个文件实际在 app/utils/notify.ts。
+const PREFIXES = [
+  ['~~/', ''],
+  ['@/', ''],
+  ['~/', 'app/']
+]
+
 export function resolve(specifier, context, next) {
-  if (!specifier.startsWith('~~/')) return next(specifier, context)
-  const target = withExtension(join(ROOT, specifier.slice(3)))
+  const hit = PREFIXES.find(([p]) => specifier.startsWith(p))
+  if (!hit) return next(specifier, context)
+  const [prefix, dir] = hit
+  const target = withExtension(join(ROOT, dir, specifier.slice(prefix.length)))
   return { url: pathToFileURL(target).href, shortCircuit: true }
 }
