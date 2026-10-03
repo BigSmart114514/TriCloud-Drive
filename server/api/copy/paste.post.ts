@@ -6,6 +6,8 @@ import { getDb } from '~~/server/utils/db-adapter'
 import { FileService, FolderService } from '~~/server/utils/db'
 import type { OwnedFile, OwnedFolder } from '~~/server/utils/db'
 import { ensurePaths } from '~~/server/utils/folders'
+import { deleteCosObject } from '~~/server/utils/cos'
+import { runSettled } from '~~/server/utils/concurrency'
 import { resolveUniqueFilename } from '~~/server/utils/file'
 import { uniqPositiveInts } from '~~/server/utils/functions'
 import {
@@ -300,6 +302,37 @@ export default defineEventHandler(async (event) => {
     }
   }
 
+  /**
+   * 粘贴的事务边界。SAVEPOINT（不是 BEGIN）—— 与 files/save.post.ts 的
+   * upload_tx 同一套写法，sqlite 支持嵌套，ensurePaths 自己的
+   * ensure_paths_tx 就落在它里面。
+   *
+   * ## 为什么需要
+   *
+   * 原来整个 544 行**没有任何事务**。全项目只有 files/save.post.ts 和
+   * files/move.post.ts 有，而批量粘贴 —— 建目录 + 复制对象 + 写文件记录 +
+   * 删旧记录 + 预占配额，操作最多面最大 —— 反而没有。三个后果：
+   *
+   *   a) ensurePaths 会**提交**它建的目录。后面复制全失败时，那些空目录
+   *      留在用户树里，删不掉也说不清哪来的。
+   *   b) 每个 worker 做「COS 复制 → INSERT → 可选删旧记录」三步，中途失败
+   *      留下半完成状态（文件建了但旧的没删，或反之）。
+   *   c) 预占的配额没有和实际写入绑定，全败时那笔预占只能靠下面的退款兜。
+   *
+   * ## 边界为什么从 ensurePaths 开始
+   *
+   * ensurePaths 有自己的 savepoint 并且**会 RELEASE**。RELEASE 只是把内层
+   * 保存点弹出，它做的写入仍然属于外层保存点 —— 所以外层一 ROLLBACK，
+   * 目录照样被撤销。这正是把开点放在它之前的原因。
+   *
+   * ## COS 撤销不了，只能补偿
+   *
+   * 已 sliceCopyFile 到桶里的对象不在事务里。回滚时按 destKey 逐个补偿删除
+   * （copiedKeys）。这是「尽力而为」：删失败只记日志，不影响回滚本身。
+   * 进程被 SIGKILL 时补偿不会执行 —— 那是孤儿对象对账的课题，不是这里能解的。
+   */
+  await db.prepare('SAVEPOINT paste_tx').bind().run()
+
   // 在目标位置创建/复用需要的目录（含空目录）
   const destMap = await ensurePaths(db, userId, {
     parentId: targetFolderId,
@@ -423,11 +456,12 @@ export default defineEventHandler(async (event) => {
       )
     })
   }
-  function cosDeleteObject(key: string): Promise<void> {
-    return new Promise((resolve) => {
-      cos.deleteObject({ Bucket, Region, Key: key }, () => resolve())
-    })
-  }
+  // 删除走 server/utils/cos.ts 的 deleteCosObject，不再在本地抄一份。
+  //
+  // 原来的本地版是无防护的裸 Promise 包装（错误全吞、不判断密钥是否配置、
+  // 不留日志）。共享版带配置守卫与失败日志，且**永不抛** —— 正合这里两处用法：
+  // 覆盖时删旧对象（失败不该影响整体）、全败回滚时补偿删除（已在错误路径上，
+  // 再抛第二个错只会盖掉真正的失败原因）。
   function buildCosKey(userId: number, filename: string) {
     const safe = sanitizeForKey(filename)
     const y = new Date()
@@ -438,35 +472,18 @@ export default defineEventHandler(async (event) => {
     return `https://${Bucket}.cos.${Region}.myqcloud.com/${encodeURIComponent(key)}`
   }
 
-  // 并发池
-  async function runWithConcurrency<T, R>(items: T[], limit: number, worker: (item: T, idx: number) => Promise<R>): Promise<R[]> {
-    const ret: R[] = new Array(items.length) as R[]
-    let i = 0
-    let active = 0
-    let resolveAll: (v: R[]) => void
-    let rejectAll: (e: any) => void
-    const done = new Promise<R[]>((resolve, reject) => { resolveAll = resolve; rejectAll = reject })
-    const next = () => {
-      while (active < limit && i < items.length) {
-        const cur = i++
-        active++
-        worker(items[cur], cur)
-          .then((r) => { ret[cur] = r })
-          .catch((e) => { rejectAll(e) })
-          .finally(() => {
-            active--
-            if (ret.length === items.length && active === 0 && i >= items.length) {
-              resolveAll(ret)
-            } else {
-              next()
-            }
-          })
-      }
-      if (items.length === 0) resolveAll(ret)
-    }
-    next()
-    return done
-  }
+  /**
+   * 并发池是 server/utils/concurrency.ts 的 runSettled，不在这里重写一份。
+   *
+   * 为什么抽出去：第一版把它写成内部闭包，测试只能验证一个「同构复刻」——
+   * 于是改真实现测试照样全绿，变异扫描 13 条漏了 8 条。抽成模块后，
+   * tests/paste-transaction.test.mjs import 的就是这里用的同一个函数。
+   *
+   * 原来的写法是「首个错误即 reject」：rejectAll 之后在飞的两个 worker
+   * 照旧 COS 复制、照旧 INSERT files，而下面立刻用那一刻的 successCopyBytes
+   * 退款并重算 —— 落跑的行不在快照里，usedStorage 偏低，配额被低估。
+   * runSettled 等全部结束并如实记录，记账拿到的一定是终值。
+   */
 
   // 执行复制任务（含写库和 overwrite 删除旧文件记录）
   let copiedFiles = 0
@@ -486,13 +503,25 @@ export default defineEventHandler(async (event) => {
     return { item: p, destKey, destUrl }
   })
 
+  /** 已 sliceCopyFile 成功的对象 key。全败回滚时按它补偿删除 */
+  const copiedKeys: string[] = []
+
   try {
-    await runWithConcurrency(tasks, MAX_CONCURRENCY, async (task) => {
+    const outcome = await runSettled(tasks, MAX_CONCURRENCY, async (task) => {
       const { item, destKey, destUrl } = task
       const { src, destFolderId, finalFilename, overwriteExisting } = item
 
       // 复制对象（COS 内部快速 Copy）
       await cosCopyObject(src.fileKey, destKey)
+
+      /**
+       * **在 INSERT 之前**记进补偿清单。
+       *
+       * 顺序是这次修复里最容易搞反的一处：COS 复制此刻已经成功，对象在桶里了。
+       * 若先 INSERT、它抛错、然后才回滚，登记就永远没执行 —— 桶里多一个没人
+       * 认领也删不掉的对象。先登记就一定不漏，多登记只是多删一次（幂等）。
+       */
+      copiedKeys.push(destKey)
 
       // 成功后写入文件记录
       const contentType = src.contentType || 'application/octet-stream'
@@ -508,15 +537,67 @@ export default defineEventHandler(async (event) => {
         await fileService.deleteOwned(userId, overwriteExisting.id)
         // 尝试删除旧对象（失败忽略，避免影响整体）
         if (overwriteExisting.fileKey && overwriteExisting.fileKey !== destKey) {
-          await cosDeleteObject(overwriteExisting.fileKey).catch(() => {})
+          await deleteCosObject(overwriteExisting.fileKey)
         }
         successFreedBytes += overwriteExisting.fileSize
       }
     })
+
+    /**
+     * 失败数 = 任务总数 - 成功数。
+     *
+     * 原来是 `outcome.firstError ? tasks.length - copiedFiles : 0` 的等价写法，
+     * 但更早一版直接写 `tasks.length - copiedFiles`（「余下未成功的任务数」）——
+     * 那个数在并发下从来就不成立：runSettled 的契约是**全部跑完**，所以
+     * 「没跑完的任务」根本不存在。1 个失败 + 4 个成功会报成 failed=4。
+     *
+     * 顺带一提，runSettled 的 results 里失败项是空洞，用
+     * `results.filter(Boolean).length` 数成功数是不可靠的
+     * （worker 合法返回 undefined 时会被误判为失败）。所以数 copiedFiles，
+     * 它由 worker 在真正 INSERT 成功后自增，语义明确。
+     */
+    failed = outcome.firstError ? tasks.length - copiedFiles : 0
+
+    /**
+     * 一个都没成功 → 整段回滚：目录、文件记录、预占的配额一起撤销。
+     *
+     * 这是新增的那条路。原来没有它，全败时只能退款 + recalc，
+     * 而 ensurePaths 建出来的空目录会留在用户树里 —— 那是「粘贴失败了一次」
+     * 之后最直观可见的残留。
+     */
+    if (copiedFiles === 0 && tasks.length > 0) {
+      await db.prepare('ROLLBACK TO paste_tx').bind().run()
+      await db.prepare('RELEASE paste_tx').bind().run()
+
+      // 事务撤销不了 COS，补偿删除。逐个尽力而为，失败只记日志。
+      //
+      // 注意 deleteCosObject 永不抛（见 server/utils/cos.ts）：这里已经在
+      // 错误路径上了，再抛第二个错只会盖掉真正的失败原因。
+      for (const key of copiedKeys) {
+        await deleteCosObject(key)
+      }
+
+      return {
+        success: false,
+        copied: { folders: 0, files: 0 },
+        skipped,
+        failed: tasks.length,
+        statusMessage: '部分文件复制失败'
+      }
+    }
   } catch (e: any) {
-    // 并发复制过程中任一出错，统计失败数 = 余下未成功的任务数
-    failed = tasks.length - copiedFiles
+    // 走到这里说明是 worker 之外的异常（极少：只有上面的 bookkeeping 会抛）。
+    // 仍然整段回滚 —— 与「一个都没成功」同等对待。
+    await db.prepare('ROLLBACK TO paste_tx').bind().run()
+    await db.prepare('RELEASE paste_tx').bind().run()
+    for (const key of copiedKeys) {
+      await deleteCosObject(key)
+    }
+    throw e
   }
+
+  // 提交
+  await db.prepare('RELEASE paste_tx').bind().run()
 
   // 调整 usedStorage：预占是 reserveBytes，真实净增是 successCopyBytes - successFreedBytes
   const actualNet = Math.max(0, successCopyBytes - successFreedBytes)
