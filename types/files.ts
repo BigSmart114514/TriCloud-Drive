@@ -30,7 +30,17 @@ export interface FolderRecord {
   ownerId?: number | null
   /** 我对它有没有写权限 */
   canWrite?: boolean
-  Shared?: boolean
+  /**
+   * 共享三态，**数字**：0 不分享 / 1 分享 / 2 继承。
+   *
+   * 原来这里写的是 `boolean`，与 schema 的 `Shared INTEGER NOT NULL DEFAULT 2`
+   * 不符，也与 types/file-list.ts 的 `Shared?: number` 矛盾。类型上骗人，运行时
+   * 一直是数字 —— 所以它一直没炸，直到有人写 `Number(x.Shared)` 去判三态：
+   * `Number(true) === 1 === SHARE_SHARED`，「继承」会被算成「分享」。
+   *
+   * 要判三态就走 `normalizeShareMode`（types/share.ts），它对 boolean 有显式守卫。
+   */
+  Shared?: number
   IsPublic?: boolean
   allowedUsers?: number[]
 }
@@ -58,7 +68,8 @@ export interface FileRecord {
   ownerId?: number | null
   /** 我对它有没有写权限 */
   canWrite?: boolean
-  Shared?: boolean
+  /** 同 FolderRecord.Shared：数字三态，别写成 boolean（理由见上） */
+  Shared?: number
   IsPublic?: boolean
   allowedUsers?: number[]
 }

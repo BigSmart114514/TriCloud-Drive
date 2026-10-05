@@ -8,11 +8,21 @@
           class="ui-glass relative flex max-h-[88dvh] w-full max-w-lg flex-col rounded-t-2xl bg-white shadow-2xl sm:rounded-2xl"
           role="dialog"
           aria-modal="true"
-          :aria-label="`分享：${name}`"
+          :aria-label="isBulk ? `批量设置分享：${bulkCount} 项` : `分享：${name}`"
         >
           <!-- 头部 -->
           <div class="flex items-start gap-3 border-b border-gray-100 px-4 py-3">
             <div class="min-w-0 flex-1">
+              <!--
+                批量模式的标题行。与单项同一个 h2，不另开一个 ——
+                两条分支的图标、「xxx」宽度规则、truncate 行为完全一样，
+                拆开就是两份会分叉的布局。
+              -->
+              <h2 v-if="isBulk" class="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
+                <ShareIcon class="h-4 w-4 shrink-0 text-gray-500" />
+                <span class="shrink-0 whitespace-nowrap">批量设置分享</span>
+                <span class="min-w-0 truncate font-normal text-gray-500">{{ bulkCount }} 项</span>
+              </h2>
               <!--
                 标题行。「分享」两个字必须保住：不给它 shrink-0，flex 会把它
                 压得比一个字还窄，中文于是可以在字与字之间断行 —— 于是「分享」
@@ -22,14 +32,24 @@
                 是 auto（内容宽度），不给它放开就永远不会触发省略号。
                 所以让「分享」不可压缩、名字可压缩到任意窄，折叠就落在名字上。
               -->
-              <h2 class="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
+              <h2 v-if="!isBulk" class="flex items-center gap-1.5 text-sm font-semibold text-gray-900">
                 <ShareIcon class="h-4 w-4 shrink-0 text-gray-500" />
                 <span class="shrink-0 whitespace-nowrap">分享</span>
                 <span class="min-w-0 truncate font-normal text-gray-500" :title="name">{{ name }}</span>
               </h2>
               <p class="mt-0.5 text-xs text-gray-500">
-                <component :is="isFolder ? FolderIcon : DocumentIcon" class="mr-0.5 inline h-3 w-3 align-[-2px]" />
-                {{ isFolder ? '文件夹' : '文件' }}
+                <!--
+                  批量模式不印「文件夹 / 文件」：一个选择里两类可以混着，
+                  「文件夹」或「文件」都会有一半是错的。改成列出前几项的名字 ——
+                  用户要确认的是「我选中的确实是这几项」，不是它们的类型。
+                -->
+                <template v-if="isBulk">
+                  <span class="block truncate" :title="bulkNamesTitle">{{ bulkNamesPreview }}</span>
+                </template>
+                <template v-else>
+                  <component :is="isFolder ? FolderIcon : DocumentIcon" class="mr-0.5 inline h-3 w-3 align-[-2px]" />
+                  {{ isFolder ? '文件夹' : '文件' }}
+                </template>
                 <span v-if="ownerLabel"> · 属主 {{ ownerLabel }}</span>
               </p>
             </div>
@@ -44,6 +64,45 @@
           </div>
 
           <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-4">
+            <!--
+              批量模式的覆盖警告。
+
+              批量是**整体复写**，而初值是空的（继承 · 不公开 · 空名单）。
+              于是「打开弹窗什么都不改直接点应用」= 把 N 项刷成默认态、清掉所有
+              现有授权、把原本「分享」的文件夹退回「继承」（等于在子树上撤了一道
+              边界，影响整棵子树）。
+
+              这不是 bug，是覆盖语义的必然，但用户不会自己想到 —— 所以要把
+              「会被毁掉的东西」摆在动手之前。
+
+              没有破坏就不显示：没有要警告的东西时一条空横幅比没有更糟。
+              判据是 bulkWipeNotes（真的会被这次应用毁掉的项）。
+            -->
+            <div
+              v-if="isBulk && bulkWipeNotes.length"
+              class="mb-3 flex items-start gap-2 rounded-lg border-l-4 border-amber-400 bg-amber-50 px-3 py-2"
+            >
+              <ExclamationTriangleIcon class="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+              <div class="text-xs leading-relaxed text-amber-800">
+                <p class="font-medium">提交会覆盖下面这些现有设置：</p>
+                <ul class="mt-1 list-disc space-y-0.5 pl-4">
+                  <li v-for="n in bulkWipeNotes" :key="n">{{ n }}</li>
+                </ul>
+              </div>
+            </div>
+
+            <!--
+              批量模式常驻的一条：这次应用的完整结果。用户不该靠点下去才知道
+              会变成什么样 —— confirm 是最后一道，不是唯一一道。
+            -->
+            <p
+              v-if="isBulk"
+              class="mb-3 rounded-lg bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-600"
+            >
+              提交后，{{ bulkCount }} 项会全部设为：<span class="font-medium text-gray-900">{{ bulkOutcomeText }}</span>
+              <span class="mt-0.5 block text-gray-400">这是覆盖，不是合并。</span>
+            </p>
+
             <!-- 管理员模式：这是替别人改，标题栏那行「属主 xxx」容易被忽略 -->
             <div
               v-if="useAdmin"
@@ -178,7 +237,13 @@
               链接权限锁死「读 + 下载」，不给写/删（匿名 bearer token 没有身份
               可追责）。要改权限只能改三态/名单，链接本身没有可配项。
             -->
-            <div class="mt-5 border-t border-gray-100 pt-4">
+            <!--
+              分享链接区。批量模式整块隐藏：N 项就是 N 条链接，弹窗里会出现 N 个
+              分不出彼此的地址块，而且「生成链接」在这条路径下没有对应的服务端
+              动作（bulk 的 removeLinks 只管撤销）。撤销链接另有入口 ——
+              /shares 页底部的批量条。
+            -->
+            <div v-if="!isBulk" class="mt-5 border-t border-gray-100 pt-4">
               <div class="mb-2 flex items-center justify-between gap-2">
                 <h3 class="text-xs font-medium text-gray-500">
                   分享链接
@@ -296,6 +361,43 @@
                 没有匹配的用户
               </p>
             </div>
+
+            <!--
+              批量模式的底部操作条。
+
+              单项模式**没有**这一条：改一下立刻提交，弹窗只是个设置面板。
+              批量不能那样 —— 点三态就发一次请求 = N 项 × 3 次，中途失败还会留
+              半套（而且用户根本没意识到自己已经改了一部分）。所以攒起来一次提交。
+
+              结果复述印在按钮上方而不是按钮里：按钮放不下这么长一句，
+              而藏在按钮 title 里等于没有。
+            -->
+            <div
+              v-if="isBulk"
+              class="sticky bottom-0 -mx-4 mt-4 border-t border-gray-100 bg-white/95 px-4 py-3 backdrop-blur"
+            >
+              <p class="mb-2 truncate text-[11px] text-gray-500" :title="bulkOutcomeText">
+                将把 {{ bulkCount }} 项设为：{{ bulkOutcomeText }}
+              </p>
+              <div class="flex items-center gap-2">
+                <button
+                  type="button"
+                  class="flex-1 rounded-md bg-indigo-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-indigo-700 disabled:opacity-50"
+                  :disabled="applyingBulk"
+                  @click="applyToTargets"
+                >
+                  {{ applyingBulk ? '正在应用…' : `应用到 ${bulkCount} 项` }}
+                </button>
+                <button
+                  type="button"
+                  class="rounded-md px-3 py-2 text-sm text-gray-600 transition-colors hover:bg-gray-100 disabled:opacity-50"
+                  :disabled="applyingBulk"
+                  @click="close"
+                >
+                  取消
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>
@@ -318,17 +420,19 @@ import {
   XMarkIcon
 } from '@heroicons/vue/24/outline'
 import { ShareService } from '~/services/share.service'
-import type { ShareCandidate, ShareGrant, ShareLink, ShareTargetType } from '~/services/share.service'
+import type { ShareBulkTarget, ShareCandidate, ShareGrant, ShareLink, ShareTargetType } from '~/services/share.service'
 import { notify, notifyError } from '~/utils/notify'
 import {
   formatPermission,
   linkActiveFromShareMode,
   normalizePermission,
+  normalizeShareMode,
   PERM_DELETE,
   PERM_DOWNLOAD,
   PERM_READ,
   PERM_WRITE,
   SHARE_INHERIT,
+  SHARE_MODE_LABELS,
   SHARE_NONE,
   SHARE_SHARED
 } from '~~/types/share'
@@ -356,9 +460,39 @@ const props = defineProps<{
   useAdmin?: boolean
   /** 管理视角下被浏览的用户（分享设置的真正属主） */
   targetUserId?: number | null
+
+  /**
+   * 批量模式：非空时本弹窗一次作用于这些条目，而不是 targetId 那一个。
+   *
+   * ## 为什么复用本组件而不是新写一个
+   *
+   * 三态 / 公开 / 名单 / 权限位复选框 / 候选人搜索，这五块**完全一样**，
+   * 抄一份就是几百行重复，而两份表单迟早分叉（加一个权限位只改一处就够，
+   * 改两处就有一处漏）。
+   *
+   * ## 与单项目标的三处行为差异（都在本组件内部分流）
+   *
+   *   1. 不发请求 —— 没有「某一项的现状」可读（多个项的现状各不相同，
+   *      而名单本身在列表接口里根本没有，只有 grantCount 个人数）。
+   *      初值一律「继承 · 不公开 · 名单为空」，也就是用户选定的语义：
+   *      批量是**写入目标**，不是浏览。
+   *   2. 改一下**不立刻提交** —— 单项模式点一下就该看到服务端确认的权威值，
+   *      批量模式下点三态就发一次请求 = N 项 × 3 次请求，且中途失败会留半套。
+   *      所以攒起来由底部「应用到 N 项」一次提交。
+   *   3. 链接区整块隐藏 —— N 项就是 N 条链接，弹窗里就是 N 个分不出彼此的
+   *      地址块。撤销链接另有入口（/shares 页的批量条 removeLinks）。
+   *
+   * 每项带上 Shared / IsPublic / grantCount 是为了顶部那条「会被覆盖成什么」
+   * 的横幅：数据现成（/api/files 已经返回），零额外请求。
+   */
+  bulkTargets?: ShareBulkTarget[] | null
 }>()
 
 const emit = defineEmits<{ close: []; changed: [] }>()
+
+/** 批量模式。length 判断而不是 null 判断：空数组传进来也不该当批量 */
+const isBulk = computed(() => (props.bulkTargets?.length ?? 0) > 0)
+const bulkCount = computed(() => props.bulkTargets?.length ?? 0)
 
 const isFolder = computed(() => props.targetType === 'folder')
 
@@ -424,7 +558,7 @@ const {
 })
 
 watch(
-  () => [props.open, props.targetId, props.targetType] as const,
+  () => [props.open, props.targetId, props.targetType, isBulk.value] as const,
   ([open]) => {
     if (open) load()
     else reset()
@@ -442,6 +576,20 @@ function reset() {
 }
 
 async function load() {
+  // 批量模式不读任何一项的现状（见 bulkTargets 的注释）。
+  // 初值 = 默认三态 + 不公开 + 空名单，也就是「还没设过」的那一套。
+  if (isBulk.value) {
+    mode.value = SHARE_INHERIT
+    isPublic.value = false
+    grants.value = []
+    links.value = []
+    candidates.value = []
+    keyword.value = ''
+    searched.value = false
+    loading.value = false
+    return
+  }
+
   if (!props.targetId) return
   loading.value = true
   try {
@@ -482,8 +630,20 @@ async function run<T>(fn: () => Promise<T>, fallback: string): Promise<T | null>
   }
 }
 
+/**
+ * 三态。批量模式下只改本地，不发请求 ——
+ * 见 bulkTargets 的注释第 2 点。
+ */
 async function applyMode(value: number) {
   if (value === mode.value) return
+  if (isBulk.value) {
+    mode.value = value
+    // 不分享态下 IsPublic 无意义（服务端 setShareMode 会顺手清掉它）。
+    // 这里跟着一起收，否则界面上会显示「不分享 + 公开」这种自相矛盾的状态，
+    // 而提交时服务端会把公开静默丢掉，用户以为设上了。
+    if (value === SHARE_NONE) isPublic.value = false
+    return
+  }
   const prev = mode.value
   mode.value = value
   const res = await run(
@@ -502,7 +662,12 @@ async function applyMode(value: number) {
   }
 }
 
+/** 公开。批量模式下只改本地，理由同 applyMode */
 async function applyPublic(next: boolean) {
+  if (isBulk.value) {
+    isPublic.value = next
+    return
+  }
   const prev = isPublic.value
   isPublic.value = next
   const res = await run(
@@ -523,8 +688,14 @@ async function applyPublic(next: boolean) {
  * 提交整份名单。名单是覆盖语义：传什么就是最终结果。
  * 所以「改某人权限」「加人」「移人」都只是先在本地算出新的名单再重发，
  * 服务端自己算出增删改（server/utils/share.ts 的 replaceAccess）。
+ *
+ * 批量模式下只改本地（不发请求、失败也不回滚）—— 最终由 applyToTargets 一次提交。
  */
 async function submitGrants(next: ShareGrant[], okMessage: string) {
+  if (isBulk.value) {
+    grants.value = next
+    return true
+  }
   const snapshot = grants.value
   grants.value = next
   const res = await run(
@@ -697,6 +868,148 @@ async function runCandidateSearch(q: string, id: number) {
       searching.value = false
       searched.value = true
     }
+  }
+}
+
+/* ---------------- 批量模式：覆盖警告 + 一次提交 ---------------- */
+
+/**
+ * 所选项**当前**的状态汇总，用来在顶部横幅里说明「会被覆盖成什么」。
+ *
+ * 数据来自 /api/files 已经返回的字段，零额外请求。判三态一律走
+ * normalizeShareMode —— 它对 boolean / 脏值有显式守卫，自己写 `=== 1` 的话
+ * `Number(true) === 1 === SHARE_SHARED` 会把「继承」算成「分享」。
+ */
+const bulkCurrentSummary = computed(() => {
+  const targets = props.bulkTargets ?? []
+  let withGrants = 0
+  let grantPeople = 0
+  let isPublicCount = 0
+  let notInherit = 0
+  for (const t of targets) {
+    const n = Number(t.grantCount ?? 0)
+    if (n > 0) {
+      withGrants++
+      grantPeople += n
+    }
+    if (t.IsPublic === true) isPublicCount++
+    if (normalizeShareMode(t.Shared) !== SHARE_INHERIT) notInherit++
+  }
+  return { withGrants, grantPeople, isPublicCount, notInherit, total: targets.length }
+})
+
+/**
+ * 「会被清掉的东西」清单。为空就不显示横幅 —— 没有破坏就没有警告，
+ * 满屏警告等于没有警告。
+ *
+ * 只列**确实会被这次应用毁掉**的项：
+ *   名单非空 → 提交时 grants 一定是数组（初值空数组），非空即整体复写
+ *   已公开   → 复写 isPublic = false
+ *   非继承三态 → 会被压成弹窗里当前选的那个（默认「继承」）
+ * 这三件都不是「用户改了三态」必然会想到的后果，尤其第一件。
+ */
+const bulkWipeNotes = computed<string[]>(() => {
+  const s = bulkCurrentSummary.value
+  const notes: string[] = []
+  if (s.withGrants > 0) {
+    notes.push(`${s.withGrants} 项当前有授权名单（共 ${s.grantPeople} 人），提交后会被清空`)
+  }
+  if (s.isPublicCount > 0) {
+    notes.push(`${s.isPublicCount} 项当前是公开的，提交后会变成不对外公开`)
+  }
+  if (s.notInherit > 0) {
+    notes.push(`${s.notInherit} 项当前不是「继承」态，提交后会被压成「${SHARE_MODE_LABELS[mode.value]}」`)
+  }
+  return notes
+})
+
+/** 应用按钮上那一句结果复述。用户点之前就该知道会变成什么样 */
+const bulkOutcomeText = computed(
+  () =>
+    `${mode.value === SHARE_NONE ? '不公开' : isPublic.value ? '公开' : '不对外公开'} · ` +
+    `${SHARE_MODE_LABELS[mode.value]} · ` +
+    (grants.value.length ? `授权 ${grants.value.length} 人` : '清空授权名单')
+)
+
+const applyingBulk = ref(false)
+
+/**
+ * 一次提交给所有项。
+ *
+ * ## 为什么必须过 confirm
+ *
+ * 批量是**整体复写**，而初值是空的（继承 · 不公开 · 空名单）。
+ * 于是「打开弹窗直接点应用」= 把 N 项刷成默认态、清掉所有现有授权、
+ * 把原本是「分享」的文件夹退回「继承」（那等于在子树上撤了一道边界，
+ * 影响整棵子树）。这不是 bug，是覆盖语义的必然，但用户不会自己想到。
+ *
+ * ## 为什么失败要逐项说出来
+ *
+ * 服务端逐项校验属主：混进来的别人的 id 会单独 ok:false，其余照常执行。
+ * 只回一个「成功」的话，用户会以为全做完了 —— 直到下次刷新才发现有几项没变。
+ */
+/**
+ * 批量模式下标题那行印什么。
+ *
+ * 印前 3 项 + 「等 N 项」：印全是几十行，印一项看不出是批量。
+ * title 属性放全量，悬停能看全 —— 与上面名字那一列的处理一致。
+ */
+const BULK_PREVIEW_NAMES = 3
+const bulkNamesPreview = computed(() => {
+  const names = (props.bulkTargets ?? []).map((t) => t.name)
+  const shown = names.slice(0, BULK_PREVIEW_NAMES).join('、')
+  return names.length > BULK_PREVIEW_NAMES
+    ? `${shown} 等 ${names.length} 项`
+    : shown
+})
+const bulkNamesTitle = computed(() => (props.bulkTargets ?? []).map((t) => t.name).join('\n'))
+
+async function applyToTargets() {
+  if (!isBulk.value || applyingBulk.value) return
+
+  if (!window.confirm(
+    `把 ${bulkCount.value} 项全部设为下面这样？\n\n` +
+    `· 共享方式：${SHARE_MODE_LABELS[mode.value]}\n` +
+    `· 公开：${mode.value === SHARE_NONE ? '不公开' : isPublic.value ? '公开（所有登录用户可读）' : '否'}\n` +
+    `· 授权名单：${grants.value.length ? `${grants.value.length} 人（会替换掉现有全部授权）` : '清空'}\n\n` +
+    (bulkWipeNotes.value.length
+      ? `注意：\n· ${bulkWipeNotes.value.join('\n· ')}\n\n`
+      : '') +
+    '这是覆盖，不是合并。'
+  )) return
+
+  applyingBulk.value = true
+  try {
+    const res = await ShareService.bulkApply(
+      (props.bulkTargets ?? []).map((t) => ({ targetType: t.targetType, targetId: t.targetId })),
+      {
+        mode: mode.value,
+        isPublic: mode.value === SHARE_NONE ? false : isPublic.value,
+        grants: grants.value.map((g) => ({ userId: g.userId, permission: g.permission }))
+      },
+      { useAdmin: props.useAdmin, targetUserId: props.targetUserId }
+    )
+
+    if (res.failCount === 0) {
+      notify(`已应用到 ${res.okCount} 项`, 'success')
+    } else {
+      // 逐项原因去重后列出：20 项全被同一句「只有属主可以管理分享」拦掉时，
+      // 印 20 遍没有信息量
+      const reasons = Array.from(
+        new Set(res.results.filter((r) => !r.ok).map((r) => r.message ?? '操作失败'))
+      )
+      notify(
+        `成功 ${res.okCount} 项，失败 ${res.failCount} 项：${reasons.join('；')}`,
+        'error'
+      )
+    }
+    // 成功与部分失败都要刷新：成功的那几项界面上的角标已经过期了
+    emit('changed')
+    close()
+  } catch (e) {
+    notifyError(e, '批量设置分享失败')
+  } finally {
+    applyingBulk.value = false
   }
 }
 

@@ -86,6 +86,24 @@
           <DocumentDuplicateIcon class="h-5 w-5" />
         </button>
         <!--
+          批量分享。门控与 FileList 的角标共用 canBulkShare（见那段注释）——
+          行内分享按钮和批量分享按钮的准入必须是同一条规则，否则会出现
+          「每行都能点分享、批量条上没有」这种对不上。
+
+          颜色跟着行内那个分享按钮（emerald），这样「同一个动作」的图标在
+          界面上一眼能对上。
+        -->
+        <button
+          v-if="canBulkShare"
+          class="p-1 text-sm text-emerald-600 hover:text-emerald-500 disabled:opacity-50 hidden sm:inline-flex"
+          :disabled="selectedCount === 0"
+          @click="openBulkShare"
+          title="批量设置分享"
+          aria-label="批量设置分享"
+        >
+          <ShareIcon class="h-5 w-5" />
+        </button>
+        <!--
           粘贴：链接视角不给。链接的目录只读，粘不进去；
           「从链接复制到自己的空间」是在**自己的**目录里点粘贴完成的
           （剪贴板 payload 带着 link，服务端靠它证明能读源）。
@@ -170,6 +188,9 @@
               <button  class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="selectedCount === 0" @click="copySelection(); mobileMoreOpen = false">
                 <DocumentDuplicateIcon class="h-5 w-5 text-indigo-600" />复制所选
               </button>
+              <button v-if="canBulkShare" class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="selectedCount === 0" @click="openBulkShare(); mobileMoreOpen = false">
+                <ShareIcon class="h-5 w-5 text-emerald-600" />批量设置分享
+              </button>
               <button v-if="showPaste" class="w-full px-4 py-2 text-sm hover:bg-gray-50 disabled:opacity-50 flex items-center gap-2 text-gray-700" :disabled="!hasClipboard || pasting" @click="pasteClipboard(); mobileMoreOpen = false">
                 <ClipboardDocumentCheckIcon class="h-5 w-5 text-green-600" />{{ clipboard?.mode === 'cut' ? '粘贴（移动）' : '粘贴（复制）' }}
               </button>
@@ -231,7 +252,7 @@
         @rename-folder="onRenameFolder"
         :show-clip="!linkMode"
         :share-action="shareAction"
-        :show-share-badge="isOwn && !linkMode"
+        :show-share-badge="canBulkShare"
         @clip-folder="onClipFolder"
         @copy-folder="onCopyFolder"
         @download-file="onDownloadFile"
@@ -244,6 +265,11 @@
     />
     </div>
 
+    <!--
+      分享弹窗。**不要加 v-if**：内部淡出靠 Transition + :open 驱动，组件必须
+      留在原地、只把 open 翻成 false，否则整个组件被摘出 vdom，离场动画一帧
+      都不播（shares.vue 里踩过一次）。
+    -->
     <ShareDialog
       :open="shareTarget !== null"
       :target-type="shareTarget?.type ?? 'file'"
@@ -253,6 +279,28 @@
       :use-admin="!!props.useAdmin"
       :target-user-id="targetUserIdRef"
       @close="shareTarget = null"
+      @changed="fetchFiles"
+    />
+
+    <!--
+      批量分享。**不要加 v-if**，理由同上。
+
+      两个实例而不是一个带判别字段的：见 bulkShareOpen 那段注释。
+
+      传 :bulk-targets="bulkShareTargets"（不是 `canBulkShare ? ... : null`）：
+      canBulkShare 为 false 时它本身就是空数组，组件里 isBulk 判 length > 0，
+      于是「准入」与「有没有选中项」这两层检查各自只有一处。
+    -->
+    <ShareDialog
+      :open="bulkShareOpen"
+      target-type="file"
+      :target-id="null"
+      :name="''"
+      :owner-label="props.useAdmin ? props.targetUserLabel : undefined"
+      :use-admin="!!props.useAdmin"
+      :target-user-id="targetUserIdRef"
+      :bulk-targets="bulkShareTargets"
+      @close="closeBulkShare"
       @changed="fetchFiles"
     />
 
@@ -272,6 +320,10 @@
             </button>
             <button  class="p-1 text-indigo-600 disabled:opacity-50" :disabled="selectedCount === 0" @click="copySelection" title="复制" aria-label="复制">
               <DocumentDuplicateIcon class="h-5 w-5" />
+            </button>
+            <!-- 移动端底部条：与桌面工具栏同一个门控与同一个动作 -->
+            <button v-if="canBulkShare" class="p-1 text-emerald-600 disabled:opacity-50" :disabled="selectedCount === 0" @click="openBulkShare" title="批量设置分享" aria-label="批量设置分享">
+              <ShareIcon class="h-5 w-5" />
             </button>
             <button v-if="showPaste" class="p-1 text-green-600 disabled:opacity-50" :disabled="!hasClipboard || pasting" @click="pasteClipboard" title="粘贴" aria-label="粘贴">
               <ClipboardDocumentCheckIcon class="h-5 w-5" />
@@ -317,6 +369,7 @@ import { useDnDUpload } from '~/composables/useDnDUpload'
 import FileList from '~/components/FileList.vue'
 import FilePreviewer from '~/components/FilePreviewer.vue'
 import ShareDialog from '~/components/ShareDialog.vue'
+import type { ShareBulkTarget } from '~/services/share.service'
 import type { FileListFile, FileListFolder } from '~~/types/file-list'
 import type { SearchFileHit, SearchPathNode } from '~/services/search.service'
 import type { FileRecord, FolderRecord } from '~~/types/files'
@@ -331,6 +384,7 @@ import {
   EllipsisVerticalIcon,
   FolderPlusIcon,
   ScissorsIcon,
+  ShareIcon,
   TrashIcon
 } from '@heroicons/vue/24/outline'
 
@@ -703,6 +757,80 @@ const onShareFile = (file: FileListFile) => {
 const onShareFolder = (folder: FileListFolder) => {
   if (shareAction(folder) !== 'manage') return
   shareTarget.value = { type: 'folder', id: Number(folder.id), name: String(folder.name) }
+}
+
+/**
+ * 批量分享的准入条件。
+ *
+ * 与传给 FileList 的 showShareBadge **必须是同一个表达式**，所以合成一个
+ * computed 喂两处。分两处写就等于给自己留一个「改了一处忘了另一处」的口子 ——
+ * 那正是首页踩过的：variant 传错导致角标与红点全不渲染，而且只在
+ * 「先点过别人、再点回自己」之后才发作。
+ *
+ * 口径即「我的文件 + 文件总览（管理页）」：
+ *   own      —— 我的文件，以及 /manage/files（它不传 variant，默认 own）
+ *   shared   —— 首页侧栏看别人分享给我的。那是别人的内容，我无权改它的分享
+ *   linkMode —— 链接视角，条目属主是别人，而且访客没有身份
+ */
+const canBulkShare = computed(() => isOwn.value && !linkMode.value)
+
+/**
+ * 当前选中项 → ShareDialog 的批量载荷。
+ *
+ * 连文件夹与文件一起交：两者都是「分享设置挂在某个 id 上」，服务端用
+ * targetType 区分表，口径完全一致 —— 授权给某个人，对文件夹是给他看整棵子树，
+ * 对文件是给他看那一个文件。用户勾了什么就一起设，不替他挑。
+ *
+ * 带上 Shared / IsPublic / grantCount 是给弹窗里那条覆盖警告用的，
+ * /api/files 已经返回了，零额外请求。
+ */
+const bulkShareTargets = computed<ShareBulkTarget[]>(() => {
+  if (!canBulkShare.value) return []
+  const out: ShareBulkTarget[] = []
+  for (const id of selectedFolderIds.value) {
+    const f = folders.value.find((x) => x.id === id)
+    if (!f) continue
+    out.push({
+      targetType: 'folder',
+      targetId: Number(f.id),
+      name: String(f.name),
+      Shared: f.Shared,
+      IsPublic: f.IsPublic,
+      grantCount: (f as FileListFolder).grantCount
+    })
+  }
+  for (const id of selectedFileIds.value) {
+    const f = files.value.find((x) => x.id === id)
+    if (!f) continue
+    out.push({
+      targetType: 'file',
+      targetId: Number(f.id),
+      name: String(f.filename),
+      Shared: f.Shared,
+      IsPublic: f.IsPublic,
+      grantCount: (f as FileListFile).grantCount
+    })
+  }
+  return out
+})
+
+/**
+ * 单项目标与批量目标**分两个 ref**，不用一个带判别字段的。
+ *
+ * 合并成一个的话每次开关弹窗都要判断「现在是哪种」，而判断错了的表现是
+ * 「打开批量弹窗却改了单项」—— 服务端会照单全收，改的是另一项。
+ * 两个 ref 天然互斥，父级那行 v-if 只需要看一眼 isBulkShareOpen。
+ */
+const bulkShareOpen = ref(false)
+const openBulkShare = () => {
+  if (!canBulkShare.value || bulkShareTargets.value.length === 0) return
+  // 单项弹窗正在开着就关掉它：两个 ShareDialog 实例会各自持有状态，
+  // 而同一个屏幕上也只会看得见一个
+  shareTarget.value = null
+  bulkShareOpen.value = true
+}
+const closeBulkShare = () => {
+  bulkShareOpen.value = false
 }
 const closePreview = () => {
   previewingFile.value = null

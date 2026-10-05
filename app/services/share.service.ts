@@ -99,18 +99,22 @@ export interface ShareSettingsResult {
 }
 
 /**
- * 批量处置的三个动作。
+ * 批量处置的四个动作。
  *
  *   reset       恢复默认：三态→继承 + 取消公开 + 清空名单 + 撤销全部链接
  *   unpublish   取消公开：只动 IsPublic
  *   removeLinks 撤销链接：只撤链接
+ *   apply       把一份分享设置整体复写给每一项（走 ShareService.bulkApply）
  *
  * 没有「只把三态设成继承」：点完名单和链接都还在，条目照样不出列表，
  * 语义上等于「没恢复」。真要「停止当挡板但保留名单」，在分享弹窗里改三态即可。
+ *
+ * apply 不在 SHARE_BULK_ACTION_LABELS 里：它没有按钮文案，那三个是分享管理页
+ * 底部批量条上直接印字的按钮，而 apply 是「打开弹窗」，入口在文件列表的工具栏。
  */
-export type ShareBulkAction = 'reset' | 'unpublish' | 'removeLinks'
+export type ShareBulkAction = 'reset' | 'unpublish' | 'removeLinks' | 'apply'
 
-export const SHARE_BULK_ACTION_LABELS: Record<ShareBulkAction, string> = {
+export const SHARE_BULK_ACTION_LABELS: Record<Exclude<ShareBulkAction, 'apply'>, string> = {
   reset: '恢复默认',
   unpublish: '取消公开',
   removeLinks: '撤销链接'
@@ -124,6 +128,32 @@ export interface ShareBulkResult {
   failCount: number
   /** 逐项结果。归属校验在服务端做，别名不属于你的项会单独 ok:false 而不是整批失败 */
   results: Array<{ targetType: string; targetId: number | null; ok: boolean; message?: string }>
+}
+
+/**
+ * apply 的载荷。三个字段都是**可选**，且 null/undefined 的含义是「不碰这一项」。
+ *
+ * `grants` 是**整体复写**语义：传什么就是最终名单，不在列表里的人会被移除。
+ * 所以 `grants: []`（空数组）与「不传 grants」是两件截然不同的事 ——
+ * 前者是清空名单，后者是保留原名单。批量弹窗的初值是空的，
+ * 于是「什么都不改直接提交」等价于清空所有授权，前端因此必须显式警告。
+ */
+export interface ShareBulkApplyPayload {
+  mode?: ShareMode | null
+  isPublic?: boolean | null
+  grants?: Array<{ userId: number; permission: number }> | null
+}
+
+/** 批量设置里的一项。除 id/type 外还带当前状态，用来在弹窗里显示「会被覆盖成什么」 */
+export interface ShareBulkTarget {
+  targetType: 'file' | 'folder'
+  targetId: number
+  name: string
+  /** 数字三态。**必须走 normalizeShareMode**，别自己 `=== 1`：
+   *  Number(true) === 1 === SHARE_SHARED */
+  Shared?: number
+  IsPublic?: boolean
+  grantCount?: number
 }
 
 /**
@@ -169,12 +199,35 @@ export const ShareService = {
    */
   async bulk(
     targets: Array<{ targetType: 'file' | 'folder'; targetId: number }>,
-    action: ShareBulkAction
+    action: Exclude<ShareBulkAction, 'apply'>
   ) {
     return await $fetch<ShareBulkResult>('/api/share/bulk', {
       method: 'POST',
       body: { targets, action }
     })
+  },
+
+  /**
+   * 批量设置分享。`payload` 里没给的字段不动，给了的整体复写。
+   *
+   * 管理视角必须传 useAdmin / targetUserId：服务端 bulk 端点读这两个参数决定
+   * authUserId 落在谁身上（与 /api/share/mode 同一套）。漏了的话管理员在
+   * /manage/files 里改的是自己的「属主判定」，每一项都会 403。
+   *
+   * 与 bulk() 分成两个方法而不是加第三个参数：apply 的载荷形状完全不同
+   * （三个可选字段 vs 一个动作名），塞进同一个签名里将来一定会被搞混。
+   */
+  async bulkApply(
+    targets: Array<{ targetType: 'file' | 'folder'; targetId: number }>,
+    payload: ShareBulkApplyPayload,
+    scope?: { useAdmin?: boolean; targetUserId?: number | null }
+  ) {
+    const body: Record<string, any> = { targets, action: 'apply', ...payload }
+    if (scope?.useAdmin && scope.targetUserId != null) {
+      body.useAdmin = true
+      body.targetUserId = scope.targetUserId
+    }
+    return await $fetch<ShareBulkResult>('/api/share/bulk', { method: 'POST', body })
   },
 
     async list(target: ShareTargetType) {
