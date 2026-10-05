@@ -331,8 +331,38 @@ export default defineEventHandler(async (event) => {
    * （copiedKeys）。这是「尽力而为」：删失败只记日志，不影响回滚本身。
    * 进程被 SIGKILL 时补偿不会执行 —— 那是孤儿对象对账的课题，不是这里能解的。
    */
-  await db.prepare('SAVEPOINT paste_tx').bind().run()
+  /**
+ * 已成功复制到 COS 的对象 key。事务撤销不了它们，回滚时要逐个补偿删除。
+ *
+ * 声明在 SAVEPOINT 之前：下面整个事务区间（含 finally）都要读它。
+ */
+const copiedKeys: string[] = []
 
+await db.prepare('SAVEPOINT paste_tx').bind().run()
+
+/**
+ * 事务是否已经收尾（提交过）。false 时由 finally 回滚。
+ *
+ * ## 为什么必须有这个标志
+ *
+ * 第一版只把「全败」和「catch」两条路写了回滚，漏掉了**早退 return** ——
+ * 而这个区间里有两处：配额过期（:426）与预占失败（:435）。它们都在事务内
+ * `return`，走不到 RELEASE，savepoint 就悬着。
+ *
+ * 后果不是「少回滚一点」而是**整个库写锁不释放**：SQLite 的 SAVEPOINT 持有
+ * 写锁直到 RELEASE/ROLLBACK TO。悬着之后所有别的连接都 SQLITE_BUSY ——
+ * 包括 dev server 自己下一次请求。
+ *
+ * 实况验证逮到的：拿一个过期的父账号跑粘贴，接口正常返回 403 文案（看不出问题），
+ * 但随后整库 BUSY，只能重启。**单元测试抓不到这个** —— 那是 20 条断言里的源码
+ * 结构检查，看不见「return 会跳过 RELEASE」。
+ *
+ * finally + 标志位是唯一能覆盖**所有**出口的写法：早退、抛错、全败、成功，
+ * 无论从哪条路离开，finally 都会跑，没提交就回滚。
+ */
+let settledTx = false
+
+try {
   // 在目标位置创建/复用需要的目录（含空目录）
   const destMap = await ensurePaths(db, userId, {
     parentId: targetFolderId,
@@ -566,17 +596,8 @@ export default defineEventHandler(async (event) => {
      * 之后最直观可见的残留。
      */
     if (copiedFiles === 0 && tasks.length > 0) {
-      await db.prepare('ROLLBACK TO paste_tx').bind().run()
-      await db.prepare('RELEASE paste_tx').bind().run()
-
-      // 事务撤销不了 COS，补偿删除。逐个尽力而为，失败只记日志。
-      //
-      // 注意 deleteCosObject 永不抛（见 server/utils/cos.ts）：这里已经在
-      // 错误路径上了，再抛第二个错只会盖掉真正的失败原因。
-      for (const key of copiedKeys) {
-        await deleteCosObject(key)
-      }
-
+      // 不自己写 ROLLBACK：直接 return，让 finally 去收。
+      // 早退路径与成功路径共用同一个 finally，才不会出现「有的路忘了收」。
       return {
         success: false,
         copied: { folders: 0, files: 0 },
@@ -586,18 +607,14 @@ export default defineEventHandler(async (event) => {
       }
     }
   } catch (e: any) {
-    // 走到这里说明是 worker 之外的异常（极少：只有上面的 bookkeeping 会抛）。
-    // 仍然整段回滚 —— 与「一个都没成功」同等对待。
-    await db.prepare('ROLLBACK TO paste_tx').bind().run()
-    await db.prepare('RELEASE paste_tx').bind().run()
-    for (const key of copiedKeys) {
-      await deleteCosObject(key)
-    }
+    // worker 之外的异常（只有上面的 bookkeeping 会抛）。同样不自己收，
+    // 交给 finally，然后原样上抛 —— 让调用方看到真正的失败原因。
     throw e
   }
 
   // 提交
   await db.prepare('RELEASE paste_tx').bind().run()
+  settledTx = true
 
   // 调整 usedStorage：预占是 reserveBytes，真实净增是 successCopyBytes - successFreedBytes
   const actualNet = Math.max(0, successCopyBytes - successFreedBytes)
@@ -623,4 +640,28 @@ export default defineEventHandler(async (event) => {
     failed,
     statusMessage: failed ? '部分文件复制失败' : '复制完成'
   }
+} finally {
+  /**
+   * 事务的唯一收口。没提交过就回滚 —— 覆盖**全部**出口：
+   * 配额过期早退、预占失败早退、全败早退、抛错、以及成功。
+   *
+   * 为什么必须是 finally，而不是每条路各写一遍：第一版就是这么写的，
+   * 漏掉两处早退，savepoint 悬着 → 整库 SQLITE_BUSY（实况验证才发现的）。
+   * 「一共有哪些出口」是随代码变的东西，人列的清单一定会漏；
+   * finally 是语言层面的保证，以后新增任何 return 都不会漏。
+   *
+   * 补偿删除也在这里：事务撤销不了桶里的对象，凡是走到这里而没提交的，
+   * 都得把已复制的对象清掉。
+   *
+   * deleteCosObject 永不抛（见 server/utils/cos.ts），所以 finally 里不会有
+   * 二次异常盖掉真正的失败原因。
+   */
+  if (!settledTx) {
+    await db.prepare('ROLLBACK TO paste_tx').bind().run()
+    await db.prepare('RELEASE paste_tx').bind().run()
+    for (const key of copiedKeys) {
+      await deleteCosObject(key)
+    }
+  }
+}
 })

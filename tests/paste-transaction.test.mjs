@@ -235,20 +235,102 @@ describe('paste 的事务边界（源码断言）', () => {
     )
   })
 
-  test('全败时回滚 + 补偿删除 COS 对象', () => {
+  /**
+ * 事务必须有**唯一收口**，且覆盖所有出口。
+ *
+ * ## 这条是被实况验证逼出来的
+ *
+ * 第一版只在「全败」和「catch」两条路各写一遍 ROLLBACK，漏掉了两处早退
+ * —— 配额过期（:426）与预占失败（:435），它们都在事务内 return。
+ * savepoint 就悬着，SQLite 的写锁永不释放，整库 SQLITE_BUSY。
+ *
+ * 症状特别隐蔽：接口返回 403 文案，**看起来完全正常**；是随后所有别的
+ * 连接都 BUSY 才暴露出来的。20 条断言里没有一条抓得到 —— 源码结构检查
+ * 看不见「return 会跳过 RELEASE」。
+ *
+ * 所以现在的断言不是「某条路上有 ROLLBACK」，而是：
+ *   1. 回滚只出现在 finally 里（唯一收口）
+ *   2. finally 由 settledTx 标志守卫
+ *   3. SAVEPOINT 之后到 handler 结束之间，不存在任何裸 return
+ */
+  test('回滚只有一个收口：在 finally 里，且由 settledTx 守卫', () => {
     const code = codeOnly(read())
-    // 一个都没成功 → 回滚。少了这条，ensurePaths 建的空目录会留在用户树里。
+    const rollbacks = [...code.matchAll(/ROLLBACK TO paste_tx/g)].map((m) => m.index)
+    assert.equal(
+      rollbacks.length,
+      1,
+      `ROLLBACK TO paste_tx 只该出现在 finally 里一次，实际 ${rollbacks.length} 处 —— ` +
+        '分散写在各条路上必然漏，而漏掉的后果是整库写锁不释放'
+    )
+    assert.match(code, /\} finally \{/, '必须用 finally 收口')
+    assert.match(code, /if \(!settledTx\)/, 'finally 必须由 settledTx 守卫，否则成功路径会被回滚')
     assert.match(
       code,
-      /if \(copiedFiles === 0 && tasks\.length > 0\) \{[\s\S]{0,400}?ROLLBACK TO paste_tx/,
-      '「一个都没成功」必须整段回滚'
+      /await db\.prepare\('RELEASE paste_tx'\)[\s\S]{0,40}?settledTx = true/,
+      '提交后必须立刻置 settledTx = true，否则 finally 会把已提交的也回滚掉'
+    )
+  })
+
+  test('try 紧跟在 SAVEPOINT 后面（finally 兜得住所有出口）', () => {
+    // 顺序不能反：try 在 SAVEPOINT 之前 → 早退时不经过 finally。
+    const code = codeOnly(read())
+    const spAt = code.indexOf("await db.prepare('SAVEPOINT paste_tx')")
+    const tryAt = code.indexOf('try {', spAt)
+    assert.ok(spAt > 0, '没找到 SAVEPOINT paste_tx')
+    assert.ok(tryAt > spAt, 'try 必须在 SAVEPOINT 之后，否则 finally 兜不住任何出口')
+    /**
+     * 中间只允许声明，不能有可执行语句。
+     *
+     * 注意用 `return|throw` 而不是 `\breturn\b` —— 声明名 `settledTx`
+     * 里不含这两个词，但 `let` 声明里若写成 `let rollbackNeeded = false`
+     * 就会误判。真正的判据是「有没有可能离开 try 的语句」。
+     */
+    // 从 SAVEPOINT **语句之后**开始看 —— SAVEPOINT 自己当然含 await。
+    const afterSp = spAt + "await db.prepare('SAVEPOINT paste_tx').bind().run()".length
+    const between = code.slice(afterSp, tryAt)
+    assert.doesNotMatch(
+      between,
+      /^\s*(await|return|throw)\b/m,
+      `SAVEPOINT 与 try 之间不该有可执行语句，实际有：\n${between.trim()}`
+    )
+  })
+
+  test('配额的两处早退都在 try 内（finally 兜得住）', () => {
+    // 精确盯住最初肇事的两处。第一版就是漏了它们，savepoint 悬着 → 整库 BUSY。
+    //
+    // 找的是**源码里真实存在**的片段，不是运行时文案：
+    // 「套餐已过期」是 quotaFailMessage 的返回值，源码里搜不到 ——
+    // 第一版按文案去找，直接判「没找到」，测试是坏的。
+    const code = codeOnly(read())
+    const spAt = code.indexOf("await db.prepare('SAVEPOINT paste_tx')")
+    const tryAt = code.indexOf('try {', spAt)
+
+    const sites = [
+      ['配额过期早退', "quotaFailMessage(db, expiredOn.self ? 'expired_self'"],
+      ['预占失败早退', 'quotaFailMessage(db, fail, userId, null, false)']
+    ]
+    for (const [what, needle] of sites) {
+      const at = code.indexOf(needle)
+      assert.ok(at > 0, `没找到源码片段：${needle}`)
+      assert.ok(at > spAt, `${what} 在 SAVEPOINT 之前，那 SAVEPOINT 就白开了`)
+      assert.ok(at > tryAt, `${what} 在 try 之外 —— 它 return 时 finally 不执行，savepoint 悬着`)
+    }
+  })
+
+  test('全败时回滚 + 补偿删除 COS 对象', () => {
+    const code = codeOnly(read())
+    // 一个都没成功 → return，让 finally 回滚。少了这条，ensurePaths 建的空目录会留下。
+    assert.match(
+      code,
+      /if \(copiedFiles === 0 && tasks\.length > 0\) \{\s*(\/\/[^\n]*\n\s*)*return \{/,
+      '「一个都没成功」必须走 return（由 finally 回滚）'
     )
     // 事务撤销不了 COS，所以要按已复制的 key 补偿删除
     assert.match(code, /copiedKeys\.push\(destKey\)/, '必须记录已复制成功的 key')
     assert.match(
       code,
-      /ROLLBACK TO paste_tx[\s\S]{0,300}?deleteCosObject\(key\)/,
-      '回滚之后必须补偿删除 COS 对象 —— 事务管不到桶里'
+      /finally[\s\S]{0,600}?ROLLBACK TO paste_tx[\s\S]{0,300}?deleteCosObject\(key\)/,
+      'finally 里回滚之后必须补偿删除 COS 对象 —— 事务管不到桶里'
     )
   })
 
@@ -265,38 +347,105 @@ describe('paste 的事务边界（源码断言）', () => {
     )
   })
 
-  test('两条回滚路径各自都带补偿删除（不能只有一条）', () => {
-    // 上一条只查了 catch 分支，于是「全败分支的补偿删除被删掉」这条变异
-    // 溜过去了 —— 两条路径写法几乎一样，肉眼很难看出少了一处。
-    // 所以改成**逐条**检查：所有出现 ROLLBACK TO paste_tx 的地方，
-    // 其后 400 字符内都必须出现 deleteCosObject。
+  test('catch 分支不自己收事务（原样上抛，交给 finally）', () => {
+    // catch 里再写一遍 ROLLBACK 是第一版的做法。现在必须只 throw：
+    // 自己收的话 finally 会再收一次 —— 对已回滚的事务再 ROLLBACK TO 本身无害，
+    // 但两处收口迟早分叉，而分叉正是这次事故的形状。
     const code = codeOnly(read())
-    const rollbacks = [...code.matchAll(/ROLLBACK TO paste_tx/g)].map((m) => m.index)
-    assert.ok(rollbacks.length >= 2, `应至少有两条回滚路径（全败 + catch），实际 ${rollbacks.length} 条`)
-
-    rollbacks.forEach((at, i) => {
-      const after = code.slice(at, at + 400)
-      assert.match(
-        after,
-        /deleteCosObject/,
-        `第 ${i + 1} 条回滚路径（偏移 ${at}）之后没有 deleteCosObject —— ` +
-          '事务撤销不了桶里的对象，这里不回滚就会留下孤儿'
-      )
-    })
-  })
-
-  test('补偿删除在 catch 分支里也有（bookkeeping 抛错时同样要清）', () => {
-    const code = codeOnly(read())
-    // 取**最后一个** worker 循环之后的 catch（粘贴里有多处 catch，
-    // 前面那些是权限校验的，只回传 statusMessage 不碰事务）。
-    // 第一版用 indexOf 取到第一个（'部分内容不存在'那个），于是断言恒假。
     const workerAt = code.indexOf('await runSettled(')
     assert.ok(workerAt > 0, '没找到 runSettled 调用')
+    // 取复制循环**之后**那个 catch（前面几个是权限校验的，不碰事务）。
     const catchAt = code.indexOf('} catch (e: any) {', workerAt)
     assert.ok(catchAt > workerAt, '没找到复制循环之后的 catch 分支')
-    const after = code.slice(catchAt, catchAt + 400)
-    assert.match(after, /ROLLBACK TO paste_tx/, 'catch 分支也要回滚')
-    assert.match(after, /deleteCosObject/, 'catch 分支也要补偿删除 COS')
+
+    /**
+     * 只看 catch **自己的花括号体**，不能往后扫固定字符数。
+     *
+     * 第一版扫 300 字符，结果吃进了 catch 之后的正常代码
+     * （`RELEASE paste_tx` + `settledTx = true` + 退款 SQL），
+     * 于是一条完全正确的实现被判「catch 里不该自己收」。
+     *
+     * 花括号配平要跳过字符串与注释 —— 注释里就写着 ROLLBACK TO。
+     */
+    let depth = 0
+    let i = code.indexOf('{', catchAt)
+    const start = i
+    for (; i < code.length; i++) {
+      if (code[i] === '{') depth++
+      else if (code[i] === '}') {
+        depth--
+        if (depth === 0) break
+      }
+    }
+    const body = code.slice(start, i + 1)
+
+    assert.match(body, /throw e/, 'catch 必须把错误原样上抛')
+    assert.doesNotMatch(
+      body,
+      /ROLLBACK TO|RELEASE paste_tx|deleteCosObject|settledTx/,
+      `catch 里不该自己收事务或补偿删除 —— 那是 finally 的职责。实际内容：\n${body}`
+    )
+  })
+
+  /**
+   * SAVEPOINT 与 RELEASE 之间的语句里，不许出现手工的 ROLLBACK TO / RELEASE。
+   *
+   * 这条是为了钉住「收口唯一化」：哪怕手工收的那一次是正确的（该早退确实
+   * 需要收），它也把职责分散到了两处 —— 下次有人加一条出口时，很可能又忘了。
+   *
+   * 变异扫描里那条「配额过期早退改成手工 RELEASE」就是靠它抓到的：
+   * 手工 RELEASE 之后 finally 又会 RELEASE 一次，测试若只看 finally
+   * 存在与否就放过了。
+   */
+  test('事务区间内没有手工的 ROLLBACK/RELEASE（收口只归 finally）', () => {
+    const code = codeOnly(read())
+    const spAt = code.indexOf("await db.prepare('SAVEPOINT paste_tx')")
+    const finallyAt = code.indexOf('} finally {')
+    assert.ok(spAt > 0 && finallyAt > spAt, '结构不对：找不到 SAVEPOINT 或 finally')
+
+    /**
+     * 只看**早退出口**那几处。
+     *
+     * 区间里合法存在一次 RELEASE —— 成功路径提交时那次，它在 finally 之前，
+     * 是唯一正确的收口方式（不能提交也放进 finally，finally 只管「没提交」）。
+     * 所以判据不是「区间内没有 RELEASE」，而是：
+     *   区间内的 RELEASE 恰好一次，且紧跟在 settledTx = true 之前
+     *   —— 也就是提交之后立刻标记，finally 便不会重复收。
+     */
+    const span = code.slice(spAt, finallyAt)
+    const rollbacks = [...span.matchAll(/db\.prepare\('ROLLBACK TO paste_tx'\)/g)]
+    assert.equal(
+      rollbacks.length,
+      0,
+      `SAVEPOINT 与 finally 之间出现 ${rollbacks.length} 处手工 ROLLBACK —— 收口只归 finally`
+    )
+
+    const releases = [...span.matchAll(/db\.prepare\('RELEASE paste_tx'\)/g)]
+    assert.equal(
+      releases.length,
+      1,
+      `区间内应有且仅有一次 RELEASE（成功路径的提交），实际 ${releases.length} 次`
+    )
+    assert.match(
+      span,
+      /db\.prepare\('RELEASE paste_tx'\)[\s\S]{0,40}?settledTx = true/,
+      '提交后必须立刻 settledTx = true'
+    )
+  })
+
+  test('finally 是 handler 层面的（不是内层 try 的）', () => {
+    // 断言 finally 与 handler 的 `})` 收尾相邻：中间不能夹着别的语句，
+    // 否则 finally 管的范围就不是整个事务区间。
+    const code = codeOnly(read())
+    const tail = code.slice(code.indexOf('} finally {'))
+    const cleanupAt = tail.indexOf('if (!settledTx)')
+    assert.ok(cleanupAt > 0, 'finally 里没有 settledTx 守卫')
+    // finally 体以 handler 收尾结束
+    assert.match(
+      tail,
+      /if \(!settledTx\) \{[\s\S]*?\}\s*\}\s*\}\s*\)\s*$/,
+      'finally 之后应紧接 handler 的收尾（说明它覆盖整个事务区间）'
+    )
   })
 
   test('回滚路径不额外套 catch（已在错误路径上，不能盖掉真正的失败原因）', () => {
