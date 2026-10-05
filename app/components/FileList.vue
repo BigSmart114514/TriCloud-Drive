@@ -35,13 +35,13 @@
               直接叠在黄色实心文件夹上会糊成一团，看不出是什么图标。
             -->
             <span
-              v-if="showShareBadge && folderBadges.get(folder.id)"
+              v-if="showShareBadge && badges.get(badgeKey('folder', folder.id))"
               class="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded bg-white shadow-sm ring-1 ring-gray-200"
-              :title="folderBadgeTitle(folderBadges.get(folder.id)!)"
-              :aria-label="folderBadgeTitle(folderBadges.get(folder.id)!)"
+              :title="badgeTitle(badges.get(badgeKey('folder', folder.id))!)"
+              :aria-label="badgeTitle(badges.get(badgeKey('folder', folder.id))!)"
             >
-              <LockClosedIcon v-if="folderBadges.get(folder.id) === 'lock'" class="h-3 w-3 text-red-500" />
-              <UsersIcon v-else-if="folderBadges.get(folder.id) === 'users'" class="h-3 w-3 text-emerald-500" />
+              <LockClosedIcon v-if="badges.get(badgeKey('folder', folder.id)) === 'lock'" class="h-3 w-3 text-red-500" />
+              <UsersIcon v-else-if="badges.get(badgeKey('folder', folder.id)) === 'users'" class="h-3 w-3 text-emerald-500" />
               <ShareIcon v-else class="h-3 w-3 text-blue-500" />
             </span>
             <!--
@@ -169,6 +169,32 @@
           />
           <div class="shrink-0 relative">
             <FileIcon class="h-8 w-8 text-gray-400" :filename="file.filename" />
+            <!--
+              同文件夹：右上角分享角标（lock / users / share）。
+
+              与目录行同一套判定（badgeOf → resolveShareBadge），白底圆角块的
+              理由也一样：FileIcon 按扩展名分色、深浅不一，描边图标直接叠上去
+              看不清是什么。
+
+              **原来文件行没有这个角标**，只剩一个孤零零的红点。那不是取舍：
+              服务端对文件照样返回 Shared / IsPublic / grantCount / presetActive
+              （见 db.ts 的 attachAccess、files/index.get.ts 的 withPreset），
+              判定函数也是同一套 —— 条件齐备，只是没人调用它。
+
+              后果是界面上自相矛盾：「我设的分享没生效」的红点亮着，却不告诉你
+              分享的是什么状态；而 Shared=0（不分享）这种最该警示的状态，
+              文件行完全无声。
+            -->
+            <span
+              v-if="showShareBadge && badges.get(badgeKey('file', file.id))"
+              class="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded bg-white shadow-sm ring-1 ring-gray-200"
+              :title="badgeTitle(badges.get(badgeKey('file', file.id))!)"
+              :aria-label="badgeTitle(badges.get(badgeKey('file', file.id))!)"
+            >
+              <LockClosedIcon v-if="badges.get(badgeKey('file', file.id)) === 'lock'" class="h-3 w-3 text-red-500" />
+              <UsersIcon v-else-if="badges.get(badgeKey('file', file.id)) === 'users'" class="h-3 w-3 text-emerald-500" />
+              <ShareIcon v-else class="h-3 w-3 text-blue-500" />
+            </span>
             <!-- 同文件夹：左上角 link 标（挂在文件上的分享链接） -->
             <span
               v-if="showLinkIcon(file)"
@@ -503,25 +529,40 @@ const permLabel = (mask: number) => formatPermission(mask)
 const sourceLabel = (src: string) => SOURCE_LABELS[src] ?? '未知'
 
 /**
- * 文件夹图标上的分享角标。只在「我的文件」视角下有意义（共享清单里那些是
- * 别人的目录，角标会误导），所以由父级用 v-if 控是否传入。
- * 判定规则见 types/share.ts 的 resolveShareBadge。
+ * 条目图标上的分享角标（lock / users / share）。只在「我的文件」视角下有意义
+ * （共享清单里那些是别人的内容，角标会误导），所以由父级用 showShareBadge 控。
+ * 判定规则见 types/share.ts 的 resolveShareBadge —— 目录和文件共用同一套。
  */
-const folderBadge = (folder: FileListFolder): ShareBadge | null =>
-  resolveShareBadge({ Shared: folder.Shared, IsPublic: folder.IsPublic, grantCount: folder.grantCount })
-const folderBadgeTitle = (badge: ShareBadge): string => SHARE_BADGE_LABELS[badge]
+const badgeOf = (item: FileListFile | FileListFolder): ShareBadge | null =>
+  resolveShareBadge({
+    Shared: item.Shared,
+    IsPublic: item.IsPublic,
+    grantCount: item.grantCount
+  })
+const badgeTitle = (badge: ShareBadge): string => SHARE_BADGE_LABELS[badge]
 
-// 按 id 预计算，避免模板里每个文件夹调三次 folderBadge
-const folderBadges = computed(() => {
-  const map = new Map<FileListId, ShareBadge | null>()
-  for (const f of props.folders) map.set(f.id, folderBadge(f))
+/**
+ * 按 id 预计算，避免模板里每个条目调两次 badgeOf（模板里 `v-if` 与两个
+ * `v-else-if` 各取一次）。
+ *
+ * 键**必须带类型前缀**：`folders.id` 与 `files.id` 是两张表各自的自增主键，
+ * 会撞号。原来只有一个目录 map 所以没暴露，把文件并进来就成了真串 ——
+ * 文件夹 2109 和文件 2109 会拿到彼此的角标。前缀沿用模板里 `v-for :key`
+ * 已有的 `folder-${id}` / `file-${id}` 写法，两处一致。
+ */
+const badgeKey = (kind: 'folder' | 'file', id: FileListId): string => `${kind}-${id}`
+
+const badges = computed(() => {
+  const map = new Map<string, ShareBadge | null>()
+  for (const f of props.folders) map.set(badgeKey('folder', f.id), badgeOf(f))
+  for (const f of props.files) map.set(badgeKey('file', f.id), badgeOf(f))
   return map
 })
 
 /**
  * 图标右下角那个红点：「设过的分享当前没生效」。
  *
- * 与 folderBadge 共用 showShareBadge 这个开关 —— 两者都是「只有属主才需要知道」
+ * 与 badgeOf 共用 showShareBadge 这个开关 —— 两者都是「只有属主才需要知道」
  * 的信息，共享清单里那些是别人的目录，显示出来会误导（而且链接是别人的，
  * 我既拿不到也不该知道有几条）。
  *
