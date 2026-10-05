@@ -15,14 +15,34 @@
       :class="fill ? 'shrink-0 px-4 py-3' : 'mb-4 flex-wrap'"
     >
       <div class="flex items-center gap-2 min-w-0">
+        <!--
+          主复选框（全选/全不选）。**不要加 hidden sm:block**。
+
+          它原先带着 `hidden sm:block`，与工具栏那六个按钮同一批被标成桌面专用
+          （那是 6e2ded1 新建本组件时一次性刷上去的）。但那六个按钮都有移动端
+          落脚点 —— 底部操作条与「更多」菜单 —— 只有主复选框没有，于是移动端
+          完全无法全选。
+
+          不是「移动端不需要」：FileList 里**每一行**的复选框在移动端都是显示的
+          （没有 hidden）。所以单个勾选能用，只缺「全选」。
+
+          加上它不会挤坏标题栏：标题是 shrink-0，挤的是面包屑，而面包屑自带
+          overflow-x-auto whitespace-nowrap（还有 max-w-[60vw]），空间不够就
+          横向滚动，标题与面包屑都完整。
+
+          隐藏它也不会崩，只是 `masterCheckboxRef` 仍在 DOM 里，
+          useDualSelection 那句 indeterminate 照样写得进去 —— 所以这个缺陷
+          没有任何报错提示，只能靠人发现。
+        -->
         <input
           ref="masterCheckboxRef"
           type="checkbox"
-          class="h-4 w-4 text-indigo-600 rounded border-gray-300 hidden sm:block"
+          class="h-4 w-4 shrink-0 text-indigo-600 rounded border-gray-300"
           :checked="isAllSelected"
           :disabled="!hasItems"
           @change="toggleSelectAll"
           title="全选/全不选"
+          aria-label="全选/全不选"
         />
         <h3 class="text-lg font-medium text-gray-900 shrink-0">{{ title || defaultTitle }}</h3>
         <nav class="text-sm text-gray-500 overflow-x-auto whitespace-nowrap no-scrollbar max-w-[60vw] sm:max-w-none">

@@ -440,6 +440,63 @@ describe('按钮的准入与角标共用一个判据', () => {
   })
 })
 
+/**
+ * 移动端能不能全选。
+ *
+ * 主复选框原先带 `hidden sm:block`，与工具栏那六个按钮同一批被标成桌面专用
+ * （6e2ded1 新建本组件时一次性刷上去的）。但那六个按钮都有移动端落脚点 ——
+ * 底部操作条与「更多」菜单 —— 只有主复选框没有，于是移动端完全无法全选。
+ *
+ * 不是「移动端不需要」：FileList 里每一行的复选框在移动端都是显示的。所以
+ * 单个勾选能用，只缺「全选」。
+ *
+ * 而且隐藏它**不会崩**，只是 ref 仍在 DOM 里、indeterminate 照样写得进去 ——
+ * 零报错，纯靠人发现。所以要钉住。
+ */
+describe('移动端也能全选', () => {
+  test('主复选框不带 hidden sm:block（且补了 shrink-0）', () => {
+    const tpl = templateOf(read(BROWSER))
+    const at = tpl.indexOf('ref="masterCheckboxRef"')
+    assert.ok(at > 0, '没找到主复选框')
+    const tag = tpl.slice(tpl.lastIndexOf('<input', at), tpl.indexOf('/>', at))
+
+    assert.doesNotMatch(
+      tag,
+      /hidden\s/,
+      '主复选框不能带 hidden —— 移动端会失去「全选」入口，而不会有任何报错'
+    )
+    assert.doesNotMatch(
+      tag,
+      /sm:block/,
+      'sm:block 配 hidden 就是在窄屏藏起来。同理 hidden sm:inline / sm:flex 都不行'
+    )
+    assert.doesNotMatch(tag, /sm:hidden/, '也不该反过来在宽屏藏起来')
+    // 挤的是面包屑（它自带 overflow-x-auto），但复选框本身不该被压扁
+    assert.match(tag, /shrink-0/, '复选框要 shrink-0 —— 否则空间紧张时它会被压变形')
+  })
+
+  // 依据：面包屑自己会滚，所以主复选框把空间拿走是安全的。
+  // 没有这条，上面那个断言就是「我觉得不挤」而不是「挤了会怎样」。
+  test('面包屑自带横向滚动，所以标题栏放得下复选框', () => {
+    const tpl = templateOf(read(BROWSER))
+    const nav = tpl.slice(tpl.indexOf('<nav'), tpl.indexOf('</nav>'))
+    assert.match(nav, /overflow-x-auto/, '面包屑必须能横向滚动')
+    assert.match(nav, /whitespace-nowrap/, '面包屑不能换行（换行会把标题栏撑高）')
+    assert.match(nav, /max-w-\[60vw\]/, '窄屏还要有个宽度上限')
+    // 标题不可压缩，所以被挤的确实是面包屑
+    assert.match(tpl, /<h3 class="[^"]*shrink-0/, '标题必须 shrink-0 —— 挤的应该是面包屑')
+  })
+
+  test('行内复选框本来就是移动端可见的（所以问题是「缺全选」不是「不支持选择」）', () => {
+    const tpl = templateOf(read('app/components/FileList.vue'))
+    const boxes = [...tpl.matchAll(/<input\s+v-if="selectable"[\s\S]{0,400}?\/>/g)]
+    assert.ok(boxes.length >= 2, `期望至少两处行内复选框（目录 + 文件），实际 ${boxes.length}`)
+    for (const m of boxes) {
+      assert.doesNotMatch(m[0], /hidden/, '行内复选框不能隐藏 —— 那样移动端连单个都选不了')
+    }
+  })
+})
+
 describe('类型：三态是数字，不是布尔', () => {
   /**
    * 原来写的是 `Shared?: boolean`，与 schema 的 `Shared INTEGER` 不符。
