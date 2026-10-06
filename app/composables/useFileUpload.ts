@@ -119,22 +119,40 @@ export const useFileUpload = (options?: {
         SecurityToken: config.credentials.SecurityToken,
       })
 
+      /**
+       * 单发 vs 分片。
+       *
+       * 原来**一律** putObject：整个文件一个 XHR。三个后果：
+       *   1. 传大文件时单个请求要挂很久。中途网络抖动 / COS 侧 5xx 就整份重传，
+       *      而且 cos-js-sdk-v5 的 putObject 回调只在整体结束时才 reject ——
+       *      中途失败没有「从第几字节续传」的概念。
+       *   2. 单请求窗口越长，越容易撞上 `net::ERR_UPLOAD_FILE_CHANGED`：
+       *      Chrome 发现文件在传输途中被改过（拖拽路径上传的是浏览器造的沙箱
+       *      副本，它与原文件是两套时间戳）就掐断。
+       *   3. 一个失败等于一个巨大请求白费。
+       *
+       * sliceUploadFile 解决 1/3 并把窗口切小。它需要 STS 策略里有分块相关的
+       * action —— credentials.post.ts 里那七条（InitiateMultipartUpload /
+       * ListParts / UploadPart / CompleteMultipartUpload 等）本来就在，只是
+       * 一直用不上。
+       *
+       * 阈值取 8MB：小于它分片的额外往返（Initiate + N×UploadPart +
+       * Complete）不划算，大于它单发的风险明显。
+       */
+      const CHUNK_THRESHOLD = 8 * 1024 * 1024
+      const useChunks = file.size > CHUNK_THRESHOLD
+
       const fileUrl = await new Promise<string>((resolve, reject) => {
         let lastLoaded = 0
-        cos.putObject({
-          Bucket: config.bucket,
-          Region: config.region,
-          Key: config.fileKey,
-          Body: file,
-          onProgress: (progressData: any) => {
-            const loaded = progressData?.loaded ?? 0
-            const total = progressData?.total ?? file.size
-            const delta = Math.max(0, loaded - lastLoaded)
-            lastLoaded = loaded
-            options2?.onProgressDelta?.(delta)
-            if (!partOfBatch) setProgress(loaded, total)
-          }
-        }, (err: any) => {
+        const onProgress = (progressData: any) => {
+          const loaded = progressData?.loaded ?? 0
+          const total = progressData?.total ?? file.size
+          const delta = Math.max(0, loaded - lastLoaded)
+          lastLoaded = loaded
+          options2?.onProgressDelta?.(delta)
+          if (!partOfBatch) setProgress(loaded, total)
+        }
+        const onDone = (err: any) => {
           if (err) {
             if (!partOfBatch) uploadError.value = err.message || '上传失败'
             reject(err)
@@ -142,7 +160,31 @@ export const useFileUpload = (options?: {
             const url = `https://${config.bucket}.cos.${config.region}.myqcloud.com/${config.fileKey}`
             resolve(url)
           }
-        })
+        }
+
+        if (useChunks) {
+          cos.sliceUploadFile({
+            Bucket: config.bucket,
+            Region: config.region,
+            Key: config.fileKey,
+            Body: file,
+            // 4MB 一片：COS 最低要求 1MB，取 4MB 让请求数不至于太多。
+            // 注意分块大小与分块数都参与签名，改这里要连带看 policies。
+            // 字段名是 ChunkSize 而不是 SliceSize —— 后者是 uploadFiles 的参数名，
+            // 写错的话 TS 会报「未知属性」（它确实报了）。
+            ChunkSize: 4 * 1024 * 1024,
+            onProgress
+          }, onDone)
+          return
+        }
+
+        cos.putObject({
+          Bucket: config.bucket,
+          Region: config.region,
+          Key: config.fileKey,
+          Body: file,
+          onProgress
+        }, onDone)
       })
 
       {

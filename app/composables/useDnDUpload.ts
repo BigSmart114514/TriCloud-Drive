@@ -1,10 +1,12 @@
 import { ref, type Ref } from 'vue'
 import { withScopeRef } from '~/utils/scope'
+// toPosix 不在这里 import：它的唯一调用方已经搬进 drop.ts 了，
+// 带过来就是「import 了但正文不用」，tsc 不报（noUnusedLocals 没开），
+// 读代码的人却要多查一次。
+import { classifyDrop, entriesFromWebkitRelativePath, normalizeDir } from '~/utils/drop'
 
 type UploadMultipleFiles = (files: File[], opts: { folderId: number | null; overwrite: boolean; skip: boolean }) => Promise<void>
 type Entry = { file: File; relativePath: string }
-const toPosix = (p: string) => p.replace(/\\/g, '/')
-const normalizeDir = (p: string) => toPosix(p).replace(/^\/+|\/+$/g, '')
 
 export function useDnDUpload(
   currentFolderId: Ref<number | null>,
@@ -36,11 +38,31 @@ export function useDnDUpload(
   const handleDrop = async (event: DragEvent) => {
     dragCounter.value = 0
     isDragging.value = false
-    const items = Array.from(event.dataTransfer?.items || [])
-    if (items.some((it: any) => typeof it.webkitGetAsEntry === 'function' && it.webkitGetAsEntry()?.isDirectory)) {
-      const entries = await getFilesFromDataTransferItems(items as any)
-      if (entries.length) { await handleEntries(entries); return }
+
+    // 分类与实体化的理由全在 ~/utils/drop 的文件头，这里只说时序上的两件事：
+    //
+    // 1. **先读 .files，再碰 .items。** 调 webkitGetAsEntry() 会把 item 锁进
+    //    protected 状态，之后 `dataTransfer.files` 就返回空了。原来的写法反了
+    //    （先 .some() 再读 .files），于是「判断有没有文件夹」这个动作本身会
+    //    把后面要用的文件列表清空。
+    //
+    // 2. **每个 item 最多实体化一次。** 原来 .some() 调一次、
+    //    getFilesFromDataTransferItems 里又调一次，第二次在已消费的 item 上返回
+    //    null，被 `if (!entry) continue` 静默跳过 —— 拖文件夹会漏文件且不报错。
+    //    现在 entry 只从 needsEntry 里取一次，传给遍历函数，不再二次调用。
+    const items: any[] = Array.from(event.dataTransfer?.items || [])
+    const { mode, needsEntry } = classifyDrop(items)
+
+    if (mode === 'dirs') {
+      const entries = await getFilesFromEntries(needsEntry)
+      if (entries.length) {
+        await handleEntries(entries)
+        return
+      }
+      // 实体化后一个都没拿到（浏览器不支持、或全是空条目）：退回 .files，
+      // 与纯文件同一条路。别在这里静默什么都不做。
     }
+
     const fls = Array.from(event.dataTransfer?.files || [])
     if (fls.length > 0) await handleFiles(fls)
   }
@@ -57,12 +79,9 @@ export function useDnDUpload(
     const input = event.target as HTMLInputElement
     const fls = Array.from(input.files || [])
     if (!fls.length) return
-    const entries: Entry[] = fls.map((f) => {
-      const rpRaw = (f as any).webkitRelativePath || f.name
-      const rp = toPosix(rpRaw)
-      const dir = rp.includes('/') ? rp.slice(0, rp.lastIndexOf('/')) : ''
-      return { file: f, relativePath: normalizeDir(dir) }
-    })
+    // 路径归一规则与拖拽共用（~/utils/drop）：两边各写一遍的话，改了规则只有
+    // 一边会跟上。
+    const entries: Entry[] = entriesFromWebkitRelativePath(fls)
     await handleEntries(entries)
     if (folderInputRef.value) folderInputRef.value.value = ''
   }
@@ -151,10 +170,21 @@ export function useDnDUpload(
     return result
   }
 
-  const getFilesFromDataTransferItems = async (items: DataTransferItem[]) => {
+  /**
+   * 把一批 item 实体化成条目。
+   *
+   * `webkitGetAsEntry()` **只在这里调一次，且只对 classifyDrop 挑出来的那批**。
+   * 理由见 ~/utils/drop 的文件头：调它会让 Chrome 把 item 实体化成沙箱副本
+   * （macOS 上用户能在 ~/Downloads 里看到），所以纯文件拖拽绝不能碰它。
+   *
+   * 用 entry 而不是 `getAsFile()`，是因为后者拿不到目录结构 —— 要保住
+   * 「拖文件夹进来带层级」这个能力，只能走 entry 这条会实体化的路。
+   */
+  const getFilesFromEntries = async (items: any[]) => {
     const results: Entry[] = []
     for (const item of items) {
-      const entry = (item as any).webkitGetAsEntry?.()
+      // 每个 item 只到这里一次，所以拿不到「已消费」的 null
+      const entry = typeof item?.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null
       if (!entry) continue
       if (entry.isFile) {
         const file: File = await new Promise((res) => entry.file(res))

@@ -191,7 +191,10 @@ export default defineEventHandler(async (event) => {
           }
         ]
       }),
-      DurationSeconds: config.cdnAuthTtl,
+      // stsTokenTtl，不是 cdnAuthTtl。后者是 CDN 签名有效期（默认 10 秒，
+      // 你的 .env 里是 3），拿它当 STS 令牌存活时间等于发一张 3 秒就过期的
+      // 通行证 —— 而光传一个几 MB 的文件就要好几秒。
+      DurationSeconds: config.stsTokenTtl,
       Name: `cos-upload-${user.id}-${Date.now()}`
     }
 
@@ -209,7 +212,10 @@ export default defineEventHandler(async (event) => {
           TmpSecretKey: credentials.TmpSecretKey,
           SecurityToken: credentials.Token,
           StartTime: Math.floor(Date.now() / 1000),
-          ExpiredTime: Math.floor(Date.now() / 1000) + config.cdnAuthTtl
+          // 与上面的 DurationSeconds 同一个值。两处必须一致：前端
+          // useFileUpload 用 ExpiredTime 判断令牌还有没有过期，给小了会让它
+          // 在令牌其实还能用的时候提前报错。
+          ExpiredTime: Math.floor(Date.now() / 1000) + config.stsTokenTtl
         },
         bucket: config.cosBucket,
         region: config.cosRegion,

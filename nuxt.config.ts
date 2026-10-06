@@ -75,6 +75,19 @@ export default defineNuxtConfig({
     cdnAuthKeyPrimary: process.env.CDN_AUTH_KEY_PRIMARY || '',
     cdnAuthKeyBackup: process.env.CDN_AUTH_KEY_BACKUP || '',
     cdnAuthTtl: parseInt(process.env.CDN_AUTH_TTL || '10'), // 默认10秒
+    /**
+     * STS 临时凭证的存活时间（秒）。
+     *
+     * 原来这里传的是 `cdnAuthTtl` —— 那是 **CDN 签名**的有效期，两个完全不同的
+     * 东西。后果不是「短了点」：
+     *   - 腾讯云 STS 对 DurationSeconds 有下限要求，3 秒这种值本就不合法
+     *   - 即使被接受，令牌在传输途中过期也会让请求失败 —— 而上传一个几 MB 的
+     *     文件本身就要好几秒
+     *
+     * 所以它必须是**自己的配置项**，且要显著大于一次上传的耗时。
+     * 默认 900 秒（STS 允许范围的下限附近），够传一个大文件。
+     */
+    stsTokenTtl: parseInt(process.env.STS_TOKEN_TTL || '900'),
     cdnAuthParam: process.env.CDN_AUTH_PARAM || 'sign',
     dbPath: process.env.SQLITE_PATH || './data.sqlite',
     https: process.env.HTTPS === 'true',
