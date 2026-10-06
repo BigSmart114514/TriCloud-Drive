@@ -214,7 +214,7 @@
 
 import { formatDateTime } from '~/utils/time'
 import { notify, notifyError, toMessage } from '~/utils/notify'
-import { promptNewPassword } from '~/utils/password'
+import { askNewPassword } from '~/utils/password'
 import { formatBytes, parseBytes } from '~/utils/size'
 import { fromDatetimeLocal, toDatetimeLocal } from '~/utils/datetimeLocal'
 import { PencilSquareIcon, ShieldCheckIcon, StarIcon } from '@heroicons/vue/24/outline'
@@ -241,8 +241,8 @@ const changingPwdId = ref<number | null>(null)
 const changePassword = async (u: DbUser) => {
   if (!u?.id) return
 
-  const newPassword = promptNewPassword(`用户「${u.username}」`)
-  if (newPassword === null) return // 取消或不符合要求（后者已经提示过了）
+  const newPassword = await askNewPassword(`用户「${u.username}」`)
+  if (newPassword === null) return // 取消
 
   changingPwdId.value = u.id
   try {

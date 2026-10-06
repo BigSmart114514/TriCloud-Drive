@@ -180,6 +180,7 @@ import ZipPreview from '~/components/ZipPreview.vue'
 import SevenZipPreview from '~/components/SevenZipPreview.vue'
 import { FilesService } from '~/services/files.service'
 import { useFileUpload } from '~/composables/useFileUpload'
+import { openPrompt } from '~/composables/usePromptDialog'
 import { formatFileSize } from '~/utils/format'
 import { notify } from '~/utils/notify'
 import type { FileRecord } from '~~/types/files'
@@ -365,18 +366,38 @@ const load = async () => {
   }
 }
 
-const getZipPassword = () => {
+/**
+ * 问压缩包密码。
+ *
+ * **不回显**：原来是 `window.prompt`，密码直接画在屏幕上 —— 肩窥、录屏、截图，
+ * 以及系统弹窗自己那条历史记录。
+ *
+ * **不 trim**：压缩包密码里的首尾空格是密码的一部分，trim 掉会让用户输对了
+ * 却解不开，而且没有任何提示（「密码错误」会让人怀疑自己记错了）。
+ *
+ * 空值当「没填」而不是「空密码」：这个文件既然标记为已加密，空密码必然解不开，
+ * 与其白跑一次解密再报错，不如在输入框下面说清「不能为空」。
+ */
+const getZipPassword = async (): Promise<string | null> => {
   if (!zipEntry.value?.encrypted) return ''
-  const value = window.prompt('该文件已加密，请输入压缩包密码：')
-  return value === null ? null : value
+  return await openPrompt({
+    title: '该文件已加密',
+    label: '压缩包密码',
+    hint: '解压需要这个压缩包的密码。它只用于本次预览，不会被保存。',
+    placeholder: '请输入密码',
+    confirmText: '解压',
+    secret: true,
+    trim: false
+  })
 }
 
 const openZipEntry = async (item: ArchiveFileItem) => {
   cleanupZipEntry()
   zipEntry.value = item
   if (typeof window !== 'undefined' && item.encrypted) {
-    const password = getZipPassword()
+    const password = await getZipPassword()
     if (password === null) {
+      // 取消：退出预览，别留一个打不开的条目在界面上
       zipEntry.value = null
       return
     }

@@ -21,7 +21,7 @@
 // 也省掉一次「填了才报错」。
 //
 // 规则本身仍以服务端为准（前端只是提前说，避免白跑一趟）。
-import { notify } from '~/utils/notify'
+import { openPrompt } from '~/composables/usePromptDialog'
 
 /** 与 server/utils/auth.ts 的 validatePassword 逐条对应 */
 export function isStrongPassword(password: string): boolean {
@@ -33,18 +33,35 @@ export const PASSWORD_RULE_TEXT = '至少8位，且需包含字母和数字'
 /**
  * 弹窗问一个新密码，校验通过才返回。
  *
+ * ## 为什么是 async
+ *
+ * 原来是 `window.prompt` —— **同步**的，所以调用方写的是
+ * `const p = promptNewPassword(...)`。原生弹窗没法在原地校验：一提交就关闭，
+ * 不合格只能弹个 toast，而用户刚输入的密码已经没了、也没了改的机会。
+ *
+ * 换成自绘弹窗之后就是异步的，校验不过时弹窗**留着**、错误显示在输入框下面，
+ * 用户可以就地改。代价是调用方必须 await，所以名字从 prompt* 改成 ask* ——
+ * 签名变了却留着 prompt 字样会骗人（看着像同步，实际返回 Promise）。
+ *
+ * ## secret: true
+ *
+ * 密码不回显。这是换掉 window.prompt 的主要理由：原生那种把密码直接画在屏幕上，
+ * 肩窥、录屏、截图都看得见，系统还会留一条历史记录。
+ *
  * @param subjectLabel 这条提示里的主语，例如 `用户「张三」` / `子账户「kid」`
- * @returns 取消或不合格时返回 null（**不合格时已经弹过提示**）
+ * @returns 取消或不合格时返回 null（**不合格时弹窗仍开着，用户可以继续改**）
  */
-export function promptNewPassword(subjectLabel: string): string | null {
-  const input = window.prompt(`为${subjectLabel}设置新密码（${PASSWORD_RULE_TEXT}）：`, '')
-  // null = 用户点了取消。这与「填了但不合格」是两回事，后者已经提示过了。
-  if (input === null) return null
-
-  const password = input.trim()
-  if (!isStrongPassword(password)) {
-    notify(`密码不符合要求：${PASSWORD_RULE_TEXT}`, 'error')
-    return null
-  }
-  return password
+export async function askNewPassword(subjectLabel: string): Promise<string | null> {
+  return await openPrompt({
+    title: '设置新密码',
+    label: `为${subjectLabel}设置新密码`,
+    hint: PASSWORD_RULE_TEXT,
+    // 密码不 trim：'  secret  ' 与 'secret' 是两个不同的密码，trim 掉首尾空格
+    // 会让用户以为自己设的密码登不上。
+    trim: false,
+    secret: true,
+    confirmText: '设置',
+    validate: (value) =>
+      isStrongPassword(value) ? '' : `密码不符合要求：${PASSWORD_RULE_TEXT}`
+  })
 }

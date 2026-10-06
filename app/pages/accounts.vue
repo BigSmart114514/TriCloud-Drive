@@ -276,7 +276,7 @@ import { formatFileSize } from '~/utils/format'
 import { formatBytes, parseBytes } from '~/utils/size'
 import { fromDatetimeLocal } from '~/utils/datetimeLocal'
 import { notify, notifyError, toMessage } from '~/utils/notify'
-import { promptNewPassword } from '~/utils/password'
+import { askNewPassword } from '~/utils/password'
 
 useHead({ title: '子账户' })
 
@@ -413,7 +413,7 @@ const deleteEditingChild = async () => {
  * 的 targetUserId —— 那条路要求 isStaff（见 resolveIdentity），主账号不是管理员。
  */
 const resetPassword = async (c: SubAccount) => {
-  const newPassword = promptNewPassword(`子账户「${c.username}」`)
+  const newPassword = await askNewPassword(`子账户「${c.username}」`)
   if (newPassword === null) return
   try {
     await AccountService.resetPassword(c.id, newPassword)
