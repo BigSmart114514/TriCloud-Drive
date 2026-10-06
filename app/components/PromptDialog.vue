@@ -120,7 +120,8 @@ import {
   EyeSlashIcon,
   FolderPlusIcon,
   PencilSquareIcon,
-  QuestionMarkCircleIcon
+  QuestionMarkCircleIcon,
+  XMarkIcon
 } from '@heroicons/vue/24/outline'
 import { cancelPrompt, submitPrompt, usePromptDialog } from '~/composables/usePromptDialog'
 
