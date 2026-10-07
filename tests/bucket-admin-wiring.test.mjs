@@ -302,13 +302,21 @@ describe('cos-list：EncodingType 一个开关都不给', () => {
       '三者都拿不到时如实标记不可翻页，而不是死循环')
   })
 
+  // 判据跟着实现的形状走：原先查的是 `const lastEntry` 起算，而 noUncheckedIndexedAccess
+  // 的修法把它拆成了 lastObject / lastPrefix 两个中间量，于是这条断言整段滑到了
+  // 别处去（indexOf 返回 -1，slice(-1) 拿到文件末尾，恰好还匹配上了别的字样）。
+  //
+  // 「slice(-1) 不报错」正是这类断言最坏的失败方式：它不会让测试变红，它只是
+  // 悄悄测了别的东西。所以这里先 assert.ok(indexOf > 0)，indexOf 失败要立刻响。
   test('lastEntry 在两种情况下都有取值（末对象 / 末目录）', () => {
     const s = src()
-    const at = s.indexOf('const lastEntry')
+    const at = s.indexOf('const lastObject')
+    assert.ok(at > 0, '找不到末条目的计算 —— 若这里报 indexOf 为 -1，说明下面的 slice 会滑到文件末尾')
     const body = s.slice(at, at + 400)
-    assert.match(body, /objects\[objects\.length - 1\]\.key/, '末个对象')
+    assert.match(body, /objects\[objects\.length - 1\]/, '末个对象')
     assert.match(body, /commonPrefixes\[commonPrefixes\.length - 1\]/,
       '设了 Delimiter 时末条是目录而不是对象 —— 少了这一支就取不到')
+    assert.match(body, /lastObject \|\| lastPrefix/, '两者取第一个非空')
   })
 })
 

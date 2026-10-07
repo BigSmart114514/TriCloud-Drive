@@ -113,7 +113,17 @@ export async function listCosObjectsPage(params: {
 
   const data: any = await new Promise((resolve, reject) => {
     // 注意这里**没有 EncodingType**，理由见文件头。
-    const req: Record<string, any> = {
+    // 用 GetBucketParams 而不是 Record<string, any>：后者会一路泄到
+    // getBucket 的参数位上，tsc 就再也抓不到「多传了 EncodingType」这类错误了
+    // —— 而那正是本文件文件头里点名的那个坑。
+    const req: {
+      Bucket: string
+      Region: string
+      Prefix: string
+      MaxKeys: number
+      Marker?: string
+      Delimiter?: string
+    } = {
       Bucket: bucket,
       Region: region,
       Prefix: prefix,
@@ -148,12 +158,12 @@ export async function listCosObjectsPage(params: {
   let nextMarker: string | null = null
   if (truncated) {
     const fromResponse = data?.NextMarker ? String(data.NextMarker) : ''
-    const lastEntry =
-      objects.length > 0
-        ? objects[objects.length - 1].key
-        : commonPrefixes.length > 0
-          ? commonPrefixes[commonPrefixes.length - 1]
-          : ''
+    // noUncheckedIndexedAccess 打开时下标取到的是 T | undefined，而
+    // `length > 0` 不构成收窄。这里显式兜一次 —— 这段算的是「从哪里继续翻」，
+    // 算错的后果是死循环或者漏页，不该交给运行时去发现。
+    const lastObject = objects.length > 0 ? objects[objects.length - 1]?.key ?? '' : ''
+    const lastPrefix = commonPrefixes.length > 0 ? commonPrefixes[commonPrefixes.length - 1] ?? '' : ''
+    const lastEntry = lastObject || lastPrefix
     nextMarker = fromResponse || lastEntry || marker || null
     // 极端情况下三者都空 → 无从继续，如实标成不可翻页而不是死循环
     if (!nextMarker) {

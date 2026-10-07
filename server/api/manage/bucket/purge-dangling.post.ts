@@ -28,7 +28,7 @@
 import { defineEventHandler, readBody, createError } from 'h3'
 import { getDb } from '~~/server/utils/db-adapter'
 import { requireSuperAdmin } from '~~/server/utils/auth-middleware'
-import { fileService } from '~~/server/utils/db'
+import { FileService } from '~~/server/utils/db'
 import { recordPurge, loadUserFileRows, userKeyPrefixes } from '~~/server/utils/bucket-admin'
 
 /** 单次最多删多少行。这批是本地 DELETE，比删 COS 快得多，但仍要有个上限 */
@@ -68,7 +68,18 @@ export default defineEventHandler(async (event) => {
   // 一定带 user_id —— 让「删错人」在 SQL 层就不可能，而不是靠上面那个 id 合法。
   const rows = await loadUserFileRows(db, userId)
   const byId = new Map(rows.map((r) => [r.id, r]))
-  const targets = numericIds.filter((id) => byId.has(id))
+  /**
+   * **要的是行，不是 id。**
+   *
+   * 原来的写法 `numericIds.filter((id) => byId.has(id))` 留的是 id 数组，
+   * 下面却当成行用（r.fileSize / r.filename…）。运行时的后果不是报错而是
+   * 一批 `undefined`：审计快照的每个字段都是 undefined、freedBytes 算成 0。
+   * 也就是说「删掉 200 行、释放配额」的提示会显示 0 字节，审计表里那 200 条
+   * 记录全都答不出「删掉的到底是什么」—— 而那张表存在的全部意义就是回答这个。
+   */
+  const targets = numericIds
+    .map((id) => byId.get(id))
+    .filter((r): r is NonNullable<typeof r> => r !== undefined)
   const missing = numericIds.filter((id) => !byId.has(id))
 
   if (targets.length === 0) {
@@ -92,7 +103,7 @@ export default defineEventHandler(async (event) => {
   try {
     const delRes: any = await db
       .prepare(`DELETE FROM files WHERE user_id = ? AND id IN (${placeholders})`)
-      .bind(userId, ...targets)
+      .bind(userId, ...targets.map((r) => r.id))
       .run()
     deleted = Number(delRes?.meta?.changes ?? targets.length)
 
@@ -153,7 +164,7 @@ export default defineEventHandler(async (event) => {
   // 删除失败而重复点，而配额下一轮重算（任何一次 move/delete/paste）就修好了。
   let storageRecalculated = false
   try {
-    await fileService.recalculateUsedStorage(userId)
+    await new FileService(db).recalculateUsedStorage(userId)
     storageRecalculated = true
   } catch (e: any) {
     console.error('[bucket] 重算 usedStorage 失败（行已删除，配额下一轮会修正）:', e?.message || e)
