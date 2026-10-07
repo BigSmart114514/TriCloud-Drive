@@ -29,6 +29,7 @@ register(new URL('./helpers/resolve-nuxt-alias.mjs', import.meta.url), import.me
 
 const { candidateExclusions, assertGrantees } =
   await import('../server/utils/share.ts')
+const { adminScope, withScope } = await import('../app/utils/scope.ts')
 
 /** 假 db：只够 assertGrantees 查「用户是否存在」 */
 function fakeDb(ids) {
@@ -209,6 +210,177 @@ describe('端点必须用共享的那份规则', () => {
       /if \(props\.useAdmin && props\.targetUserId != null\) exclude\.push\(props\.targetUserId\)/,
       '必须真的在管理视角下排属主 —— 条件被改成 if (false) 时属主能选中，保存时才 400'
     )
+  })
+})
+
+describe('adminScope：两个参数必须一起发（行为级，不是源码形状）', () => {
+  // 这里**不用源码正则**。第一版写了三条形状断言（合取、一个 if、两个赋值），
+  // 变异扫描立刻找到三条绕过路径：只删掉 out.targetUserId、只删掉 out.useAdmin、
+  // 把合取拆成两个 if。三条都语法合法、效果都是「静默退化成原 bug」，而形状
+  // 断言一条都抓不住。
+  //
+  // 所以直接 import 真函数测返回值。那三条变异在行为层无处藏。
+  // （import 放在文件顶部 —— describe 回调不是 async，里面不能 await。）
+  test('管理视角：两个都发', () => {
+    assert.deepEqual(
+      adminScope({ useAdmin: true, targetUserId: 43 }),
+      { useAdmin: true, targetUserId: 43 }
+    )
+  })
+
+  // ★ 这条是「看起来修了其实没修」的判据。服务端只认 useAdmin：
+  //   只发 useAdmin → targetUserId 缺省成 me，adminMode 为真而 target===me
+  //                → 排除集仍是 { me } → 管理员依然搜不到自己
+  test('只发 useAdmin 而没有 targetUserId → 两个都不发（不能发半个）', () => {
+    assert.deepEqual(
+      adminScope({ useAdmin: true, targetUserId: null }),
+      {},
+      '★ 半个视角会静默退化成原来的 bug —— 必须一个都不发'
+    )
+    assert.deepEqual(adminScope({ useAdmin: true, targetUserId: undefined }), {})
+    assert.deepEqual(adminScope({ useAdmin: true }), {})
+  })
+
+  test('只有 targetUserId 没有 useAdmin → 不发（服务端会当成非管理视角）', () => {
+    assert.deepEqual(adminScope({ targetUserId: 43 }), {},
+      '只发 targetUserId 时服务端 useAdmin 为假 → adminMode 假 → 排除集 { me }')
+  })
+
+  test('非管理视角：一律不发', () => {
+    assert.deepEqual(adminScope({ useAdmin: false, targetUserId: 43 }), {})
+    assert.deepEqual(adminScope({}), {})
+  })
+
+  // targetUserId = 0 不是合法 id（「根」用 null 或 'root'），所以真值判断是对的。
+  // 与 withScope 保持同一口径。
+  test('targetUserId = 0 视为没有（与 withScope 同口径）', () => {
+    assert.deepEqual(adminScope({ useAdmin: true, targetUserId: 0 }), {})
+  })
+
+  test('判据与 withScope 不同是刻意的：那边允许独立判，这边不允许', () => {
+    // withScope 两个条件独立判（files/folders 那些接口需要那个灵活性）；
+    // adminScope 必须合取。这条把差别钉住，免得有人「统一风格」把两边改成一样。
+    const p = {}
+    withScope(p, { useAdmin: true, targetUserId: null })
+    assert.equal(p.useAdmin, 1, 'withScope 允许只发 useAdmin')
+    assert.equal(p.targetUserId, undefined)
+
+    assert.deepEqual(adminScope({ useAdmin: true, targetUserId: null }), {},
+      'adminScope 不允许 —— 半个视角对搜索接口没有意义')
+  })
+})
+
+describe('客户端必须把视角发过去（这条才是真正的 bug）', () => {
+  // 服务端那一半（candidateExclusions 的 adminMode 分支）是对的，但从来没被走到 ——
+  // 因为客户端压根没告诉服务端现在是管理视角。而 manage/files 里别的操作全都正常，
+  // 所以表现很随机：开关能改、能加别人、能删链接，就是搜不到人。
+  const SVC = 'app/services/share.service.ts'
+  const DIALOG = 'app/components/ShareDialog.vue'
+  let svc, dialog
+  before(() => {
+    const base = join(dirname(fileURLToPath(import.meta.url)), '..')
+    const strip = (s) =>
+      s.replace(/\/\*[\s\S]*?\*\//g, '').split('\n')
+        .filter((l) => !/^\s*\/\//.test(l) && !/^\s*\*/.test(l)).join('\n')
+    svc = strip(readFileSync(join(base, SVC), 'utf8'))
+    dialog = readFileSync(join(base, DIALOG), 'utf8')
+  })
+
+  test('candidates 吃 target 参数（原来签名里根本没有它）', () => {
+    assert.match(svc, /async candidates\(\s*keyword: string,\s*opts: \{ excludeIds\?: number\[\]; target\?: ShareTargetType \}/,
+      '签名里必须有 target —— 没有它就没有 scopeOnly 可用')
+  })
+
+  test('candidates 把 adminScope 的结果放进 params', () => {
+    const at = svc.indexOf('async candidates(')
+    assert.ok(at > 0)
+    const body = svc.slice(at, svc.indexOf('\n  },', at))
+    assert.match(body, /adminScope\(opts\.target\)/,
+      '★ 必须把视角发出去 —— 这正是本次修的那个 bug')
+    assert.match(body, /opts\.target \? adminScope/, 'target 缺失时不能发空的视角参数')
+  })
+
+  // scopeParams 会带上 targetType/targetId。搜索接口不看这两个，发过去是噪音，
+  // 而且将来有人拿它当筛选条件就麻烦了。
+  test('candidates 不发 targetType / targetId', () => {
+    const at = svc.indexOf('async candidates(')
+    const body = svc.slice(at, svc.indexOf('\n  },', at))
+    assert.doesNotMatch(body, /scopeParams\(/,
+      '搜索接口不该用 scopeParams —— 那会带上与搜索无关的 targetType/targetId')
+    assert.doesNotMatch(body, /targetType|targetId/, 'params 里不该出现目标本身')
+  })
+
+  test('scopeParams 展开 adminScope，而不是再抄一遍 if', () => {
+    const at = svc.indexOf('function scopeParams(')
+    const body = svc.slice(at, svc.indexOf('\n}', at) + 2)
+    assert.match(body, /\.\.\.adminScope\(target\)/, '必须展开，否则又是一份拷贝')
+    assert.doesNotMatch(body, /if \(target\.useAdmin/, '条件不该在这里再写一遍')
+  })
+
+  test('ShareDialog 把 scope.value 传给 candidates', () => {
+    const at = dialog.indexOf('async function runCandidateSearch')
+    assert.ok(at > 0)
+    const body = dialog.slice(at, dialog.indexOf('await ShareService.candidates', at) + 200)
+    assert.match(
+      body,
+      /ShareService\.candidates\(q, \{ excludeIds: exclude, target: scope\.value \}\)/,
+      '★ 不传 scope.value 就是本次的 bug —— 服务端拿不到 adminMode'
+    )
+  })
+})
+
+describe('泛化：ShareDialog 里每个 ShareService 调用都必须带 scope', () => {
+  // 这一条是本次真正的价值所在。它抓的不是「candidates 忘了」，而是
+  // 「ShareDialog 里任何一个 ShareService 调用没带 scope」——
+  // 而 ShareDialog 是**唯一**持有 props.useAdmin 的组件，所以它是正确的边界。
+  // 下次有人加一个新方法忘了传，这条会红，而不是等用户在管理页里撞上。
+  const DIALOG = 'app/components/ShareDialog.vue'
+  let dialog
+  before(() => {
+    dialog = readFileSync(join(dirname(fileURLToPath(import.meta.url)), '..', DIALOG), 'utf8')
+  })
+
+  test('每个调用都带上了 scope（没有白名单：这里 6 个调用全都该带）', () => {
+    // 抓出每个 ShareService.xxx( 的实参列表（括号配平，不用正则硬切）
+    const calls = []
+    const re = /ShareService\.(\w+)\(/g
+    let m
+    while ((m = re.exec(dialog))) {
+      let depth = 0
+      let i = m.index + m[0].length - 1
+      for (; i < dialog.length; i++) {
+        if (dialog[i] === '(') depth++
+        else if (dialog[i] === ')') { depth--; if (depth === 0) break }
+      }
+      calls.push({ name: m[1], args: dialog.slice(m.index + m[0].length, i) })
+    }
+
+    assert.ok(calls.length >= 6, `期望至少 6 个 ShareService 调用，实际扫到 ${calls.length} 个`)
+
+    // 判据是「这次调用带上了视角」，与**怎么表达**无关。本文件里同一个概念
+    // 有三种写法：
+    //   scope.value                       （list / setState / addLink / removeLink / candidates）
+    //   { useAdmin, targetUserId } 内联字面量（bulkApply）
+    //   什么都不给                          ← 就是 candidates 原来的样子
+    //
+    // 第一版只认 `\bscope\b`，于是 bulkApply 被误判成「没带 scope」——
+    // 而它带了。断言若把表达方式当规范，就会在无害的重构上报红，
+    // 于是人开始加白名单，白名单又变成什么都往里塞的垃圾桶。
+    const carriesScope = (args) =>
+      /\bscope\b/.test(args) || (/\buseAdmin\b/.test(args) && /\btargetUserId\b/.test(args))
+
+    const unscoped = calls
+      .filter((c) => !carriesScope(c.args))
+      .map((c) => `${c.name}(${c.args.replace(/\s+/g, ' ').slice(0, 70)})`)
+    assert.deepEqual(unscoped, [],
+      `这些调用没有带上管理视角，会退化成「按自己身份操作」：\n  ${unscoped.join('\n  ')}`)
+  })
+
+  test('扫到的不止 candidates（防止解析器扫了 0 个而全绿）', () => {
+    const names = [...dialog.matchAll(/ShareService\.(\w+)\(/g)].map((m) => m[1])
+    for (const expected of ['list', 'setState', 'addLink', 'removeLink', 'candidates', 'bulkApply']) {
+      assert.ok(names.includes(expected), `没扫到 ShareService.${expected} —— 解析器可能坏了`)
+    }
   })
 })
 

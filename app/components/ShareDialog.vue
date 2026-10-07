@@ -856,7 +856,9 @@ async function runCandidateSearch(q: string, id: number) {
     // 管理视角下属主是 targetUserId，不是「我」，所以要单独塞进去。
     const exclude = grants.value.map((g) => g.userId)
     if (props.useAdmin && props.targetUserId != null) exclude.push(props.targetUserId)
-    const res = await ShareService.candidates(q, exclude)
+    // target 必须传：它决定服务端走哪条「谁能进名单」的分支。不传的话
+    // adminMode 恒为假，管理员会被自己的搜索排除掉（详见 ShareService.candidates）。
+    const res = await ShareService.candidates(q, { excludeIds: exclude, target: scope.value })
     // 过期的那次直接丢弃：它的关键词已经不是输入框里那个了
     if (id !== latestCandidateSearch()) return
     candidates.value = res.candidates ?? []

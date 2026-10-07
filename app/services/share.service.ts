@@ -1,4 +1,5 @@
 import type { ShareMode } from '~~/types/share'
+import { adminScope } from '~/utils/scope'
 
 export interface ShareTargetType {
   targetType: 'file' | 'folder'
@@ -169,15 +170,13 @@ export interface ShareBulkTarget {
 
 /** 只在管理视角带上 useAdmin / targetUserId，省得空值传过去被服务端 readBool 误判 */
 function scopeParams(target: ShareTargetType) {
-  const base: Record<string, any> = {
+  return {
     targetType: target.targetType,
-    targetId: target.targetId
+    targetId: target.targetId,
+    // 展开 adminScope 而不是把两个 if 再抄一遍 —— 抄一遍就正是候选搜索漏掉
+    // useAdmin 的那个形状。它的判据为何是合取，见 app/utils/scope.ts。
+    ...adminScope(target)
   }
-  if (target.useAdmin && target.targetUserId != null) {
-    base.useAdmin = true
-    base.targetUserId = target.targetUserId
-  }
-  return base
 }
 
 export const ShareService = {
@@ -252,10 +251,32 @@ export const ShareService = {
     })
   },
 
-  async candidates(keyword: string, excludeIds: number[] = []) {
+  /**
+   * 按名字搜「可授权的人」。
+   *
+   * **必须传 target。** 这里曾经是 `(keyword, excludeIds)` —— 签名里压根没有
+   * target，于是手写 params 时漏了 useAdmin / targetUserId。后果：服务端
+   * `getMeAndTarget` 看到 useAdmin 缺省为假 → adminMode 为假 →
+   * 「谁能进名单」那条规则走了非管理分支 → 把**管理员自己**排掉了。
+   * 于是管理员在替别人管分享时搜不到自己，「给自己开一份别人的文件访问」
+   * 根本做不了（搜不到的人没法选中）。而写时的 assertGrantees 本来就允许
+   * 这件事 —— 只拒属主，不拒行动者。
+   *
+   * 别的调用都吃 scope，所以只有这一个坏掉，于是表现得很随机：
+   * 分享开关能改、能加人、能删链接，就是搜不到人。
+   */
+  async candidates(
+    keyword: string,
+    opts: { excludeIds?: number[]; target?: ShareTargetType } = {}
+  ) {
     if (!keyword.trim()) return { candidates: [] as ShareCandidate[] }
+    const excludeIds = opts.excludeIds ?? []
     return await $fetch<{ success: boolean; candidates: ShareCandidate[] }>('/api/share/candidates', {
-      params: { q: keyword.trim(), exclude: excludeIds.filter(Boolean).join(',') || undefined }
+      params: {
+        q: keyword.trim(),
+        exclude: excludeIds.filter(Boolean).join(',') || undefined,
+        ...(opts.target ? adminScope(opts.target) : {})
+      }
     })
   },
 
