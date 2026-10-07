@@ -219,6 +219,10 @@ import { formatBytes, parseBytes } from '~/utils/size'
 import { fromDatetimeLocal, toDatetimeLocal } from '~/utils/datetimeLocal'
 import { PencilSquareIcon, ShieldCheckIcon, StarIcon } from '@heroicons/vue/24/outline'
 import UserEditDialog, { type DbUser } from '~/components/UserEditDialog.vue'
+// 显式 import，与同目录的 manage/files.vue、manage/bucket.vue 一致。
+// 存储桶那个页面渲染时真的报过 `useAuth is not defined` 的 SSR 500 ——
+// `useAuth` 在自动导入清单里，但注入没生效，原因没查清，所以管理页一律不赌它。
+import { useAuth } from '~/composables/useAuth'
 
 useHead({ title: '用户管理' })
 

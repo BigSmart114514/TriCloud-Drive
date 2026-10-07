@@ -340,6 +340,14 @@ import {
 import { formatFileSize } from '~/utils/format'
 import { notify, notifyError } from '~/utils/notify'
 import { useTwoStepConfirm } from '~/composables/useTwoStepConfirm'
+// 显式 import，不靠自动导入。
+//
+// `useAuth` 确实在 .nuxt/imports.d.ts 的自动导入清单里，所以本该能自动注入 ——
+// 但这个页面实际渲染时报过 `useAuth is not defined` 的 SSR 500，而我复现不出
+// 那个条件（未登录会在 auth.global.ts 就被弹走，拿不到会话）。既然原因没查清，
+// 那就把对自动导入的依赖去掉：兄弟页面 manage/files.vue 本来就是这么写的，
+// 同样的代码结构下它从没出过这个问题。
+import { useAuth } from '~/composables/useAuth'
 
 definePageMeta({ layout: false })
 useHead({ title: '存储桶管理' })
