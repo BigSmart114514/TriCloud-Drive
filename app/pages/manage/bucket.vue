@@ -151,8 +151,8 @@
               一次误点删掉几千个对象的代价，没人能承担 —— 所以每行一个按钮，
               想删多少点多少次。
             -->
-            <caption class="sr-only">孤儿对象列表，每行独立删除，没有全选</caption>
             <table class="w-full text-left text-xs">
+              <caption class="sr-only">孤儿对象列表，每行独立删除，没有全选</caption>
               <thead class="border-b border-gray-200 bg-gray-50 text-gray-600">
                 <tr>
                   <th class="px-3 py-2 font-medium">对象键</th>

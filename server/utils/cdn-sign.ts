@@ -40,9 +40,29 @@ export const generateCDNUrl = (
   void backupKey // 见文件头：形参保留，函数体只用 primaryKey
 
   const timestamp = Math.floor(Date.now() / 1000) + ttl
-  const path = `/${fileKey}`
   const rand = Math.floor(Math.random() * 1000000).toString()
   const uid = 0
+
+  /**
+   * **path 必须先 encodeURI，而且签名与 URL 用的是同一个串。**
+   *
+   * 原来签的是原始 key，而浏览器/Node 发请求时会把非 ASCII 编码掉。于是
+   * 到 CDN 手里的是 `%E6%9C%AA...` 而签名覆盖的是 `未命名1` —— 对不上，403。
+   *
+   * 实测（真桶真 CDN）：
+   *   签原始形态   /u/43/…/未命名1.cpp           → HTTP 403
+   *   签编码形态   /u/43/…/%E6%9C%AA…cpp        → HTTP 206
+   *
+   * 只影响含非 ASCII 的 key，也就是复制产生的那些（`u/<id>/…_<原名>`）。
+   * 上传路径是 uuid，ASCII，所以这个坑此前一直没人踩到 —— 直到孤儿下载
+   * 把 `u/` 下的对象第一次摆到界面上。
+   *
+   * encodeURI 对纯 ASCII 的安全路径是 no-op（实测 `users/2/202510/<uuid>.txt`
+   * 编码前后逐字相同），所以绝大多数请求一个字节都没变。
+   *
+   * 注意它**不是** encodeURIComponent：后者会把 `/` 也编码掉，路径就断了。
+   */
+  const path = encodeURI(`/${fileKey}`)
 
   const secret = primaryKey
   const authString = `${path}-${timestamp}-${rand}-${uid}-${secret}`

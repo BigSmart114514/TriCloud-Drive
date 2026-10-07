@@ -43,8 +43,27 @@ import { DEFAULT_SHARE_MODE, hasPermission, normalizeShareLink, PERM_WRITE } fro
  * 日/月/年一律走 UTC：服务器时区不是 UTC 时，跨月边界会把同一批文件分到
  * 相邻两天的目录里（与 upload/credentials.post.ts 同一个理由）。
  */
+/**
+ * 剥掉会破坏对象键或 URL 结构的字符。
+ *
+ * # 原来不在列表里，而它一定会坏事：
+ *
+ *   key = u/1/2026-01-01/1_a_报告#1.txt
+ *   new URL('https://cdn/…' + encodeURI(key)).pathname
+ *     → /u/1/2026-01-01/1_a_%E6%8A%A5%E5%91%8A     ← 在 # 处被截断
+ *   而签名覆盖的是完整串 → CDN 永远算不对 → 403
+ *
+ * 「报告#1.txt」是完全合法的文件名（几乎所有文件系统都允许），所以这不是
+ * 造出来的不可能输入。
+ *
+ * 注意这只对**将来**的复制生效：桶里已经存在的、带 # 的对象仍然是坏的 ——
+ * 它们的 key 不会变（改了就是另一个对象）。那些对象在存储桶管理页里能下载
+ * （key 不经这里），但普通下载走不通。
+ *
+ * 空格换成单个空格而不是剥掉：文件名里的空格要保留，只是折叠连续的。
+ */
 export function sanitizeForKey(name: string): string {
-  return name.replace(/[\\?%*:|"<>]/g, '_').replace(/[\s]+/g, ' ')
+  return name.replace(/[\\?%*:|"<>#]/g, '_').replace(/[\s]+/g, ' ')
 }
 
 export function randomId(len = 10) {

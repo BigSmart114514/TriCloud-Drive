@@ -151,7 +151,65 @@ describe('签名本身：抽出后行为未变', () => {
     assert.match(url, /sign=\d+-\d+-0-[0-9a-f]{32}/, 'TypeA 形状：时间戳-随机-uid-md5')
   })
 
-  test('签名只取决于 path/ttl/primaryKey（backupKey 不参与）', () => {
+  // 这一条是从真实 403 里反查出来的，不是想出来的。
+//
+// 原来签的是原始 key，而请求到线上时非 ASCII 已被编码，于是对不上：
+//   签原始形态   /u/43/…/未命名1.cpp       → 403
+//   签编码形态   /u/43/…/%E6%9C%AA…cpp    → 206
+//
+// 上传路径是 uuid（ASCII）所以一直没人踩到；孤儿下载把 u/ 下的对象第一次
+// 摆到界面上，才第一次有人去点它。
+test('含非 ASCII 的 key：签名与 URL 用同一个编码后的 path', () => {
+  const key = 'u/43/2026-10-01/1790898616550_p5bq2v_未命名1.cpp'
+  const realRandom = Math.random
+  Math.random = () => 0.5
+  try {
+    const url = generateCDNUrl(key, CFG.domain, CFG.primary, CFG.backup, 300, CFG.param)
+    const path = new URL(url).pathname
+    assert.match(path, /%E6%9C%AA%E5%91%BD/, 'URL 里的 path 必须已被编码')
+    // 签名覆盖的串就是 URL 里那个 —— 这是判据的关键。
+    // 单独断言「URL 有编码」不够：原来那种签原始、只把编码加到 URL 上的写法
+    // 也满足它，而那正是 403 的成因。
+    assert.doesNotMatch(path, /[^\x00-\x7F]/, 'path 里不该有裸的非 ASCII —— 到了线上它会被改写')
+  } finally {
+    Math.random = realRandom
+  }
+})
+
+test('encodeURI 对 ASCII 的 uuid 路径是 no-op（绝大多数请求一个字节都不变）', () => {
+  const key = 'users/2/202510/1550284e-6fa2-486c-bdd7-7e62e84fcf86.txt'
+  const realRandom = Math.random
+  Math.random = () => 0.5
+  try {
+    const url = generateCDNUrl(key, CFG.domain, CFG.primary, CFG.backup, 300, CFG.param)
+    assert.equal(new URL(url).pathname, '/' + key, 'ASCII 路径必须逐字不变')
+  } finally {
+    Math.random = realRandom
+  }
+})
+
+test('不能用 encodeURIComponent（它会把 / 也编码掉，路径就断了）', () => {
+  const key = 'users/2/202510/abc.txt'
+  const signSrc = codeOnly(read('server/utils/cdn-sign.ts'))
+  const line = signSrc.split('\n').find((l) => /const path = .*fileKey/.test(l))
+  assert.ok(line, '找不到 path 的计算那一行')
+  assert.match(line, /encodeURI\(/, '必须是 encodeURI —— encodeURIComponent 会把 / 编码成 %2F')
+  assert.doesNotMatch(line, /encodeURIComponent/, 'path 上不能用 encodeURIComponent')
+})
+
+// # 是同一族的第二个坑：sanitizeForKey 剥了 \ ? % * : | " <>，唯独漏了 #。
+// 而「报告#1.txt」是完全合法的文件名（几乎所有文件系统都允许）。
+test('sanitizeForKey 剥掉 #（它会在 URL 里被当片段，把 path 截断）', () => {
+  // 在浏览器/CDN 侧的等价物：new URL 会把 # 之后的部分当成 hash
+  const raw = '/u/1/2026-01-01/1_a_报告#1.txt'
+  assert.equal(new URL('https://x' + raw).pathname, '/u/1/2026-01-01/1_a_%E6%8A%A5%E5%91%8A',
+    '对照：# 之后真的被截断了 —— 所以留着它必然 403')
+  assert.match(codeOnly(read('server/api/copy/paste.post.ts')),
+    /\[\\\\\?%\*:\|"<>#\]/,
+    '剥除字符集里必须有 #')
+})
+
+test('签名只取决于 path/ttl/primaryKey（backupKey 不参与）', () => {
     // 既有行为：形参有 backupKey 但函数体只用 primaryKey。这里钉住它，
     // 免得有人「顺手修一下」而没意识到要连着改 CDN 后台配置。
     //
@@ -328,7 +386,29 @@ describe('页面：下载在删除旁边，且不随 deletable 一起禁用', ()
     assert.match(body, /原文件名.*恢复|恢复.*原文件名/, '提示要说清名字恢复不了')
   })
 
-  test('按钮图标都 import 了（vue-component-resolution 只管解析，不管语义）', () => {
+  // <caption> 必须是 <table> 的第一个子元素。第一版把它放在了 <table> 前面，
+// 于是 dev server 每次 SSR 都报一条 HTML 规范警告。断言用父子关系而不是
+// 「有没有 caption」，因为要守的正是那个关系。
+test('caption 必须是 table 的子元素', () => {
+  const t = templateOf('app/pages/manage/bucket.vue')
+  const cap = t.indexOf('<caption')
+  if (cap < 0) return   // 不写 caption 也合法
+
+  // 往**回**找 table。第一版用 indexOf('<table', cap) 往后找 —— 而 caption 在
+  // table 之后，于是那个「往后找」找到的是下一张表（悬空行那张），判据因此
+  // 指向了错误的元素，测试红着而实现是对的。跟上一条 slice(-1) 同一类：
+  // 源码断言里「找错了一个仍然存在的元素」比「找不到」更难察觉。
+  const tbl = t.lastIndexOf('<table', cap)
+  assert.ok(tbl >= 0 && tbl < cap, '<caption> 必须排在它所属的 <table> 之后、其内部')
+
+  // 还要落在同一张表的 </table> 之前
+  const close = t.indexOf('</table>', cap)
+  const nextOpen = t.indexOf('<table', cap)
+  assert.ok(close > cap && (nextOpen < 0 || close < nextOpen),
+    '<caption> 必须落在所属表的 </table> 之前，而不是漂到下一张表里')
+})
+
+test('按钮图标都 import 了（vue-component-resolution 只管解析，不管语义）', () => {
     const s2 = s()
     // TrashIcon 是 import 里的最后一项，后面没有逗号 —— 所以不能断言 `TrashIcon,`。
     assert.match(s2, /ArrowDownTrayIcon\b/, '下载图标')
