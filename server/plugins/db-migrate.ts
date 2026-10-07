@@ -122,6 +122,35 @@ const SQLITE_SHARE_LINKS = `
   )
 `
 
+const SQLITE_BUCKET_PURGE_LOG = `
+  CREATE TABLE bucket_purge_log (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind       TEXT    NOT NULL,
+    user_id    INTEGER NOT NULL,
+    count      INTEGER NOT NULL DEFAULT 0,
+    bytes      INTEGER NOT NULL DEFAULT 0,
+    actor_id   INTEGER NOT NULL,
+    payload    TEXT    NOT NULL,
+    created_at TEXT    DEFAULT CURRENT_TIMESTAMP
+  )
+`
+
+const MYSQL_BUCKET_PURGE_LOG = `
+  CREATE TABLE bucket_purge_log (
+    id         BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    kind       VARCHAR(32) NOT NULL,
+    user_id    BIGINT UNSIGNED NOT NULL,
+    count      BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    bytes      BIGINT UNSIGNED NOT NULL DEFAULT 0,
+    actor_id   BIGINT UNSIGNED NOT NULL,
+    payload    TEXT NOT NULL,
+    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+
+    PRIMARY KEY (id),
+    KEY ix_bucket_purge_user (user_id)
+  )
+`
+
 const MYSQL_SHARE_LINKS = `
   CREATE TABLE share_links (
     id          BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -334,6 +363,27 @@ export default defineNitroPlugin(async () => {
     //    生产库当时还没有任何分享数据，没有可保留的旧语义，直接不迁移即可。
     //    新库的 folders.Shared 建表就是 DEFAULT 2 且带 CHECK (Shared IN (0,1,2))，
     //    见下面 columnExists 那段与建表 SQL，不需要任何数据搬运。
+
+    // 9) 存储桶清理审计
+    //
+    // 为什么要有：这个项目原本**没有审计表**（purge-user.ts 只有 console.warn，
+    // 而那在容器/serverless 上随时可能没），而存储桶管理的两个删除方向都是
+    // 不可逆的 —— 孤儿对象删掉字节就没了，悬空行删掉文件名/位置/时间就没了。
+    // 一键删 N 条而不留记录，等于「删错了也没法回答用户」。
+    //
+    // kind 区分两种删除（'orphan-object' / 'dangling-row'）而不是建两张表：
+    // 查询「这个用户被清理过什么」时两种要一起看，拆开反而要多写一次 join。
+    //
+    // payload 存 JSON 快照而不是外键到 files —— 悬空行被删掉之后外键就没了，
+    // 审计表会跟着一起失去意义。存快照才能回答「当时删掉的到底是什么」。
+    //
+    // 故意**不建外键到 users**：删用户时审计记录必须留下来，
+    // 而 ON DELETE CASCADE 会把它一起带走 —— 恰好在「用户投诉文件丢了」
+    // 的时候把唯一的账本清掉。
+    if (!(await tableExists(db, 'bucket_purge_log'))) {
+      await db.prepare(mysql ? MYSQL_BUCKET_PURGE_LOG : SQLITE_BUCKET_PURGE_LOG).bind().run()
+      console.log('[db-migrate] bucket_purge_log created')
+    }
   } catch (error: any) {
     console.error('[db-migrate] failed:', error?.message || error)
   }

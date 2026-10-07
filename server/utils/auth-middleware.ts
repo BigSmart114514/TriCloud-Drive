@@ -93,6 +93,33 @@ export async function requireAdmin(event: any): Promise<AuthenticatedUser> {
 }
 
 /**
+ * 需要**超管**权限（比 requireAdmin 更严一级）。
+ *
+ * ## 为什么要单独一个
+ *
+ * `/api/manage/` 整段在 middleware 里过 requireAdmin，而 requireAdmin 放行的是
+ * `isAdmin || isSuperAdmin`。所以存储桶那几个接口不能靠它 —— 普通管理员照样
+ * 放得进来。
+ *
+ * 这不是洁癖，是操作本身不对称：
+ *   - 改配额 / 改有效期：影响「他以后能存多少」，用户当天就知道
+ *   - 删孤儿对象 / 删悬空行：影响「他过去存的东西还在不在」，用户可能几个月后才发现，
+ *     而且**不可逆**，审计表只能事后回答、不能还原
+ *
+ * 超管是可授的（updateUser.post.ts 允许超管把 IsSuperAdmin 给别人），所以
+ * 这不是「一个账号的私有工具」，而是「少数几个人的高危操作台」。
+ *
+ * 调用方**仍应**保留 requireAdmin 作为前置（本函数只加严不放松）。
+ */
+export async function requireSuperAdmin(event: any): Promise<AuthenticatedUser> {
+  const user = await requireAdmin(event)
+  if (!user.isSuperAdmin) {
+    throw createError({ statusCode: 403, message: '仅超级管理员可访问存储桶管理' })
+  }
+  return user
+}
+
+/**
  * 可选认证中间件 - 如果有 token 则验证，没有则返回 null
  *
  * opts.withUser 必须显式传：requireAuth 不带 withUser 时只回 { userId }，

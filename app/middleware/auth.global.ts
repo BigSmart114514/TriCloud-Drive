@@ -44,6 +44,16 @@ export default defineNuxtRouteMiddleware(async (to) => {
     if (!(auth.user.value?.IsAdmin || auth.user.value?.IsSuperAdmin)) {
       return navigateTo('/')
     }
+    // 存储桶管理要**超管**，比上面那两级更严。
+    //
+    // 为什么必须在这里单独判：管理后台其余页面对管理员开放，而这个页面的两个
+    // 删除方向都是不可逆的（孤儿对象删掉字节没了，悬空行删掉文件名/位置/时间
+    // 没了）。只靠服务端 requireSuperAdmin 的话，普通管理员进去就是一屏 403，
+    // 而 UiManageMenu 已经不会给他这个入口 —— 相当于两层都拦：
+    // 菜单不给（体验），这里不给（SSR 阶段就拦，不发出请求），服务端不给（真边界）。
+    if (to.path === '/manage/bucket' && !auth.user.value?.IsSuperAdmin) {
+      return navigateTo('/manage/files')
+    }
   }
 
   if (!(auth.user.value?.IsAdmin || auth.user.value?.IsSuperAdmin) && to.path.startsWith('/api/manage') )

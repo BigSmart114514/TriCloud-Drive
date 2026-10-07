@@ -25,11 +25,37 @@ import {
 } from '~~/server/utils/sub-account'
 import { DEFAULT_SHARE_MODE, hasPermission, normalizeShareLink, PERM_WRITE } from '~~/types/share'
 
-function sanitizeForKey(name: string): string {
+/**
+ * 复制时的对象键： `u/<id>/<YYYY-MM-DD>/<ts>_<rand>_<name>`
+ *
+ * ## 为什么要挪到 file-key.ts
+ *
+ * 原来这三个函数（sanitizeForKey / randomId / buildCosKey）是**本文件内联的**，
+ * 而 file-key.ts 的文件头明确写着「已知的命名空间前缀。写全是为了让新增前缀时
+ * 被迫想一下这里」。内联的那份恰好把这条约定架空了：加第三套 key 方案的人
+ * 在本文件里就能直接再写一个 buildCosKey，而没有任何东西提醒他那两个前缀的
+ * 列表需要同步。
+ *
+ * 另外文件里已经有一个带注释的完整前缀清单（`users/…` 与 `u/…`），
+ * 往 storage 的对账（bucket-reconcile.ts）正是靠它遍历两个前缀。漏掉一个前缀
+ * 的表现是「那个前缀下的对象全都不见了」—— 没有任何报错。
+ *
+ * 日/月/年一律走 UTC：服务器时区不是 UTC 时，跨月边界会把同一批文件分到
+ * 相邻两天的目录里（与 upload/credentials.post.ts 同一个理由）。
+ */
+export function sanitizeForKey(name: string): string {
   return name.replace(/[\\?%*:|"<>]/g, '_').replace(/[\s]+/g, ' ')
 }
-function randomId(len = 10) {
+
+export function randomId(len = 10) {
   return Math.random().toString(36).slice(2, 2 + len)
+}
+
+export function buildCosKey(userId: number, filename: string): string {
+  const safe = sanitizeForKey(filename)
+  const y = new Date()
+  const day = `${y.getUTCFullYear()}-${(y.getUTCMonth() + 1).toString().padStart(2, '0')}-${y.getUTCDate().toString().padStart(2, '0')}`
+  return `u/${userId}/${day}/${Date.now()}_${randomId(6)}_${safe}`
 }
 
 export default defineEventHandler(async (event) => {
@@ -492,12 +518,9 @@ try {
   // 不留日志）。共享版带配置守卫与失败日志，且**永不抛** —— 正合这里两处用法：
   // 覆盖时删旧对象（失败不该影响整体）、全败回滚时补偿删除（已在错误路径上，
   // 再抛第二个错只会盖掉真正的失败原因）。
-  function buildCosKey(userId: number, filename: string) {
-    const safe = sanitizeForKey(filename)
-    const y = new Date()
-    const day = `${y.getUTCFullYear()}-${(y.getUTCMonth()+1).toString().padStart(2,'0')}-${y.getUTCDate().toString().padStart(2, '0')}`
-    return `u/${userId}/${day}/${Date.now()}_${randomId(6)}_${safe}`
-  }
+  // buildCosKey / sanitizeForKey / randomId 已提到文件顶层并 export —— 理由见那里的注释：
+  // 内联那份把这个文件变成了「第三套 key 方案最容易长出来的地方」，而 file-key.ts
+  // 的前缀清单正是靠「新增前缀时被迫想一下这里」来保持有效的。
   function buildCosUrl(key: string) {
     return `https://${Bucket}.cos.${Region}.myqcloud.com/${encodeURIComponent(key)}`
   }

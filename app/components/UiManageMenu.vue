@@ -39,17 +39,38 @@
 </template>
 
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { FolderIcon, ShieldExclamationIcon, UsersIcon } from '@heroicons/vue/24/outline'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import {
+  CloudIcon,
+  FolderIcon,
+  ShieldExclamationIcon,
+  UsersIcon
+} from '@heroicons/vue/24/outline'
+import { useAuth } from '~/composables/useAuth'
 
 /**
  * 导航栏上的管理入口。非管理员整个组件都不渲染（AppNavbar 用 v-if 控制挂载），
- * 所以这里只负责「点开 → 两个链接 → 跳转后自动收起」。
+ * 所以这里只负责「点开 → 按角色列出链接 → 跳转后自动收起」。
  */
-const items = [
-  { to: '/manage/files', label: '文件总览', icon: FolderIcon },
-  { to: '/manage/user', label: '用户管理', icon: UsersIcon }
-]
+const auth = useAuth()
+/**
+ * 菜单项按角色过滤。**只显示给人能用的**：
+ *
+ * 存储桶管理只有超管能进（requireSuperAdmin），而普通管理员看到的是一个
+ * 点进去全是 403 的入口 —— 那是「像坏了」，不是「权限不足」。
+ * 真的拦在 auth.global.ts 与服务端两处，菜单这里只是不给出路。
+ *
+ * IsSuperAdmin 是可授的（updateUser.post.ts 允许超管给别人），所以这不只
+ * 是一份「给自己看的」私有工具。
+ */
+const items = computed(() => {
+  const all = [
+    { to: '/manage/files', label: '文件总览', icon: FolderIcon },
+    { to: '/manage/user', label: '用户管理', icon: UsersIcon }
+  ]
+  if (!auth.user.value?.IsSuperAdmin) return all
+  return [...all, { to: '/manage/bucket', label: '存储桶管理', icon: CloudIcon }]
+})
 
 const open = ref(false)
 const rootRef = ref<HTMLElement | null>(null)
