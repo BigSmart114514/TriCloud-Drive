@@ -20,7 +20,7 @@
 // 需要 mock 一整个 h3 环境。真正需要执行的分支都在 reconcile 那边测了。
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { parse } from '@vue/compiler-sfc'
@@ -45,7 +45,16 @@ const scriptOf = (p) => {
 const templateOf = (p) => {
   const { descriptor, errors } = parse(read(p), { filename: p })
   assert.equal(errors?.length ?? 0, 0, `${p} SFC 解析出错`)
-  return codeOnly(descriptor.template?.content ?? '')
+  // 模板里还要剥 HTML 注释。codeOnly 只认 /* */ 和 //，剥不掉 <!-- -->。
+  //
+  // 这一步不是洁癖，而且**下面那段解释注释里就写着 `<AppNavbar />`** ——
+  // 不剥的话 `只放了一个 NavBar` 那条会把注释里这次提及数成第二个标签，2 ≠ 1。
+  // 那是实测出来的：把这一步删掉，套件就红在「只放了一个」上。
+  // （剥之前先试过只靠下面 `^\s*` 锚定，抓不到 —— 干净页面上真实标签本来就在。）
+  return codeOnly(
+    (descriptor.template?.content ?? '')
+      .replace(/<!--[\s\S]*?-->/g, '')
+  )
 }
 
 const ENDPOINTS = [
@@ -518,5 +527,81 @@ describe('key 构造器的收敛', () => {
     const body = s.slice(at, at + 500)
     assert.match(body, /for \(const prefix of prefixes\)/,
       '必须遍历传进来的前缀列表，不能挑一个')
+  })
+})
+// ── 存储桶页的顶栏 ────────────────────────────────────────────────
+//
+// ## 实际发生过什么
+//
+// bucket.vue 渲染时**没有 NavBar**。根因不是忘了调什么，而是这个项目压根
+// 没有 app/layouts/ 目录 —— Navbar 不由 layout 提供，是每个页面在**自己的模板里**
+// 放 <AppNavbar />。我照着 manage/files.vue 抄了 definePageMeta({ layout: false })，
+// 却没抄那一行，又手搓了一个返回箭头顶替。
+//
+// ## 为什么这不是外观问题
+//
+// 「存储桶管理」那个菜单项在 UiManageMenu 里，而 UiManageMenu 挂在 AppNavbar 内。
+// 没有 Navbar = 既进不去也出不去，只能手敲 URL —— 而「能进得去」正是这个功能的核心。
+// 三道关卡都看不见它：sfc-check 只编语法、tsc 不查 .vue 模板、
+// auth.global.ts 只管有没有管理员身份不管有没有导航。
+describe('manage/ 下的页面都要有 NavBar（项目没有 layouts/，顶栏靠每页自己放）', () => {
+  const MANAGE_DIR = 'app/pages/manage'
+
+  const managePages = readdirSync(join(root, MANAGE_DIR))
+    .filter((f) => f.endsWith('.vue'))
+    .sort()
+
+  test('扫到页面了（目录写错就扫 0 个而全绿）', () => {
+    assert.ok(managePages.length >= 3,
+      `${MANAGE_DIR} 只扫到 ${managePages.length} 个 .vue —— 目录或过滤条件写错了`)
+  })
+
+  for (const f of managePages) {
+    const p = `${MANAGE_DIR}/${f}`
+    test(`${p} 模板里有 <AppNavbar`, () => {
+      const t = templateOf(p)
+      assert.match(t, /^\s*<AppNavbar\b/m,
+        `${p} 没有 NavBar —— 本项目没有 layouts/，Navbar 只能每页自己放；` +
+        `少了它这页既进不去（菜单项在 AppNavbar 里）也出不来`)
+      // `^\s*` 锚到行首：**本身并不承重** —— 实测单独去掉它，干净基线照样全绿
+      // （真实标签在行首，锚不锚都匹配）。它是第二道：万一日后有人把 templateOf
+      // 里剥 <!-- --> 那步删了，锚定至少不会让「标签被注释掉」蒙混过关。
+      // 真正承重的是上面那一步（剥注释）与下面那条计数断言。
+    })
+  }
+
+  test('bucket.vue 只放了一个 NavBar（防止重复挂载或换掉）', () => {
+    const t = templateOf('app/pages/manage/bucket.vue')
+    const tags = [...t.matchAll(/<AppNavbar\b/g)]
+    assert.equal(tags.length, 1, `bucket.vue 里有 ${tags.length} 个 <AppNavbar>，应为 1`)
+  })
+
+  test('手搓的返回按钮已经删掉（不能和 NavBar 并存）', () => {
+    // 那个按钮的 aria-label。留着它就是两个「回去」的入口，两边行为还不一样。
+    assert.doesNotMatch(templateOf('app/pages/manage/bucket.vue'), /返回管理后台/,
+      'bucket.vue 不该再有自绘返回按钮 —— NavBar + UiManageMenu 已经提供导航了')
+  })
+
+  test('返回按钮的图标 import 也一并删了（不是留下一个没人用的 import）', () => {
+    const s = codeOnly(read('app/pages/manage/bucket.vue'))
+    assert.doesNotMatch(s, /\bArrowLeftIcon\b/,
+      'ArrowLeftIcon 只被那个已删的返回按钮用着 —— 留着就是未使用的 import')
+  })
+})
+
+describe('「仅超管可见」那行字不写进副标题（2026-10-07 用户要求）', () => {
+  // 三重门控（auth.global.ts / 页面守卫 / 端点 requireSuperAdmin）都在，
+  // 再写一遍是白字；用户明确让删。
+  test('副标题不再出现「仅超级管理员可见」', () => {
+    assert.doesNotMatch(templateOf('app/pages/manage/bucket.vue'), /仅超级管理员可见/,
+      '用户 2026-10-07 明确要求删掉这句')
+  })
+
+  // 非空断言：只断言「不在」的话，把整段副标题删掉也能过，
+  // 而用户要的是**只删那一句**、前半句留着。
+  test('副标题的前半句还在（否则上一条就成了空断言）', () => {
+    assert.match(templateOf('app/pages/manage/bucket.vue'),
+      /直接操作对象存储：浏览真实对象、对账、清理。/,
+      '用户选了「只删『仅超级管理员可见。』」—— 前半句必须留着')
   })
 })

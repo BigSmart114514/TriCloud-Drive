@@ -1,29 +1,38 @@
 <template>
   <div class="min-h-screen bg-gray-50">
     <!--
-      骨架与 manage/files.vue 同层：layout: false（自己画顶栏），SSR 阶段
-      就由 auth.global.ts 拦掉非超管。
+      骨架与 manage/files.vue 同层：layout: false，SSR 阶段就由 auth.global.ts
+      拦掉非超管。
 
       **本页只对超管开放**，与文件总览/用户管理的「管理员即可」不同 ——
       理由见 server/utils/auth-middleware.ts 的 requireSuperAdmin。
     -->
+
+    <!--
+      顶栏用 AppNavbar，不要自己画。
+
+      这个项目**没有 app/layouts/ 目录** —— Navbar 不是 layout 给的，是每个页面在
+      自己模板里放 <AppNavbar />（manage/files.vue、manage/user.vue 都是）。
+      我原先只抄了 layout: false，没抄 Navbar，又手搓了一个返回箭头，结果这个页面
+      既没有顶栏，也没有 UiManageMenu —— 而「存储桶管理」那个菜单项就在 AppNavbar
+      里面，等于除手敲 URL 外无处可进。
+
+      不写 import：组件自动导入清单 .nuxt/components.d.ts:18 有 AppNavbar，且
+      manage/files.vue、manage/user.vue、index.vue 都是不 import 直接用。
+      （a6e7336 那个说不清的 `useAuth is not defined` 是 **composable** 自动导入，
+      机制与组件这条不同，别混为一谈。）
+    -->
+    <AppNavbar fluid />
+
     <header class="border-b border-gray-200 bg-white">
       <div class="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
-        <button
-          type="button"
-          class="rounded-lg p-2 text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
-          aria-label="返回管理后台"
-          @click="navigateTo('/manage/files')"
-        >
-          <ArrowLeftIcon class="h-5 w-5" />
-        </button>
         <div class="min-w-0 flex-1">
           <h1 class="flex items-center gap-1.5 text-base font-semibold text-gray-900">
             <CloudIcon class="h-5 w-5 shrink-0 text-gray-500" />
             存储桶管理
           </h1>
           <p class="mt-0.5 text-xs text-gray-500">
-            直接操作对象存储：浏览真实对象、对账、清理。仅超级管理员可见。
+            直接操作对象存储：浏览真实对象、对账、清理。
           </p>
         </div>
       </div>
@@ -331,7 +340,6 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   ArrowDownTrayIcon,
-  ArrowLeftIcon,
   CloudIcon,
   ExclamationCircleIcon,
   ExclamationTriangleIcon,
