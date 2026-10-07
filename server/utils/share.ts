@@ -56,6 +56,72 @@ export function assertPermissionBits(value: any): number {
   return normalizePermission(raw)
 }
 
+/**
+ * 搜索「可授权的人」时要排除掉的 id。
+ *
+ * ## 为什么它和 assertGrantees 放在同一个文件
+ *
+ * 「谁能进授权名单」是一条规则，它有**两个执行点**：写时（assertGrantees，
+ * 不合格就 400）与读时（candidates 搜索，不合格的人干脆搜不出来）。
+ *
+ * 这条规则曾经有两份拷贝，而且**不一致** —— 读时那份把「我」和「属主」两个
+ * 都排掉了：
+ *
+ *   const excluded = new Set([meId])
+ *   if (adminMode) excluded.add(targetUserId)
+ *
+ * 注释里写的意图（「管理视角下『自己』是**属主**」）与代码不符：意图是
+ * 管理视角下只排属主，代码是两个都排。后果是管理员在替别人管分享时
+ * **搜不到自己**，于是「给自己开一份别人的文件访问」这个操作根本做不了 ——
+ * 而 assertGrantees 那一侧本来就允许它（它只拒属主，不拒行动者）。
+ *
+ * 这正是 cos.ts 文件头记着的那个形状：同一段判断抄了几份，其中一份改动
+ * 或失配，其余的静默继续工作。规则只有一份，两处都从这里取。
+ *
+ * ## 管理员为什么该能被搜到
+ *
+ * 给自己开一份别人文件的访问是合法且有用的：那个人账号一旦被删，管理员是通过
+ * 管理员身份看到的文件就没了，而通过名单拿到的那一份还在。OWNER_GUARD_TRIGGER
+ * 也只拦 `file_access.user_id = files.user_id`，不拦这个。
+ *
+ * 非管理视角下不存在这个问题 —— 那时「我」就是属主，排掉是应该的。
+ */
+export function candidateExclusions(params: {
+  /** 发起这次操作的人 */
+  meId: number
+  /** 数据属主。缺省是自己 */
+  targetUserId: number
+  /** 是否以管理权限操作 */
+  adminMode: boolean
+  /** 调用方传来的「已在名单里」逗号串 */
+  exclude?: string | null
+}): number[] {
+  const { meId, targetUserId, adminMode } = params
+
+  // 管理视角下「不能进名单的人」只有属主；非管理视角下就是我（= 属主）。
+  // 两种情况下最终都排掉属主，区别只在**是否连行动者一起排掉**。
+  const excluded = new Set<number>(adminMode ? [Number(targetUserId)] : [Number(meId)])
+
+  // 已经在名单里的人不用再出现。
+  if (params.exclude) {
+    for (const part of String(params.exclude).split(',')) {
+      const n = Number(part)
+      // 只收正整数。'abc' → NaN、'0' → 0、'-3' → -3、空段 → 0，放进 NOT IN
+      // 会带上一个假排除项。调用方很容易写出「5,,9」这种（尾逗号、连续逗号），
+      // 所以判据必须挡住 0 与负数，不能只挡 NaN。
+      //
+      // 这里**没有** trim()：Number() 自己就吃首尾空白（Number(' 5 ') === 5），
+      // 所以那一步是死代码。原先有个 trim() 并配着一条「靠 trim 把空段变成
+      // 空串」的注释 —— 而空段本来就直接得到 0，注释与代码都在演一出并不存在
+      // 的因果。变异扫描试图去掉它，结果是「抓不到」，因为去掉之后行为一模一样
+      // —— 那正是它没有作用的证据。
+      if (Number.isSafeInteger(n) && n > 0) excluded.add(n)
+    }
+  }
+
+  return [...excluded]
+}
+
 /** 被授权人必须真实存在，且不能是属主本人 */
 export async function assertGrantees(db: Database, userIds: number[], ownerId: number): Promise<number[]> {
   const ids = uniqPositiveInts(userIds)

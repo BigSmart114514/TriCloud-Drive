@@ -3,6 +3,7 @@ import { getDb } from '~~/server/utils/db-adapter'
 import { dbConnectionError } from '~~/types/error'
 import { placeholders } from '~~/server/utils/functions'
 import { escapeLike } from '~~/server/utils/escape'
+import { candidateExclusions } from '~~/server/utils/share'
 import { getQuery } from 'h3'
 
 /**
@@ -24,20 +25,18 @@ export default defineEventHandler(async (event) => {
       return { success: true, candidates: [] }
     }
 
-    // 排除自己，以及已经在名单里的人（可由调用方传 exclude=1,2,3）
-    const excluded = new Set<number>([meId])
-    // 管理视角下「自己」是**属主**：我在替 test 改分享，能搜到 test 的话
-    // 管理员会把他加进名单，保存时才撞 assertGrantees 的 400
-    // 「不能授权给属主本人」—— 让不可选的东西根本搜不出来。
-    // （getMeAndTarget 已经保证非超管进不了超管的数据，这里只管属主这一层）
-    if (adminMode) excluded.add(Number(targetUserId))
-    if (q?.exclude) {
-      for (const part of String(q.exclude).split(',')) {
-        const n = Number(part)
-        if (Number.isInteger(n) && n > 0) excluded.add(n)
-      }
-    }
-    const keep = [...excluded]
+    // 「谁能进名单」的规则只有一份，在 share.ts 里，与写时的 assertGrantees 同源。
+    //
+    // 原先这里自己抄了一份，把「我」和「属主」两个都排掉 —— 而管理视角下
+    // 该排的只有属主。后果是管理员在替别人管分享时搜不到自己，于是
+    // 「给自己开一份别人的文件访问」这个操作根本做不了，尽管 assertGrantees
+    // 那一侧本来就允许它。理由与两个视角的差别见 candidateExclusions 的注释。
+    const keep = candidateExclusions({
+      meId,
+      targetUserId: Number(targetUserId),
+      adminMode,
+      exclude: q?.exclude
+    })
 
     const res = await db
       .prepare(`
