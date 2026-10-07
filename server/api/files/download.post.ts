@@ -1,5 +1,4 @@
 import { getMeAndTarget } from '~~/server/utils/auth-middleware'
-import crypto from 'crypto'
 import { getDb } from '~~/server/utils/db-adapter'
 import { FileService } from '~~/server/utils/db'
 import type { OwnedFile } from '~~/server/utils/db'
@@ -10,35 +9,10 @@ import { dbConnectionError } from '~~/types/error'
 import { normalizeShareLink, PERM_DOWNLOAD } from '~~/types/share'
 import { getQuery } from 'h3'
 
-// 生成 CDN 鉴权 URL (TypeA)
-const generateCDNUrl = (
-  fileKey: string,
-  cdnDomain: string,
-  primaryKey: string,
-  backupKey: string,
-  ttl: number,
-  authParam: string,
-  filename?: string
-) => {
-  const timestamp = Math.floor(Date.now() / 1000) + ttl
-  const path = `/${fileKey}`
-  const rand = Math.floor(Math.random() * 1000000).toString()
-  const uid = 0
-
-  const secret = primaryKey
-  const authString = `${path}-${timestamp}-${rand}-${uid}-${secret}`
-  const sign = crypto.createHash('md5').update(authString).digest('hex')
-
-  const authValue = `${timestamp}-${rand}-${uid}-${sign}`
-
-  const params = new URLSearchParams()
-  params.set(authParam, authValue)
-  if (filename) {
-    params.set('response-content-disposition', `attachment; filename="${encodeURIComponent(filename)}"`)
-  }
-
-  return `https://${cdnDomain}${path}?${params.toString()}`
-}
+// 签名搬到了 server/utils/cdn-sign.ts：存储桶管理要给**孤儿对象**签下载链接，
+// 而孤儿对象没有 files 行，那条端点第一步就是按 id 查行 —— 走不通。
+// 函数体逐字未动，抽出来的唯一目的是复用（见新文件顶部的理由）。
+import { generateCDNUrl, cosDirectUrl } from '~~/server/utils/cdn-sign'
 
 // 兼容 D1 / sqlite3 的受影响行数
 const getAffectedRows = (res: any) =>
@@ -178,7 +152,7 @@ export default defineEventHandler(async (event) => {
       }
 
       // 无 CDN：返回 COS 直链。同样用 fileRecord.fileKey，理由见上面 generateCDNUrl 那段
-      const cosUrl = `https://${config.cosBucket}.cos.${config.cosRegion}.myqcloud.com/${fileRecord.fileKey}`
+      const cosUrl = cosDirectUrl(config.cosBucket, config.cosRegion, fileRecord.fileKey)
       return {
         success: true,
         data: {

@@ -131,10 +131,35 @@ describe('签名用的是被授权那一行的路径', () => {
   })
 
   test('COS 直链同样用 fileRecord.fileKey', () => {
+    // 判据从「URL 模板的字面形状」改成「哪个变量被传进 URL 构造函数」。
+    //
+    // 原来断言的是 `myqcloud.com/${fileRecord.fileKey}` 这个字面串，而直链已经
+    // 搬进了 cosDirectUrl()，函数体逐字未动 —— 行为完全一样，断言却红了。
+    //
+    // 这一条真正要守的是「签的是鉴权通过的那一行，不是请求里的那个」。
+    // 钉住字面串只能顺带守住它，一旦有人重构写法就会误报；
+    // 而直接问「fileRecord.fileKey 有没有被传进直链」不会。
     const src = read('server/api/files/download.post.ts')
+    const call = src.match(/cosDirectUrl\([^)]*\)/)?.[0] ?? ''
+    assert.ok(call, '找不到 cosDirectUrl 的调用')
+    // 最后一个实参必须是 fileRecord.fileKey —— 而不是请求里的 fileKey。
+    //
+    // 判据写成「调用里不含 fileKey」是错的：`fileRecord.fileKey` 本身就以
+    // fileKey 结尾，所以任何「里面出现了 fileKey 就违规」的写法都会把正确
+    // 代码判成违规（第一版就是这样，测试红着而实现是对的）。要比的是**实参**。
+    const args = call.slice(call.indexOf('(') + 1, call.lastIndexOf(')'))
+    const last = args.split(',').pop().trim()
+    assert.equal(last, 'fileRecord.fileKey',
+      'COS 直链最后一个实参必须是 fileRecord.fileKey，不能是请求里的 fileKey')
+  })
+
+  // 搬走之后「直链长什么样」这件事在 cdn-sign.ts 里，所以判据跟着搬过来。
+  // 这条是为了让上面那条不再依赖任何形状：直链本身由这里保证。
+  test('cosDirectUrl 拼出的 URL 与原模板逐字相同', () => {
+    const signPath = read('server/utils/cdn-sign.ts')
     assert.ok(
-      /myqcloud\.com\/\$\{fileRecord\.fileKey\}/.test(src),
-      'COS 直链要用 fileRecord.fileKey'
+      /\$\{bucket\}\.cos\.\$\{region\}\.myqcloud\.com\/\$\{fileKey\}/.test(signPath),
+      '直链形状不能变：桶.区域.myqcloud.com/key'
     )
   })
 })

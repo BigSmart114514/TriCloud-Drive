@@ -74,6 +74,41 @@ export function fileKeyMismatchError() {
 }
 
 /**
+ * 从 key 反推文件名。
+ *
+ * 两种 key 格式携带的信息量**不一样**，所以必须把「能不能还原」一并报出来：
+ *
+ *   u/<id>/<YYYY-MM-DD>/<ts>_<rand>_<名字>     名字还在 key 里 → 可还原
+ *   users/<id>/<YYYYMM>/<uuid><ext>           只有 uuid。原名只存在于那一行
+ *                                             files 的 filename 列，而那一行已经
+ *                                             没了（正是「孤儿」的定义）
+ *
+ * 不报 recoverable 的话，界面上会给一个 32 位十六进制串配一个「下载」按钮，
+ * 操作者会以为那就是文件名，点开发现不对再回头找 —— 而实际上那份信息已经
+ * 永久消失了。直接说清楚比让他白找一趟好。
+ *
+ * 这里只做「尽力还原」，不做校验：还原出来的名字可能含斜杠或控制字符，
+ * 所以调用方把它当**下载建议**用（Content-Disposition），不要拿它去拼路径。
+ */
+export function displayNameFromKey(fileKey: unknown): { name: string; recoverable: boolean } {
+  if (typeof fileKey !== 'string' || !fileKey) return { name: '', recoverable: false }
+  const last = fileKey.slice(fileKey.lastIndexOf('/') + 1)
+  if (!last) return { name: '', recoverable: false }
+
+  const prefix = fileKey.split('/')[0]
+
+  // 复制路径的形状：<时间戳>_<随机>_<原名>
+  if (prefix === 'u') {
+    const m = last.match(/^\d+_[a-z0-9]+_(.+)$/i)
+    if (m?.[1]) return { name: m[1], recoverable: true }
+    return { name: last, recoverable: false }
+  }
+
+  // 上传路径：uuid + 扩展名。扩展名在，原名不在。
+  return { name: last, recoverable: false }
+}
+
+/**
  * 写入前的守卫：不属于 ownerId 就抛。
  *
  * **ownerId 必须是解析出来的属主，不是发起请求的人。** upload/save 在

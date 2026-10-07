@@ -175,16 +175,38 @@
                     <span v-if="o.ageMs === null" class="text-amber-600" title="无法解析最后修改时间">未知</span>
                     <span v-else>{{ formatAge(o.ageMs) }}</span>
                   </td>
-                  <td class="px-3 py-2 text-right">
-                    <button
-                      type="button"
-                      class="rounded-md border border-red-200 px-2.5 py-1 font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
-                      :disabled="!o.deletable || purgingKey === o.key"
-                      :title="o.deletable ? '' : deleteDisabledReason(o)"
-                      @click="purgeOne(o)"
-                    >
-                      {{ purgingKey === o.key ? '删除中' : '删除' }}
-                    </button>
+                  <td class="px-3 py-2">
+                    <div class="flex items-center justify-end gap-1.5">
+                      <!--
+                        下载是**删除前唯一的退路**：孤儿对象没有 files 行，
+                        而它不在 SUM(file_size) 里 —— 所以它既不占配额，
+                        删它的唯一理由是回收存储/账单。真删了就是真没了。
+
+                        所以按钮紧挨着删除，且**不随 deletable 一起禁用**：
+                        一个 20 分钟前还没到年龄下限的对象恰恰是最该让人
+                        先下来看看的（它可能是正在上传的，也可能确实是垃圾）。
+                      -->
+                      <button
+                        type="button"
+                        class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+                        :disabled="downloadingKey === o.key"
+                        :title="downloadHint(o)"
+                        @click="downloadOne(o)"
+                      >
+                        <ArrowDownTrayIcon class="h-3.5 w-3.5" />
+                        {{ downloadingKey === o.key ? '签名中' : '下载' }}
+                      </button>
+                      <button
+                        type="button"
+                        class="inline-flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-[11px] font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        :disabled="!o.deletable || purgingKey === o.key"
+                        :title="o.deletable ? '删除这个对象，不可撤销' : deleteDisabledReason(o)"
+                        @click="purgeOne(o)"
+                      >
+                        <TrashIcon class="h-3.5 w-3.5" />
+                        {{ purgingKey === o.key ? '删除中' : '删除' }}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               </tbody>
@@ -308,10 +330,12 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import {
+  ArrowDownTrayIcon,
   ArrowLeftIcon,
   CloudIcon,
   ExclamationCircleIcon,
-  ExclamationTriangleIcon
+  ExclamationTriangleIcon,
+  TrashIcon
 } from '@heroicons/vue/24/outline'
 import { formatFileSize } from '~/utils/format'
 import { notify, notifyError } from '~/utils/notify'
@@ -434,6 +458,59 @@ function deleteDisabledReason(o: Orphan): string {
   if (result.value?.incomplete) return '列举结果不完整，无法确认它确实是孤儿'
   if (o.ageMs === null) return '无法解析最后修改时间，证明不了它够旧'
   return '未到年龄下限（可能在上传中）'
+}
+
+/**
+ * 下载按钮的提示。**文件名能不能还原**要写出来 ——
+ * 上传路径的 key 是 uuid，原名只在那一行 files 里而那一行已经没了，
+ * 让人以为那就是文件名会白找一趟。
+ */
+function downloadHint(o: Orphan): string {
+  const hint = '下载这个对象（删除前唯一的退路）'
+  if (o.key.startsWith('u/')) return hint
+  return hint + '；注意：这个 key 是 uuid 形式，原文件名已无法恢复'
+}
+
+const downloadingKey = ref<string | null>(null)
+
+/**
+ * 签一个链接并交给浏览器下载。
+ *
+ * 用 <a download> + click() 而不是 window.open：签名 URL 带
+ * response-content-disposition: attachment，而 window.open 在部分浏览器
+ * 里会开成新标签页而不是下载。另外合成 a 元素不落进 DOM，用完即弃。
+ */
+async function downloadOne(o: Orphan) {
+  downloadingKey.value = o.key
+  try {
+    const res = await $fetch<{ url: string; filename: string; filenameRecoverable: boolean }>(
+      '/api/manage/bucket/download',
+      {
+        params: { key: o.key },
+        headers: fmtHeaders,
+        credentials: 'include'
+      }
+    )
+    const a = document.createElement('a')
+    a.href = res.url
+    a.download = res.filename || 'object'
+    a.rel = 'noopener'
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+
+    if (!res.filenameRecoverable) {
+      // 不弹错误 —— 下载本身成功了。只是如实说一句「名字恢复不了」，
+      // 否则操作者会以为拿到的那串 hex 就是文件名。
+      // 措辞里带上「文件名恢复不了」：NotifyState 只有 success/error 两种，
+      // 而这里下载确实成功了，所以只能是 success。信息量靠这句话本身带出去。
+      notify('已按 key 命名下载：原文件名无法恢复（该 key 是 uuid 形式）', 'success')
+    }
+  } catch (e) {
+    notifyError(e, '签名失败')
+  } finally {
+    downloadingKey.value = null
+  }
 }
 
 async function purgeOne(o: Orphan) {
