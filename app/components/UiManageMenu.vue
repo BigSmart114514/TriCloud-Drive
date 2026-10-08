@@ -43,6 +43,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import {
   CloudIcon,
   FolderIcon,
+  FolderOpenIcon,
   ShieldExclamationIcon,
   UsersIcon
 } from '@heroicons/vue/24/outline'
@@ -69,7 +70,13 @@ const items = computed(() => {
     { to: '/manage/user', label: '用户管理', icon: UsersIcon }
   ]
   if (!auth.user.value?.IsSuperAdmin) return all
-  return [...all, { to: '/manage/bucket', label: '存储桶管理', icon: CloudIcon }]
+  // 存储桶管理（对账 + 清理）与对象浏览（只读翻桶）都只有超管能进。
+  // 浏览页能列出整个桶的任意前缀，是看得最宽的一页，所以同样不给普通管理员。
+  return [
+    ...all,
+    { to: '/manage/bucket', label: '存储桶管理', icon: CloudIcon },
+    { to: '/manage/browse', label: '对象浏览', icon: FolderOpenIcon }
+  ]
 })
 
 const open = ref(false)

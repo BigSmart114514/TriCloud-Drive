@@ -51,7 +51,12 @@ export default defineNuxtRouteMiddleware(async (to) => {
     // 没了）。只靠服务端 requireSuperAdmin 的话，普通管理员进去就是一屏 403，
     // 而 UiManageMenu 已经不会给他这个入口 —— 相当于两层都拦：
     // 菜单不给（体验），这里不给（SSR 阶段就拦，不发出请求），服务端不给（真边界）。
-    if (to.path === '/manage/bucket' && !auth.user.value?.IsSuperAdmin) {
+    //
+    // 对象浏览页同属超管：它能列出**整个桶**的任意前缀，是这两个页面里看得最宽的。
+    // 判据写成集合而不是 `startsWith('/manage/bucket')` —— 前者加新页面时
+    // 会被这条测试顶出来（少写就是少一条门控），后者只在脑补里成立。
+    const superOnly = new Set(['/manage/bucket', '/manage/browse'])
+    if (superOnly.has(to.path) && !auth.user.value?.IsSuperAdmin) {
       return navigateTo('/manage/files')
     }
   }

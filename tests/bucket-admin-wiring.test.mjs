@@ -330,12 +330,18 @@ describe('cos-list：EncodingType 一个开关都不给', () => {
   })
 })
 
-describe('browse：前缀必须由客户端点名', () => {
+// 原来这个块叫「前缀必须由客户端点名」，钉的是
+// `allPrefixes.find((p) => p === requested)` —— 必须精确等于该用户的某个命名空间。
+// 那个精确匹配挡的是一个具体的坑：早先写成 `prefixes[0] + '/'`，于是永远只列
+// users/<id>/，u/<id>/ 下的对象一个都看不到，且没有任何提示。
+//
+// 2026-10-08 放开成任意前缀（超管有 COS 秘钥，本来就能对整个桶做任何事）。
+// 放开之后，「看错范围」的风险从服务端回到界面，所以**替代品**必须钉在这里，
+// 否则等于把一个防护换成了「靠界面记得显示」。
+describe('browse：前缀放开后，替代防护是什么', () => {
   const src = () => codeOnly(read('server/api/manage/bucket/browse.get.ts'))
 
-  // 这个 bug 我写第一版时就犯过：`prefixes[0] + '/'` 永远只列 users/<id>/，
-  // u/<id>/ 下一个都看不到，且没有任何提示 —— 界面上就是「这用户只有这些文件」。
-  test('不写死 prefixes[0]', () => {
+  test('不写死 prefixes[0]（那条老路仍然封着）', () => {
     assert.doesNotMatch(
       src(),
       /prefixes\[0\]/,
@@ -343,30 +349,77 @@ describe('browse：前缀必须由客户端点名', () => {
     )
   })
 
-  test('前缀从 allPrefixes 里 find（只接受这个用户的）', () => {
-    assert.match(src(), /userKeyPrefixes\(userId\)/, '前缀必须由 userId 推导')
-    assert.match(src(), /find\(\(p\) => p === requested\)/,
-      '必须精确匹配允许列表里的一个，而不是 startsWith')
+  test('替代品①：响应回显 prefix，范围由它说清', () => {
+    assert.match(
+      src(),
+      /return\s*\{[\s\S]{0,200}?\bprefix,/,
+      '必须回显 prefix —— 页面据此显示「当前列举范围」，这是放开后唯一的护栏'
+    )
   })
 
-  test('非法 prefix 直接 400，不 fallback', () => {
-    // fallback 到第一个会让「忘了传」与「选错了」长得一模一样。
-    assert.match(src(), /if \(!prefix\)[\s\S]*?throw createError/)
+  test('替代品②：传了 userId 就必须合法（拼错不能静默放大成整桶）', () => {
+    // 原来 userId 是必需的、非法就 400，所以不存在「静默」这条路。
+    // 现在它变成可选 —— 于是必须显式区分「没传」与「传错了」：
+    // 后者若被当没处理，范围会从「某人的两个命名空间之一」悄悄变成「整个桶」，
+    // 比原来「只列一半」更难发现（原来至少还看得见少了一半）。
+    assert.match(src(), /Number\.isSafeInteger\(/, 'userId 一旦出现就必须校验')
+    assert.match(
+      src(),
+      /hasUserId[\s\S]{0,200}throw createError/,
+      '传了非法 userId 必须 400，不能当没传'
+    )
   })
 
-  test('两个端点的失败语义是分开的（不做成一个带 flag 的接口）', () => {
-    // browse 失败要抛（空列表会让人以为桶是空的），reconcile 不完整要标记。
-    // 共用一个 flag 的话两种语义会挤到同一个字段上，而处置相反。
+  test('空前缀 = 整个桶，是写出来的默认（不是碰巧，也不是 400）', () => {
+    // 放开之后「空前缀」有了明确含义。之前它是非法的（缺 prefix → 400）。
+    assert.match(
+      src(),
+      /const prefix = q\?\.prefix \? String\(q\.prefix\) : ''/,
+      "缺省必须是空串（= 整个桶）"
+    )
+    assert.doesNotMatch(src(), /if\s*\(\s*!prefix\s*\)/, '空前缀不能 400')
+  })
+
+  test('两个端点的失败语义仍然是分开的（不做成一个带 flag 的接口）', () => {
+    // browse 失败要抛（空列表会让人以为桶是空的 —— 空前缀下就是「以为整桶空了」），
+    // reconcile 不完整要标记。共用一个 flag 的话两种语义会挤到同一个字段上。
     assert.doesNotMatch(src(), /\bincomplete\b/, 'browse 只翻一页，不需要 incomplete')
+    assert.match(
+      src(),
+      /await listCosObjectsPage\(/,
+      '必须真的等列举 —— 不 fire-and-forget，否则空列表会被当成「列不出来」'
+    )
   })
 })
 
 describe('页面与菜单', () => {
   test('auth.global.ts 对 /manage/bucket 单独判超管', () => {
     const s = codeOnly(read('app/middleware/auth.global.ts'))
-    assert.match(s, /to\.path === '\/manage\/bucket'/, '必须显式判这条路由')
-    assert.match(s, /to\.path === '\/manage\/bucket'[\s\S]*?!auth\.user\.value\?\.IsSuperAdmin[\s\S]*?navigateTo/,
-      '非超管必须被弹走')
+    // 原来是 `to.path === '/manage/bucket'`。现在与 /manage/browse 一起收进一个
+    // `superOnly` 集合 —— 逐条写 `===` 时加新超管页全靠脑补，而这个文件里的
+    // tests/bucket-browse-ui.test.mjs 会钉住「新超管页必须在集合里」，
+    // 少写就是一条直接红的测试。
+    //
+    // 判据必须**紧**，拆成两条。这里踩过一次：用一条大窗口正则同时要求
+    // 「在集合里」和「与 IsSuperAdmin 一起当门」，结果把
+    // `superOnly.has(to.path) && !auth.user.value?.IsSuperAdmin` 换成
+    // `if (false)` 之后照样绿 —— 再往下 180 字符处还有另一个 IsSuperAdmin
+    // （文件末尾 /api/manage 那段），窗口够得到就替它答了。
+    assert.match(
+      s,
+      /const superOnly = new Set\(\[[^\]]*'\/manage\/bucket'/,
+      '/manage/bucket 必须在超管集合里'
+    )
+    assert.match(
+      s,
+      /superOnly\.has\(to\.path\)\s*&&\s*!auth\.user\.value\?\.IsSuperAdmin/,
+      '那个集合必须真的与 IsSuperAdmin 一起当门（否则集合只是个摆设）'
+    )
+    assert.match(
+      s,
+      /IsSuperAdmin\)\s*\{\s*return navigateTo\('\/manage\/files'\)/,
+      '非超管必须被弹走'
+    )
   })
 
   test('菜单只给超管显示存储桶管理', () => {

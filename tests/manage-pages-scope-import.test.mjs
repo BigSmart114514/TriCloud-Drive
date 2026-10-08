@@ -21,7 +21,7 @@
 // ## 为什么只管 manage/ 下面这几个
 //
 // 把那 8 个文件全改成显式 import 更彻底，但那是 8 个正在服役的核心页面的无谓
-// 改动，风险与收益不成比例。而 manage/ 下三个页面里有两个已经因为这个原因出过
+// 改动，风险与收益不成比例。而 manage/ 下这几个页面里有两个已经因为这个原因出过
 // 事，把它们钉住是有实据的。范围写在这里，免得后来的人以为这是全项目约定。
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
@@ -35,7 +35,10 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const MANAGE_PAGES = [
   'app/pages/manage/files.vue',
   'app/pages/manage/user.vue',
-  'app/pages/manage/bucket.vue'
+  'app/pages/manage/bucket.vue',
+  // 加新管理页时要同步加到这里 —— 这个数组是硬编码的，漏加不会报错，
+  // 只会让新页悄悄失去「必须显式 import useAuth」的约束。
+  'app/pages/manage/browse.vue'
 ]
 
 function scriptOf(p) {
@@ -66,7 +69,7 @@ describe('管理页显式 import useAuth，不靠自动导入', () => {
     })
   }
 
-  test('三个页面一个都没漏（防止路径写错扫到 0 个而全绿）', () => {
+  test('清单里的页面一个都没漏（防止路径写错扫到 0 个而全绿）', () => {
     for (const p of MANAGE_PAGES) {
       const s = scriptOf(p)
       assert.ok(
@@ -74,7 +77,8 @@ describe('管理页显式 import useAuth，不靠自动导入', () => {
         `${p} 不在预期内 —— 页面结构若变了，这条要跟着改，否则会悄悄扫 0 个`
       )
     }
-    assert.equal(MANAGE_PAGES.length, 3)
+    // 硬编码的个数：加页面忘了改这里，测试会逼你改，而不是默默放过
+    assert.equal(MANAGE_PAGES.length, 4)
   })
 })
 
