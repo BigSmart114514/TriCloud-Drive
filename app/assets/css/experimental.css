@@ -1,162 +1,303 @@
+/*
+ * 实验性 UI：液态玻璃（Liquid Glass）
+ * ============================================================
+ * 设计口径（2025 重做）：
+ *
+ *   1. 底子要静。旧版在 body 上叠了两层背景 —— 四团高饱和色斑 + 点阵
+ *      + 斜纹 + 第二层动画色斑，字号没变但画面一直在动，观感就是「花」。
+ *      现在只留一层极光：低饱和的大色场 + 一层极淡的噪点。噪点不是为了
+ *      好看，是给大面积渐变去色带用的（否则暗色屏幕上能看到同心圆纹）。
+ *
+ *   2. 玻璃要透。旧版的「白」太重（0.58 ~ 0.82）又叠加从顶到底的白sheen，
+ *      盖上去就是一块奶白塑料，背景色透不过来。现在面板 0.5 上下、
+ *      弹层 0.6，模糊加在「浮在内容之上」的表面（导航 / 弹窗 / 抽屉 /
+ *      浮层），大面积内容面板只做半透明 —— 通透感主要来自「看得见底色」，
+ *      不来自把每一块都糊一遍。
+ *
+ *   3. 边缘要有光。玻璃的轮廓靠两层：外侧 1px 冷灰细线定位（白边在浅色
+ *      背景上会消失），内侧 1px 顶部高光 + 四周极细的白环。旧版用 -1.5px
+ *      的底部亮线加 0.9 的镜面反射，边缘亮得发毛。
+ *
+ *   4. 形状要收。旧版把 Tailwind 的圆角整体放大了 1.5 ~ 2 倍（md = 0.8rem、
+ *      lg = 1.1rem、t-2xl = 1.6rem），加上重投影，每个行都是一个胖胶囊。
+ *      现在只微调（md = 0.5rem、lg = 0.75rem），阴影换成低透明度的蓝紫调，
+ *      不再是压在纸上的黑墨。
+ *
+ *   5. 强调色收敛。旧版按钮是紫→蓝→青三段渐变，跟玻璃的克制感冲突。
+ *      现在统一为竖向的 indigo 双色渐变（顶部略亮），危险色同理。
+ *
+ * 文件分工：
+ *   - 本文件负责「静态」玻璃：底色、表面、文字、圆角、表单。
+ *   - liquidGlass.ts 负责「动态」玻璃：给 [data-liquid] 元素生成
+ *     SVG 边缘折射滤镜（data-glass-filter），本文件末尾承接。
+ */
+
+/* ---------------------------------------------------------------
+ * 1. 设计令牌
+ * --------------------------------------------------------------- */
+
 html[data-ui='experimental'] {
-  --ui-blur: 22px;
-  --ui-blur-sm: 12px;
-  --ui-saturation: 190%;
-  --ui-surface: rgba(255, 255, 255, 0.58);
-  --ui-surface-strong: rgba(255, 255, 255, 0.7);
-  --ui-surface-overlay: rgba(255, 255, 255, 0.82);
-  --ui-surface-soft: rgba(255, 255, 255, 0.4);
-  --ui-surface-hover: rgba(255, 255, 255, 0.66);
-  --ui-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.9) 0%, rgba(255, 255, 255, 0.22) 28%, rgba(255, 255, 255, 0) 56%);
-  --ui-sheen-soft: linear-gradient(180deg, rgba(255, 255, 255, 0.62) 0%, rgba(255, 255, 255, 0.1) 44%, rgba(255, 255, 255, 0) 68%);
-  --ui-edge: inset 0 0 0 1px rgba(255, 255, 255, 0.62), inset 0 1.5px 0 rgba(255, 255, 255, 0.95), inset 0 -1.5px 0 rgba(255, 255, 255, 0.45), inset 0 -18px 30px -22px rgba(255, 255, 255, 0.7);
-  --ui-border: rgba(255, 255, 255, 0.78);
-  --ui-border-strong: rgba(255, 255, 255, 0.5);
-  --ui-border-input: rgba(120, 132, 165, 0.5);
-  --ui-text: #0b1220;
-  --ui-text-soft: #27344a;
-  --ui-text-muted: #5b6b85;
-  --ui-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.8);
-  --ui-shadow: 0 18px 40px -22px rgba(15, 23, 42, 0.55), 0 2px 8px rgba(15, 23, 42, 0.05), var(--ui-edge);
-  --ui-shadow-lg: 0 30px 60px -26px rgba(15, 23, 42, 0.55), 0 4px 14px rgba(15, 23, 42, 0.08), var(--ui-edge);
-  --ui-shadow-xl: 0 44px 90px -30px rgba(15, 23, 42, 0.6), 0 6px 20px rgba(15, 23, 42, 0.1), var(--ui-edge);
-  --ui-accent: linear-gradient(135deg, rgba(124, 58, 237, 0.96) 0%, rgba(59, 130, 246, 0.94) 52%, rgba(34, 211, 238, 0.92) 100%);
-  --ui-accent-hover: linear-gradient(135deg, rgba(109, 40, 217, 0.98) 0%, rgba(37, 99, 235, 0.96) 52%, rgba(14, 165, 233, 0.94) 100%);
-  --ui-danger: linear-gradient(135deg, rgba(244, 63, 94, 0.96) 0%, rgba(236, 72, 153, 0.94) 100%);
-  --ui-danger-hover: linear-gradient(135deg, rgba(225, 29, 72, 0.98) 0%, rgba(219, 39, 119, 0.96) 100%);
-  --ui-tint-red: rgba(254, 226, 226, 0.6);
-  --ui-tint-green: rgba(209, 250, 229, 0.6);
-  --ui-tint-amber: rgba(254, 243, 199, 0.62);
-  --ui-tint-yellow: rgba(254, 249, 195, 0.66);
-  --ui-tint-indigo: rgba(224, 231, 255, 0.62);
-  --ui-ease: 260ms cubic-bezier(0.4, 0, 0.2, 1);
-  --lg-refraction: 118;
-  --lg-blur: 3;
-  --lg-saturation: 195;
-  --lg-edge: 20;
-  --lg-specular: 0.9;
-  --lg-exponent: 40;
-  --lg-surface: 10;
+  /* --- 玻璃 --- */
+  --ui-blur: 24px;          /* 内容级的模糊 */
+  --ui-blur-lg: 40px;       /* 浮层级的模糊（导航 / 弹窗 / 抽屉） */
+  --ui-saturation: 170%;
+
+  --ui-surface: rgba(255, 255, 255, 0.5);
+  --ui-surface-strong: rgba(255, 255, 255, 0.6);
+  --ui-surface-soft: rgba(255, 255, 255, 0.32);
+  --ui-surface-hover: rgba(255, 255, 255, 0.6);
+
+  /* 顶部到底的提亮，只在浮层上用；大面积面板用会发奶 */
+  --ui-sheen: linear-gradient(180deg, rgba(255, 255, 255, 0.5) 0%, rgba(255, 255, 255, 0.14) 32%, rgba(255, 255, 255, 0) 64%);
+  --ui-sheen-soft: linear-gradient(180deg, rgba(255, 255, 255, 0.34) 0%, rgba(255, 255, 255, 0) 58%);
+
+  /* 玻璃轮廓：外圈冷灰细线 + 内侧顶部高光 + 底部极淡反光 */
+  --ui-edge: inset 0 0 0 1px rgba(255, 255, 255, 0.42), inset 0 1px 0 rgba(255, 255, 255, 0.8), inset 0 -1px 0 rgba(255, 255, 255, 0.16);
+  --ui-border: rgba(96, 112, 160, 0.16);
+  --ui-border-strong: rgba(96, 112, 160, 0.22);
+  --ui-border-input: rgba(96, 112, 160, 0.28);
+
+  /* --- 文字 --- */
+  --ui-text: #0f172a;
+  --ui-text-soft: #33415c;
+  --ui-text-muted: #64748b;
+
+  /* --- 阴影：低透明度蓝紫调，替代压在上面的黑墨 --- */
+  --ui-shadow-sm: 0 1px 2px rgba(46, 58, 110, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.6);
+  --ui-shadow: 0 14px 34px -22px rgba(46, 58, 110, 0.4), 0 2px 8px -4px rgba(46, 58, 110, 0.08), var(--ui-edge);
+  --ui-shadow-lg: 0 26px 60px -28px rgba(46, 58, 110, 0.45), 0 6px 18px -10px rgba(46, 58, 110, 0.1), var(--ui-edge);
+  --ui-shadow-xl: 0 40px 88px -34px rgba(46, 58, 110, 0.5), 0 10px 28px -14px rgba(46, 58, 110, 0.12), var(--ui-edge);
+
+  /* --- 强调色：竖向双色，顶部略亮（玻璃质感的「高光在上」） --- */
+  --ui-accent: linear-gradient(180deg, #6366f1 0%, #4f46e5 100%);
+  --ui-accent-hover: linear-gradient(180deg, #777af5 0%, #5b52ee 100%);
+  --ui-danger: linear-gradient(180deg, #f2586e 0%, #e11d48 100%);
+  --ui-danger-hover: linear-gradient(180deg, #f4697c 0%, #d61b45 100%);
+
+  /* --- 状态底色：统一压到 0.5 左右，别在玻璃上再盖一层实色 --- */
+  --ui-tint-red: rgba(254, 226, 226, 0.5);
+  --ui-tint-green: rgba(209, 250, 229, 0.5);
+  --ui-tint-amber: rgba(254, 243, 199, 0.55);
+  --ui-tint-yellow: rgba(254, 249, 195, 0.6);
+  --ui-tint-indigo: rgba(224, 231, 255, 0.5);
+  --ui-tint-purple: rgba(243, 232, 255, 0.5);
+
+  --ui-ease: 240ms cubic-bezier(0.32, 0.72, 0, 1);
+
+  /* --- 动态玻璃（liquidGlass.ts 读取） ---
+   * refraction 是边缘最大位移（px）。旧版 118，等效于把背景在边缘
+   * 拉出上百像素的形变，这是「液体」变成「哈哈镜」的根因。 */
+  --lg-refraction: 24;
+  --lg-blur: 20;
+  --lg-saturation: 170;
+  --lg-edge: 14;
+  --lg-specular: 0.4;
+  --lg-exponent: 60;
+  --lg-surface: 6;
+
   min-height: 100%;
-  background-color: #d7e0ff;
+  background-color: #eef1fa;
   color: var(--ui-text);
 }
+
+/* ---------------------------------------------------------------
+ * 2. 背景：一层安静的极光 + 一层去色带噪点
+ * --------------------------------------------------------------- */
 
 html[data-ui='experimental'] body::before {
   content: '';
   position: fixed;
-  inset: 0;
+  inset: -4vmax; /* 留出漂移余地，避免移动时露出画布边缘 */
   z-index: -1;
   pointer-events: none;
-  background-color: #d7e0ff;
+  background-color: #eef1fa;
   background-image:
-    radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.6) 1.6px, rgba(255, 255, 255, 0) 1.8px),
-    repeating-linear-gradient(118deg, rgba(255, 255, 255, 0.2) 0 2px, rgba(255, 255, 255, 0) 2px 26px),
-    radial-gradient(58rem 38rem at 4% -12%, rgba(124, 58, 237, 0.6), transparent 62%),
-    radial-gradient(52rem 36rem at 100% 2%, rgba(6, 182, 212, 0.52), transparent 62%),
-    radial-gradient(50rem 40rem at 88% 100%, rgba(236, 72, 153, 0.48), transparent 60%),
-    radial-gradient(44rem 34rem at 6% 94%, rgba(16, 185, 129, 0.46), transparent 60%),
-    linear-gradient(160deg, #e0e7ff 0%, #f5f3ff 40%, #ecfeff 70%, #fdf2f8 100%);
-  background-size: 26px 26px, auto, auto, auto, auto, auto, auto;
-  mask-image: radial-gradient(135% 105% at 50% 38%, #000 32%, rgba(0, 0, 0, 0.6) 72%, rgba(0, 0, 0, 0.35) 100%);
-  -webkit-mask-image: radial-gradient(135% 105% at 50% 38%, #000 32%, rgba(0, 0, 0, 0.6) 72%, rgba(0, 0, 0, 0.35) 100%);
+    radial-gradient(46rem 34rem at 10% -6%, rgba(99, 102, 241, 0.28), transparent 64%),
+    radial-gradient(42rem 32rem at 102% 0%, rgba(56, 189, 248, 0.24), transparent 62%),
+    radial-gradient(44rem 34rem at 88% 104%, rgba(244, 114, 182, 0.18), transparent 60%),
+    radial-gradient(40rem 30rem at -4% 94%, rgba(45, 212, 191, 0.14), transparent 62%),
+    linear-gradient(166deg, #f2f4ff 0%, #eef7ff 46%, #fbf3ff 76%, #f1fbff 100%);
+  will-change: transform;
 }
 
 html[data-ui='experimental'] body::after {
   content: '';
   position: fixed;
-  top: -25vmax;
-  left: -25vmax;
-  width: 150vmax;
-  height: 150vmax;
+  inset: 0;
   z-index: -1;
   pointer-events: none;
-  background-repeat: no-repeat;
-  background-image:
-    radial-gradient(closest-side, rgba(139, 92, 246, 0.5), transparent 72%),
-    radial-gradient(closest-side, rgba(56, 189, 248, 0.42), transparent 72%),
-    radial-gradient(closest-side, rgba(244, 114, 182, 0.38), transparent 72%);
-  background-size: 62vmax 62vmax, 48vmax 48vmax, 54vmax 54vmax;
-  background-position: 22% 28%, 78% 34%, 62% 82%;
-  filter: blur(50px);
-  will-change: transform;
+  /* fractalNoise 噪点：只做去色带，透明度压到几乎看不见 */
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 180px 180px;
+  opacity: 0.22;
+  mix-blend-mode: soft-light;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  html[data-ui='experimental'] body::after {
-    animation: ui-liquid-drift 46s ease-in-out infinite alternate;
+  html[data-ui='experimental'] body::before {
+    animation: ui-aurora-drift 80s ease-in-out infinite alternate;
   }
 }
 
-@keyframes ui-liquid-drift {
+@keyframes ui-aurora-drift {
   from {
-    transform: translate3d(-2%, -1%, 0) scale(1) rotate(0deg);
+    transform: translate3d(0, 0, 0) scale(1);
   }
   to {
-    transform: translate3d(3%, 2%, 0) scale(1.1) rotate(14deg);
+    transform: translate3d(1.4%, 1%, 0) scale(1.03);
   }
 }
 
+/* ---------------------------------------------------------------
+ * 3. 表面
+ *
+ * 大面积面板（.bg-white）只做半透明，不挂 backdrop-filter：
+ *   一来看不到背后滚动的内容，模糊收益很小；
+ *   二来 backdrop-filter 会让元素成为 fixed 后代的包含块，
+ *   FileBrowser 底部的 fixed 操作条正挂在 .bg-white 里面，
+ *   挂上模糊后整个定位参照系就错了（见 SidePanelLayout 的同类注释）。
+ * 需要「毛玻璃」的是浮在内容之上的表面，见 3.2 / 3.3。
+ * --------------------------------------------------------------- */
+
+/* 3.1 内容面板：通透的底 */
 html[data-ui='experimental'] .bg-white {
   background-color: var(--ui-surface);
-  background-image: var(--ui-sheen);
   box-shadow: var(--ui-edge);
-  border-color: var(--ui-border);
   transition: background-color var(--ui-ease), box-shadow var(--ui-ease), border-color var(--ui-ease);
 }
 
-html[data-ui='experimental'] .fixed.bg-white,
-html[data-ui='experimental'] .ui-glass {
-  background-color: var(--ui-surface-strong);
-  background-image: var(--ui-sheen);
-  box-shadow: var(--ui-shadow-lg);
-  border-color: var(--ui-border);
-  backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturation));
-  -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturation));
+/* 小挂件（角标、头像衬底）保持接近不透明：它们压在图标上，透了就糊。
+ * box-shadow 里把 Tailwind 的 ring / shadow 变量拼回去 —— 直接写死
+ * 会把 ring-1 画的那圈描边盖掉。 */
+html[data-ui='experimental'] .bg-white.shadow-sm,
+html[data-ui='experimental'] .bg-white.ring-1 {
+  background-color: rgba(255, 255, 255, 0.82);
+  box-shadow: var(--tw-ring-offset-shadow, 0 0 #0000), var(--tw-ring-shadow, 0 0 #0000), var(--tw-shadow, 0 0 #0000);
 }
 
-html[data-ui='experimental'] nav.bg-white {
-  background-color: var(--ui-surface-strong);
-  border-bottom: 1px solid var(--ui-border);
-  box-shadow: 0 18px 40px -30px rgba(15, 23, 42, 0.7), var(--ui-edge);
-  backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturation));
-  -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturation));
-}
-
+/* 页面级浅灰容器：让极光透出来 */
 html[data-ui='experimental'] .bg-gray-50 {
   background-color: transparent;
 }
 
-html[data-ui='experimental'] .bg-gray-200 {
-  background-color: rgba(255, 255, 255, 0.5);
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.75), inset 0 1px 3px rgba(15, 23, 42, 0.12);
+/* 固定/悬浮的白色表面（底部操作条、吸底栏）走真正的毛玻璃 */
+html[data-ui='experimental'] .bg-white\/95 {
+  background-color: rgba(255, 255, 255, 0.72);
+  box-shadow: var(--ui-edge);
+  backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturation));
+  -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturation));
+}
+
+/* 3.2 浮层（弹窗 / 抽屉 / 菜单 / 移动端操作条）：毛玻璃 */
+html[data-ui='experimental'] .ui-glass,
+html[data-ui='experimental'] .fixed.bg-white {
+  background-color: var(--ui-surface-strong);
+  background-image: var(--ui-sheen);
+  box-shadow: var(--ui-shadow-lg);
+  backdrop-filter: blur(var(--ui-blur-lg)) saturate(var(--ui-saturation));
+  -webkit-backdrop-filter: blur(var(--ui-blur-lg)) saturate(var(--ui-saturation));
+}
+
+/* 模态弹窗比浮层更大，阴影对应加大 */
+html[data-ui='experimental'] .ui-glass.shadow-2xl {
+  box-shadow: var(--ui-shadow-xl);
+}
+
+/* 3.2b 下拉浮层（导航「管理/设置」菜单、上传菜单、移动端「更多」、
+ * FileList 的操作浮层、移动端抽屉与底部操作条…）。
+ *
+ * 这类「贴着内容弹出」的浮层背后**没有**弹窗那层暗色遮罩，底下的主页内容
+ * 会直接透出来，所以要比弹窗（0.6）实很多才顶得住可读性。
+ * 0.88 被嫌太实、0.8 被嫌太透，取 0.85。 */
+html[data-ui='experimental'] .ui-glass.absolute,
+html[data-ui='experimental'] .absolute.bg-white.shadow-lg {
+  background-color: rgba(255, 255, 255, 0.85);
+  background-image: var(--ui-sheen-soft);
+  box-shadow: var(--ui-shadow-lg);
+  backdrop-filter: blur(var(--ui-blur-lg)) saturate(var(--ui-saturation));
+  -webkit-backdrop-filter: blur(var(--ui-blur-lg)) saturate(var(--ui-saturation));
+}
+
+/* 3.3 导航栏：横向玻璃条，底边亮线收口 */
+html[data-ui='experimental'] nav.bg-white {
+  background-color: rgba(255, 255, 255, 0.56);
+  background-image: var(--ui-sheen-soft);
+  border-bottom: 1px solid var(--ui-border);
+  box-shadow: 0 18px 36px -30px rgba(46, 58, 110, 0.5), var(--ui-edge);
+  backdrop-filter: blur(var(--ui-blur-lg)) saturate(var(--ui-saturation));
+  -webkit-backdrop-filter: blur(var(--ui-blur-lg)) saturate(var(--ui-saturation));
+}
+
+/* 3.4 全屏预览：直接用与边栏/内容面板同一个 `--ui-surface`，白度完全一致，
+ * 不再单独定档。加一层常规模糊，避免主页内容文字透过来发花。 */
+html[data-ui='experimental'] .fixed.inset-0.bg-white {
+  background-color: var(--ui-surface);
+  background-image: none;
+  box-shadow: none;
+  backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturation));
+  -webkit-backdrop-filter: blur(var(--ui-blur)) saturate(var(--ui-saturation));
+}
+
+/* ---------------------------------------------------------------
+ * 4. 遮罩与暗层：换成冷的靛蓝调，别用纯黑
+ * --------------------------------------------------------------- */
+
+html[data-ui='experimental'] .bg-gray-900\/40 {
+  background-color: rgba(23, 32, 54, 0.36);
 }
 
 html[data-ui='experimental'] .bg-black\/30 {
-  background-color: rgba(15, 23, 42, 0.26);
-  background-image: linear-gradient(180deg, rgba(15, 23, 42, 0.16), rgba(15, 23, 42, 0.32));
+  background-color: rgba(23, 32, 54, 0.3);
 }
 
+/* ---------------------------------------------------------------
+ * 5. 次级填充与悬停
+ * --------------------------------------------------------------- */
+
+html[data-ui='experimental'] .bg-gray-100 {
+  background-color: rgba(255, 255, 255, 0.42);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
+}
+
+html[data-ui='experimental'] .bg-gray-200 {
+  background-color: rgba(255, 255, 255, 0.5);
+  box-shadow: inset 0 0 0 1px rgba(96, 112, 160, 0.12), inset 0 1px 2px rgba(46, 58, 110, 0.08);
+}
+
+html[data-ui='experimental'] .hover\:bg-gray-50:hover,
+html[data-ui='experimental'] .hover\:bg-gray-100:hover {
+  background-color: var(--ui-surface-hover);
+}
+
+/* 状态底色：只调透明度，色相保留 */
 html[data-ui='experimental'] .bg-red-50,
 html[data-ui='experimental'] .bg-green-50,
+html[data-ui='experimental'] .bg-emerald-50,
 html[data-ui='experimental'] .bg-amber-50,
 html[data-ui='experimental'] .bg-yellow-50,
-html[data-ui='experimental'] .bg-indigo-50 {
-  box-shadow: var(--ui-edge);
-  transition: background-color var(--ui-ease), border-color var(--ui-ease);
+html[data-ui='experimental'] .bg-indigo-50,
+html[data-ui='experimental'] .bg-purple-50 {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.4);
 }
 
 html[data-ui='experimental'] .bg-red-50 { background-color: var(--ui-tint-red); }
-html[data-ui='experimental'] .bg-green-50 { background-color: var(--ui-tint-green); }
+html[data-ui='experimental'] .bg-green-50,
+html[data-ui='experimental'] .bg-emerald-50 { background-color: var(--ui-tint-green); }
 html[data-ui='experimental'] .bg-amber-50 { background-color: var(--ui-tint-amber); }
 html[data-ui='experimental'] .bg-yellow-50 { background-color: var(--ui-tint-yellow); }
 html[data-ui='experimental'] .bg-indigo-50 { background-color: var(--ui-tint-indigo); }
+html[data-ui='experimental'] .bg-purple-50 { background-color: var(--ui-tint-purple); }
+html[data-ui='experimental'] .bg-amber-100 { background-color: rgba(253, 230, 138, 0.5); }
+
+/* ---------------------------------------------------------------
+ * 6. 主按钮：竖向双色渐变 + 顶部 1px 高光 + 彩色投影
+ * --------------------------------------------------------------- */
 
 html[data-ui='experimental'] .bg-indigo-600 {
   background-color: transparent;
   background-image: var(--ui-accent);
   border-color: transparent;
-  box-shadow: 0 12px 28px -10px rgba(79, 70, 229, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.55), inset 0 -1px 0 rgba(255, 255, 255, 0.18);
+  box-shadow: 0 10px 22px -12px rgba(79, 70, 229, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.36), inset 0 -1px 0 rgba(0, 0, 0, 0.06);
   transition: background-image var(--ui-ease), box-shadow var(--ui-ease), transform var(--ui-ease);
 }
 
@@ -164,7 +305,7 @@ html[data-ui='experimental'] .bg-red-600 {
   background-color: transparent;
   background-image: var(--ui-danger);
   border-color: transparent;
-  box-shadow: 0 12px 28px -10px rgba(225, 29, 72, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.5), inset 0 -1px 0 rgba(255, 255, 255, 0.16);
+  box-shadow: 0 10px 22px -12px rgba(225, 29, 72, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.32), inset 0 -1px 0 rgba(0, 0, 0, 0.06);
   transition: background-image var(--ui-ease), box-shadow var(--ui-ease), transform var(--ui-ease);
 }
 
@@ -178,34 +319,54 @@ html[data-ui='experimental'] .hover\:bg-red-700:hover {
   transform: translateY(-1px);
 }
 
-html[data-ui='experimental'] .hover\:bg-gray-50:hover,
-html[data-ui='experimental'] .hover\:bg-gray-100:hover {
-  background-color: var(--ui-surface-hover);
-  background-image: var(--ui-sheen-soft);
+html[data-ui='experimental'] .bg-indigo-600:active,
+html[data-ui='experimental'] .bg-red-600:active {
+  transform: translateY(0) scale(0.985);
 }
+
+/* ---------------------------------------------------------------
+ * 7. 阴影工具类（放在表面规则之前，让 .ui-glass 的阴影口径统一）
+ * --------------------------------------------------------------- */
 
 html[data-ui='experimental'] .shadow { box-shadow: var(--ui-shadow); }
 html[data-ui='experimental'] .shadow-sm { box-shadow: var(--ui-shadow-sm); }
 html[data-ui='experimental'] .shadow-lg { box-shadow: var(--ui-shadow-lg); }
 html[data-ui='experimental'] .shadow-xl { box-shadow: var(--ui-shadow-xl); }
+html[data-ui='experimental'] .shadow-2xl { box-shadow: var(--ui-shadow-xl); }
+
+/* ---------------------------------------------------------------
+ * 8. 文字
+ * --------------------------------------------------------------- */
 
 html[data-ui='experimental'] .text-gray-900 { color: var(--ui-text); }
 html[data-ui='experimental'] .text-gray-700 { color: var(--ui-text-soft); }
 html[data-ui='experimental'] .text-gray-600 { color: var(--ui-text-muted); }
 html[data-ui='experimental'] .text-gray-500 { color: var(--ui-text-muted); }
 
-html[data-ui='experimental'] .rounded { border-radius: 0.5rem; }
-html[data-ui='experimental'] .rounded-md { border-radius: 0.8rem; }
-html[data-ui='experimental'] .rounded-lg { border-radius: 1.1rem; }
-html[data-ui='experimental'] .rounded-xl { border-radius: 1.4rem; }
-html[data-ui='experimental'] .rounded-t-2xl { border-top-left-radius: 1.6rem; border-top-right-radius: 1.6rem; }
+/* ---------------------------------------------------------------
+ * 9. 圆角：整体只收不放，避免每个元素都胖成胶囊
+ * --------------------------------------------------------------- */
+
+html[data-ui='experimental'] .rounded { border-radius: 0.375rem; }
+html[data-ui='experimental'] .rounded-md { border-radius: 0.5rem; }
+html[data-ui='experimental'] .rounded-lg { border-radius: 0.75rem; }
+html[data-ui='experimental'] .rounded-xl { border-radius: 1rem; }
+html[data-ui='experimental'] .rounded-t-2xl { border-top-left-radius: 1.25rem; border-top-right-radius: 1.25rem; }
+
+@media (min-width: 640px) {
+  html[data-ui='experimental'] .sm\:rounded-2xl { border-radius: 1.25rem; }
+}
+
+/* ---------------------------------------------------------------
+ * 10. 边框与分隔线
+ *
+ * 只覆盖「灰色系」的线：红 / 琥珀 / 靛蓝这些语义色边框要保留，
+ * 旧版顺手把 .border 也一起刷掉，语义边框全部被中性化。
+ * --------------------------------------------------------------- */
 
 html[data-ui='experimental'] .border-gray-100,
-html[data-ui='experimental'] .border-gray-200,
-html[data-ui='experimental'] .border,
-html[data-ui='experimental'] .border-t,
-html[data-ui='experimental'] .border-b {
-  border-color: var(--ui-border-strong);
+html[data-ui='experimental'] .border-gray-200 {
+  border-color: var(--ui-border);
 }
 
 html[data-ui='experimental'] .border-gray-300 {
@@ -217,106 +378,148 @@ html[data-ui='experimental'] .divide-gray-200 > :not([hidden]) ~ :not([hidden]) 
   border-color: var(--ui-border);
 }
 
+html[data-ui='experimental'] .ring-gray-200 {
+  --tw-ring-color: var(--ui-border-strong);
+}
+
+/* ---------------------------------------------------------------
+ * 11. 列表行：玻璃面板上的「薄片」，不是独立小卡片
+ * --------------------------------------------------------------- */
+
 html[data-ui='experimental'] .border.border-gray-200.rounded-lg {
   background-color: var(--ui-surface-soft);
-  background-image: var(--ui-sheen-soft);
-  box-shadow: 0 8px 20px -16px rgba(15, 23, 42, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.75);
-  transition: background-color var(--ui-ease), box-shadow var(--ui-ease), transform var(--ui-ease);
+  border-color: rgba(255, 255, 255, 0.45);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  transition: background-color var(--ui-ease), border-color var(--ui-ease), transform var(--ui-ease);
 }
+
+html[data-ui='experimental'] .border.border-gray-200.rounded-lg:hover {
+  background-color: rgba(255, 255, 255, 0.55);
+}
+
+/* ---------------------------------------------------------------
+ * 12. 表单
+ * --------------------------------------------------------------- */
 
 html[data-ui='experimental'] input:not([type='checkbox']):not([type='radio']),
 html[data-ui='experimental'] select,
 html[data-ui='experimental'] textarea {
-  background-color: var(--ui-surface-strong);
+  background-color: rgba(255, 255, 255, 0.55);
   border-color: var(--ui-border-input);
   color: var(--ui-text);
-  box-shadow: var(--ui-shadow-sm), inset 0 1px 2px rgba(15, 23, 42, 0.04);
+  box-shadow: inset 0 1px 2px rgba(46, 58, 110, 0.06);
   transition: background-color var(--ui-ease), border-color var(--ui-ease), box-shadow var(--ui-ease);
 }
 
 html[data-ui='experimental'] input::placeholder,
 html[data-ui='experimental'] textarea::placeholder {
-  color: #8fa0b8;
+  color: #93a2bd;
 }
 
 html[data-ui='experimental'] input:focus,
 html[data-ui='experimental'] select:focus,
 html[data-ui='experimental'] textarea:focus {
   outline: none;
-  border-color: rgba(124, 58, 237, 0.55);
-  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.18), 0 10px 24px -18px rgba(79, 70, 229, 0.9);
+  background-color: rgba(255, 255, 255, 0.74);
+  border-color: rgba(99, 102, 241, 0.6);
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.16), inset 0 1px 2px rgba(46, 58, 110, 0.04);
 }
 
 html[data-ui='experimental'] input[type='checkbox'],
 html[data-ui='experimental'] input[type='radio'] {
-  accent-color: #7c3aed;
+  accent-color: #4f46e5;
   box-shadow: none;
 }
+
+/* ---------------------------------------------------------------
+ * 13. 登录 / 注册
+ *
+ * 页面本身的深色底被抽掉，让极光透上来；左栏从「实心蓝块 + 波浪 +
+ * 浮圈」换成半透明的靛蓝玻璃，视觉重心回到右边的登录卡。
+ * --------------------------------------------------------------- */
 
 html[data-ui='experimental'] .login-container {
   background: transparent;
 }
 
+html[data-ui='experimental'] .waves,
+html[data-ui='experimental'] .float-circle {
+  display: none;
+}
+
 html[data-ui='experimental'] .login-card {
   background-color: var(--ui-surface);
-  background-image: var(--ui-sheen);
-  border: 1px solid var(--ui-border);
+  border: 1px solid rgba(255, 255, 255, 0.55);
   box-shadow: var(--ui-shadow-xl);
-  backdrop-filter: blur(30px) saturate(200%);
-  -webkit-backdrop-filter: blur(30px) saturate(200%);
+  backdrop-filter: blur(40px) saturate(180%);
+  -webkit-backdrop-filter: blur(40px) saturate(180%);
 }
 
 html[data-ui='experimental'] .login-card:hover {
   box-shadow: var(--ui-shadow-xl);
-  transform: translateY(-4px);
+  transform: translateY(-3px);
 }
 
 html[data-ui='experimental'] .decoration {
-  background-image: linear-gradient(140deg, rgba(109, 40, 217, 0.94), rgba(14, 165, 233, 0.88));
+  background:
+    radial-gradient(120% 100% at 14% 8%, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0) 55%),
+    linear-gradient(158deg, rgba(79, 70, 229, 0.78) 0%, rgba(37, 99, 235, 0.66) 48%, rgba(14, 165, 233, 0.6) 100%);
+}
+
+html[data-ui='experimental'] .logo-circle {
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.4);
+  animation: none;
 }
 
 html[data-ui='experimental'] .form-title {
-  color: #4c1d95;
-}
-
-html[data-ui='experimental'] .form-group label {
-  z-index: 2;
+  color: #312e81;
 }
 
 html[data-ui='experimental'] .form-group.focused label,
 html[data-ui='experimental'] .form-group input:focus + label,
 html[data-ui='experimental'] .form-group input:not(:placeholder-shown) + label {
-  background-color: #f5f7ff;
-  color: #6d28d9;
+  background-color: rgba(244, 246, 255, 0.94);
+  color: #4f46e5;
 }
 
 html[data-ui='experimental'] .login-btn {
   background-image: var(--ui-accent);
-  box-shadow: 0 18px 36px -14px rgba(79, 70, 229, 0.8), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  box-shadow: 0 14px 30px -14px rgba(79, 70, 229, 0.75), inset 0 1px 0 rgba(255, 255, 255, 0.36);
 }
 
 html[data-ui='experimental'] .login-btn:hover {
   background-image: var(--ui-accent-hover);
-  transform: translateY(-2px);
+  transform: translateY(-1px);
+}
+
+html[data-ui='experimental'] .footer-links a {
+  color: #4f46e5;
+}
+
+html[data-ui='experimental'] .footer-links a:hover {
+  color: #6366f1;
 }
 
 html[data-ui='experimental'] .message-box {
-  border: 1px solid var(--ui-border);
+  border: 1px solid rgba(255, 255, 255, 0.5);
   box-shadow: var(--ui-edge);
 }
 
 html[data-ui='experimental'] .message-box.error {
-  background-color: var(--ui-tint-red);
-  color: #991b1b;
+  background-color: rgba(231, 76, 60, 0.82);
 }
 
 html[data-ui='experimental'] .message-box.success {
-  background-color: var(--ui-tint-green);
-  color: #065f46;
+  background-color: rgba(16, 185, 129, 0.82);
 }
 
+/* ---------------------------------------------------------------
+ * 14. 收尾
+ * --------------------------------------------------------------- */
+
 html[data-ui='experimental'] ::selection {
-  background: rgba(124, 58, 237, 0.25);
+  background: rgba(99, 102, 241, 0.22);
 }
 
 html[data-ui='experimental'] ::-webkit-scrollbar {
@@ -329,28 +532,51 @@ html[data-ui='experimental'] ::-webkit-scrollbar-track {
 }
 
 html[data-ui='experimental'] ::-webkit-scrollbar-thumb {
-  background: rgba(124, 58, 237, 0.3);
+  background: rgba(99, 102, 241, 0.26);
   background-clip: content-box;
   border: 2px solid transparent;
   border-radius: 999px;
 }
 
 html[data-ui='experimental'] ::-webkit-scrollbar-thumb:hover {
-  background: rgba(124, 58, 237, 0.5);
+  background: rgba(99, 102, 241, 0.42);
   background-clip: content-box;
 }
 
+/* 动态玻璃：paint() 在算出 SVG 滤镜后给元素打上 data-glass-filter
+ * 与 --lg-svg。属性不存在（未算出 / 浏览器不支持）时保持上面各表面
+ * 自己声明的模糊，不会出现「一点模糊都没有」的破相。
+ * 注意必须放在最后：它要以相同的层叠优先级盖过 .ui-glass / nav 的
+ * backdrop-filter 声明。 */
+html[data-ui='experimental'] [data-liquid][data-glass-filter] {
+  backdrop-filter: var(--lg-svg) blur(calc(var(--lg-blur) * 1px)) saturate(calc(var(--lg-saturation) * 1%)) brightness(1.02);
+  -webkit-backdrop-filter: var(--lg-svg) blur(calc(var(--lg-blur) * 1px)) saturate(calc(var(--lg-saturation) * 1%)) brightness(1.02);
+}
+
+/* 不同表面要的雾度不同：大块浮层比一般面板更糊一些 */
+html[data-ui='experimental'] .ui-glass[data-glass-filter],
+html[data-ui='experimental'] nav.bg-white[data-glass-filter] {
+  --lg-blur: 34;
+}
+
+html[data-ui='experimental'] .login-card[data-glass-filter] {
+  --lg-blur: 30;
+}
+
+/* 没有 backdrop-filter 的浏览器：全部退回实色（否则玻璃=全透） */
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   html[data-ui='experimental'] {
     --ui-surface: rgba(255, 255, 255, 0.92);
     --ui-surface-strong: rgba(255, 255, 255, 0.96);
-    --ui-surface-overlay: rgba(255, 255, 255, 0.98);
     --ui-surface-soft: rgba(255, 255, 255, 0.84);
     --ui-surface-hover: rgba(241, 245, 249, 0.95);
+    --ui-border: rgba(96, 112, 160, 0.2);
+    --ui-border-strong: rgba(96, 112, 160, 0.26);
     --ui-tint-red: rgba(254, 226, 226, 0.95);
     --ui-tint-green: rgba(209, 250, 229, 0.95);
     --ui-tint-amber: rgba(254, 243, 199, 0.95);
     --ui-tint-yellow: rgba(254, 249, 195, 0.95);
     --ui-tint-indigo: rgba(224, 231, 255, 0.95);
+    --ui-tint-purple: rgba(243, 232, 255, 0.95);
   }
 }

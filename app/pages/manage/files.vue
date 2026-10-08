@@ -193,7 +193,9 @@ await fetchUsers()
           </div>
         </template>
 
-        <div class="h-full bg-white">
+        <!-- FileBrowser 自带 bg-white 并铺满，这里再垫一层会叠乘成更深的白；
+             没有 FileBrowser 时（错误/占位分支）才需要这层白底 -->
+        <div class="h-full" :class="isAdmin && selectedUser ? '' : 'bg-white'">
           <div
             v-if="!isAdmin"
             class="m-4 flex items-center gap-2 rounded-lg bg-red-50 p-4 text-sm text-red-700"

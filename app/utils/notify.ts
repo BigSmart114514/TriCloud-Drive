@@ -77,12 +77,13 @@ function injectStyleOnce() {
   }
 
   html[data-ui='experimental'] .nuxt-notify-toast {
-    background: rgba(255, 255, 255, 0.72);
+    background: rgba(255, 255, 255, 0.66);
     color: #0F172A;
-    border: 1px solid rgba(255, 255, 255, 0.7);
-    box-shadow: 0 18px 40px rgba(15, 23, 42, 0.18);
-    backdrop-filter: blur(18px) saturate(180%);
-    -webkit-backdrop-filter: blur(18px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.6);
+    border-radius: 14px;
+    box-shadow: 0 18px 40px -22px rgba(46, 58, 110, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.7);
+    backdrop-filter: blur(24px) saturate(170%);
+    -webkit-backdrop-filter: blur(24px) saturate(170%);
   }
   `;
   document.head.appendChild(style);

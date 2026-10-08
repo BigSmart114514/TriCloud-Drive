@@ -59,3 +59,6 @@ start.bat
 # './exploit.mjs' 与 'exploit.mjs' 不等价，带前缀的那条匹配不到文件。
 # 之前写成 ./exploit.mjs 就没挡住，脚本被 git add 带进了提交。
 *exploit*.mjs
+
+
+data.sqlite.*

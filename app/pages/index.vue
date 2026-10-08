@@ -92,7 +92,7 @@
           </div>
         </template>
 
-        <div class="h-full bg-white">
+        <div class="h-full">
           <FileBrowser
             :key="browserKey"
             :variant="viewingOthers ? 'shared' : 'own'"
@@ -127,7 +127,7 @@
           <p class="truncate text-xs text-gray-500">{{ panelSubtitle }}</p>
         </div>
       </div>
-      <div class="min-h-0 flex-1 bg-white">
+      <div class="min-h-0 flex-1">
         <FileBrowser
           :key="browserKey"
           variant="own"
