@@ -444,3 +444,84 @@ describe('partitionPurgeableKeys：purge 前的复查', () => {
     assert.match(rejected[0].reason, /users\/5\//)
   })
 })
+// ── filenameRecoverable：形状判断必须在服务端 ──────────────────────
+//
+// 原来这个判断在页面上：`o.key.startsWith('u/')`。看着无害，实际是把
+// 「哪种 key 形状还带原名」这条知识复制到了前端 —— 而它恰恰是会变的东西。
+//
+// 错也只往一边错：`u/` 之外的形状一律按「名字找不回来」处理，所以新增前缀
+// 或两种形状合并时，前端会**继续**说「名字找不回来了」。方向是安全的。
+//
+// 但反过来那个方向不安全：如果判断条件写成「不是 u/ 就可还原」，
+// 新前缀会立刻被说成「名字能还原」—— 而那份信息已经永久没了。
+// 操作者会照着去找，白跑一趟。所以这个裁决必须由服务端出，页面只负责显示。
+describe('filenameRecoverable 由服务端裁决', () => {
+  test('u/<id>/…_<原名> 形状：可还原', async () => {
+    const r = await reconcileUserBucket(43, deps({
+      listNamespace: async () => ({
+        objects: [obj('u/43/2026-10-01/1790898616550_p5bq2v_未命名1.cpp')],
+        incomplete: false
+      })
+    }))
+    assert.equal(r.orphans.length, 1)
+    assert.equal(r.orphans[0].filenameRecoverable, true,
+      'u/<id>/…_<原名> 的 key 里还带着原名 —— 能还原，必须报 true')
+  })
+
+  test('users/<id>/<YYYYMM>/<uuid> 形状：不可还原', async () => {
+    const r = await reconcileUserBucket(43, deps({
+      listNamespace: async () => ({
+        objects: [obj('users/43/202610/2e6e09be-7646-494c-94d5-e6fefec899c9.cpp')],
+        incomplete: false
+      })
+    }))
+    assert.equal(r.orphans[0].filenameRecoverable, false,
+      'users/ 下只有 uuid，原名只在那一行 files 里 —— 而它正是孤儿，行已经没了')
+  })
+
+  test('两个前缀各一条，同时报出来（不分先后、不吞掉一条）', async () => {
+    const r = await reconcileUserBucket(43, deps({
+      listNamespace: async () => ({
+        objects: [
+          obj('users/43/202610/2e6e09be-7646-494c-94d5-e6fefec899c9.cpp'),
+          obj('u/43/2026-10-01/1790898616550_p5bq2v_未命名1.cpp')
+        ],
+        incomplete: false
+      })
+    }))
+    assert.equal(r.orphans.length, 2)
+    const byRecoverable = Object.fromEntries(
+      r.orphans.map((o) => [o.key.split('/')[0], o.filenameRecoverable])
+    )
+    assert.deepEqual(byRecoverable, { users: false, u: true },
+      '两种形状的裁决必须相反 —— 都报同一个值就是没判断')
+  })
+
+  test('不认识的前缀报 false（往「找不回来」的方向错，不往乐观方向）', async () => {
+    // 假想的前缀。fileKeyOwnerId 认不出来的话它会进 foreignObjects 而不是
+    // orphans，所以这里直接调 displayNameFromKey 的裁决来源来验方向。
+    const { displayNameFromKey } = await import('../server/utils/file-key.ts')
+    assert.equal(displayNameFromKey('archive/43/202610/whatever.bin').recoverable, false)
+    assert.equal(displayNameFromKey('u/43/2026-10-01/1_a_报告.pdf').recoverable, true)
+    assert.equal(displayNameFromKey('users/43/202610/x.bin').recoverable, false)
+  })
+
+  test('字段在每个 orphan 上都存在（不是只有第一条有）', async () => {
+    const r = await reconcileUserBucket(43, deps({
+      listNamespace: async () => ({
+        objects: [
+          obj('users/43/202610/a.bin'),
+          obj('users/43/202610/b.bin'),
+          obj('u/43/2026-10-01/1_a_x.bin')
+        ],
+        incomplete: false
+      })
+    }))
+    assert.equal(r.orphans.length, 3)
+    for (const o of r.orphans) {
+      assert.equal(typeof o.filenameRecoverable, 'boolean',
+        `${o.key} 少了 filenameRecoverable —— 页面读到 undefined 就是 falsy，` +
+        `于是所有对象都被说成「名字找不回来」`)
+    }
+  })
+})

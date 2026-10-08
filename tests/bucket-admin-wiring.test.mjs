@@ -24,6 +24,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { parse } from '@vue/compiler-sfc'
+import { parse as parseTemplate } from '@vue/compiler-dom'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (p) => readFileSync(join(root, p), 'utf8')
@@ -603,5 +604,198 @@ describe('「仅超管可见」那行字不写进副标题（2026-10-07 用户�
     assert.match(templateOf('app/pages/manage/bucket.vue'),
       /直接操作对象存储：浏览真实对象、对账、清理。/,
       '用户选了「只删『仅超级管理员可见。』」—— 前半句必须留着')
+  })
+})
+
+// ── 清理历史的可达性：它被关在 v-if="result" 里过 ──────────────────
+//
+// ## 实际发生过什么
+//
+// 「清理历史」读的是 purgeLog（mount 时独立加载），跟对账结果毫无关系，
+// 但它被写在了 `<template v-if="result">` 里面。于是想看「昨天谁删了什么」
+// 必须先挑个用户跑一次对账 —— 而那 3 条记录本来就在库里躺着。
+//
+// ## 为什么用 AST 而不是正则
+//
+// 「某段内容在不在某个 v-if 里面」是**结构**问题。正则看不见嵌套：
+// 它既不能说「它在 v-if 里」，也不能说「它在 v-if 外」—— 只能看见那行字出现过。
+// 所以这里真的把模板解析成 AST，问「这个 v-if 节点的子树里有没有它」。
+//
+// 这也是为什么不能只断言「模板里有清理历史」：那句话在 bug 存在时同样成立。
+const PAGE = 'app/pages/manage/bucket.vue'
+
+/** 把 bucket.vue 的模板解析成 AST（带位置信息） */
+function pageAst() {
+  const { descriptor, errors } = parse(read(PAGE), { filename: PAGE })
+  assert.equal(errors?.length ?? 0, 0, `${PAGE} SFC 解析出错`)
+  return parseTemplate(descriptor.template?.content ?? '')
+}
+
+/** 深度优先走一遍，收集满足条件的节点 */
+function walk(node, visit) {
+  visit(node)
+  for (const child of node.children ?? []) walk(child, visit)
+}
+
+/** 某个节点的子树里出现的全部文本（含插值表达式的字面量） */
+function subtreeText(node) {
+  let out = ''
+  walk(node, (n) => {
+    if (n.type === 3 && typeof n.content === 'string') out += n.content
+    if (n.type === 5 /* INTERPOLATION */ && n.content?.loc?.source) out += n.content.loc.source
+  })
+  return out
+}
+
+/**
+ * 带 v-if / v-else-if 的 <template> 节点 —— 就是那个把整个对账结果圈起来的东西。
+ *
+ * 注意 AST 的两个形状（都是实测出来的，第一版写错了扫到 0 个）：
+ *   指令节点的 type 是 **7**，不是 6（6 是普通属性）
+ *   指令名**不含 `v-` 前缀**：`v-if` 的 name 是 `'if'`，`v-else-if` 是 `'else-if'`
+ */
+function vIfTemplates(ast) {
+  const hits = []
+  walk(ast, (n) => {
+    if (n.type === 1 && n.tag === 'template') {
+      const hasVIf = (n.props ?? []).some(
+        (p) => p.type === 7 && (p.name === 'if' || p.name === 'else-if')
+      )
+      if (hasVIf) hits.push(n)
+    }
+  })
+  return hits
+}
+
+describe('清理历史必须在 v-if="result" 之外', () => {
+  test('扫到了那个 v-if 模板节点（扫 0 个而全绿是最坏的失败）', () => {
+    const hits = vIfTemplates(pageAst())
+    assert.ok(hits.length >= 1,
+      `模板里没找到带 v-if 的 <template> —— 页面结构变了的话这条要跟着改，` +
+      `否则会悄悄扫 0 个然后全绿`)
+  })
+
+  test('「清理历史」不在这棵 v-if 子树里', () => {
+    for (const node of vIfTemplates(pageAst())) {
+      const text = subtreeText(node)
+      assert.ok(!text.includes('清理历史'),
+        `「清理历史」被关在一个 v-if 里 —— 它读 purgeLog，与对账结果无关；` +
+        `被关着的话，不跑一次对账就看不到已有的清理记录`)
+    }
+  })
+
+  test('它确实还在页面上（不是被我删了来通过上一条）', () => {
+    const { descriptor } = parse(read(PAGE), { filename: PAGE })
+    const content = descriptor.template?.content ?? ''
+    assert.match(content, /清理历史/, '上一条不能靠删掉这块来通过')
+  })
+
+  test('而对账结果那些块仍然在 v-if 里（别为了修一个把另一个也搬出来了）', () => {
+    const text = vIfTemplates(pageAst()).map(subtreeText).join('\n')
+    assert.match(text, /孤儿对象/, '孤儿表必须仍然只在跑完对账后才出现')
+    assert.match(text, /悬空行/, '悬空行同理')
+  })
+})
+
+describe('审计表必须有「谁删的」和「删的到底是什么」', () => {
+  // 这张表的全部存在理由就是回答两个问题：
+  //   「上周是谁清掉了这个用户的 3 个文件」  → 需要 actor_id
+  //   「删错了，到底删的什么」                → 需要 payload
+  // 服务端 listPurgeLog 两列都查了，页面一个都没显示。补回去。
+  test('页面用了 log.actorId（操作者）', () => {
+    const t = templateOf(PAGE)
+    assert.match(t, /log\.actorId/,
+      '审计表必须有「操作者」—— 没有「谁」的审计表不是审计表')
+    assert.match(t, /操作者/, '表头也要有这一列，否则那一格没有意义')
+  })
+
+  test('对象属主与操作者是两列（不能混成一个「用户」）', () => {
+    const t = templateOf(PAGE)
+    assert.match(t, /对象属主/)
+    assert.match(t, /log\.userId/)
+  })
+
+  test('页面用了 purgeItems 展开 payload', () => {
+    const t = templateOf(PAGE)
+    assert.match(t, /purgeItems\(log\)/, '必须真的把载荷解开显示出来，而不是留着不给人看')
+    assert.match(t, /expandedLogId/, '要有展开/折叠状态')
+    assert.match(t, /toggleLog/, '要有切换动作 —— 否则载荷永远展开或永远折叠')
+  })
+
+  test('payload 从 utils 导入，不是页面内联的副本', () => {
+    assert.match(
+      scriptOf(PAGE),
+      /import \{[^}]*\bpurgeItems\b[^}]*\} from '~\/utils\/purge-log'/,
+      '解读逻辑必须来自 app/utils/purge-log.ts —— 内联副本就只能靠正则测，' +
+      '而正则测不出「两种 kind 形状不同」和「载荷坏掉时不能返回空」'
+    )
+  })
+
+  test('孤儿对象的字节恒为 0 这件事被说明白（不说明会被当成没释放空间）', () => {
+    assert.match(
+      templateOf(PAGE),
+      /字节恒为 0|恒为 0/,
+      '孤儿删除的 bytes 是 0（端点只收到 key，删前没测大小）。' +
+      '不写出来的话，看的人会以为那次清理没释放任何存储'
+    )
+  })
+
+  test('那句已经过时的空态文案没了', () => {
+    assert.doesNotMatch(
+      templateOf(PAGE),
+      /这是第一份|本项目此前的删除都不留记录/,
+      '库里已经有 3 条记录了，这句断言已经不成立 —— 留着会误导下一个读代码的人')
+  })
+})
+
+describe('时间必须走共享的 parseTimeValue', () => {
+  // 实测过的 bug：DB 的 created_at 是 SQLite CURRENT_TIMESTAMP（UTC 墙钟、
+  // 无时区后缀），裸 Date.parse 按 ES 规范当**本地**时间解释 —— +0800 的服务器上
+  // 审计表把 15:18 发生的事显示成 07:18，整整差 8 小时。
+  // 带 Z 的（COS lastModified）恰好没事，所以这个 bug 只在 DB 那两列显形，
+  // 看起来像「时区有时对有时不对」。
+  test('scriptOf 里没有裸 Date.parse', () => {
+    assert.doesNotMatch(
+      scriptOf(PAGE),
+      /\bDate\.parse\s*\(/,
+      '裸 Date.parse 会把 SQL 的 UTC 墙钟当本地时间 —— 必须走 parseTimeValue'
+    )
+  })
+
+  test('import 了 parseTimeValue', () => {
+    assert.match(
+      scriptOf(PAGE),
+      /import \{[^}]*\bparseTimeValue\b[^}]*\} from '~\/utils\/time'/,
+      '共享的解析器才是处理了「有无时区后缀」的那个（app/utils/time.ts:37）'
+    )
+  })
+
+  test('formatTime 真的调它', () => {
+    const s = scriptOf(PAGE)
+    const at = s.indexOf('function formatTime')
+    assert.ok(at > 0, '没找到 formatTime —— 函数改名的话这条要跟着改')
+    const body = s.slice(at, at + 400)
+    assert.match(body, /parseTimeValue\s*\(/,
+      '光 import 不算 —— 必须在 formatTime 里真的调它')
+  })
+})
+
+describe('命名空间形状判断不再在前端', () => {
+  test('bucket.vue 不再自己判断前缀', () => {
+    assert.doesNotMatch(
+      scriptOf(PAGE),
+      /startsWith\(\s*['"]u\//,
+      '把「哪种 key 形状带原名」复制到前端就是这个 bug 的根源 —— ' +
+      '它会随新增前缀而失效，且只往乐观方向错'
+    )
+  })
+
+  test('downloadHint 用服务端的 filenameRecoverable', () => {
+    const s = scriptOf(PAGE)
+    const at = s.indexOf('function downloadHint')
+    assert.ok(at > 0, '没找到 downloadHint')
+    const body = s.slice(at, at + 300)
+    assert.match(body, /o\.filenameRecoverable/,
+      '提示文字的依据必须是服务端裁决，不是页面对 key 的猜测')
   })
 })

@@ -291,38 +291,6 @@
           </div>
         </section>
 
-        <!-- 清理历史 -->
-        <section>
-          <h2 class="mb-2 text-sm font-semibold text-gray-900">清理历史</h2>
-          <p
-            v-if="!purgeLog.length"
-            class="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-500"
-          >
-            本项目此前的删除都不留记录，这是第一份。
-          </p>
-          <div v-else class="overflow-hidden rounded-lg border border-gray-200 bg-white">
-            <table class="w-full text-left text-xs">
-              <thead class="border-b border-gray-200 bg-gray-50 text-gray-600">
-                <tr>
-                  <th class="px-3 py-2 font-medium">时间</th>
-                  <th class="px-3 py-2 font-medium">类型</th>
-                  <th class="px-3 py-2 font-medium">用户</th>
-                  <th class="px-3 py-2 font-medium">条数</th>
-                  <th class="px-3 py-2 font-medium">字节</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-100">
-                <tr v-for="log in purgeLog" :key="log.id">
-                  <td class="px-3 py-2 text-gray-600">{{ formatTime(log.createdAt) }}</td>
-                  <td class="px-3 py-2 text-gray-700">{{ log.kind === 'orphan-object' ? '孤儿对象' : '悬空行' }}</td>
-                  <td class="px-3 py-2 text-gray-700">#{{ log.userId }}</td>
-                  <td class="px-3 py-2 text-gray-700">{{ log.count }}</td>
-                  <td class="px-3 py-2 text-gray-700">{{ formatFileSize(log.bytes) }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
       </template>
 
       <!-- 未对账时的提示 -->
@@ -332,6 +300,102 @@
       >
         选择一个用户，然后点「开始对账」。
       </p>
+
+      <!--
+        清理历史。**刻意放在 v-if="result" 之外** —— 它读的是 purgeLog，
+        mount 时就独立加载好了，跟对账结果毫无关系。原先它被关在 result 里面，
+        于是想查「昨天谁删了什么」必须先挑个用户跑一次对账才看得到；
+        而那 3 条记录本来就在库里。
+
+        原来还少三样，而它们恰好是审计的全部意义：
+          操作者（actor_id）—— 谁删的。一张没有「谁」的审计表不是审计表。
+          payload      —— 删的到底是什么。悬空行那条快照里存着原文件名和
+                         原来的文件夹 id，正是用户投诉时唯一拿得出的证据。
+          孤儿对象的字节恒为 0 这件事本身 —— 不说出来，看的人会以为没释放空间。
+      -->
+      <section class="mt-6">
+        <div class="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h2 class="text-sm font-semibold text-gray-900">清理历史</h2>
+          <span class="text-xs text-gray-500">
+            仅记录存储桶清理。删文件、删文件夹、删用户至今都不留记录。
+          </span>
+        </div>
+
+        <p
+          v-if="!purgeLog.length"
+          class="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-500"
+        >
+          还没有任何清理记录。
+        </p>
+
+        <div v-else class="overflow-hidden rounded-lg border border-gray-200 bg-white">
+          <table class="w-full text-left text-xs">
+            <caption class="sr-only">
+              清理审计记录：时间、类型、对象属主、操作者、条数、字节。点时间可展开被删除的对象。
+            </caption>
+            <thead class="border-b border-gray-200 bg-gray-50 text-gray-600">
+              <tr>
+                <th class="px-3 py-2 font-medium">时间</th>
+                <th class="px-3 py-2 font-medium">类型</th>
+                <th class="px-3 py-2 font-medium">对象属主</th>
+                <th class="px-3 py-2 font-medium">操作者</th>
+                <th class="px-3 py-2 text-right font-medium">条数</th>
+                <th class="px-3 py-2 text-right font-medium">字节</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100">
+              <template v-for="log in purgeLog" :key="log.id">
+                <tr class="hover:bg-gray-50">
+                  <td class="px-3 py-2">
+                    <button
+                      type="button"
+                      class="inline-flex items-center gap-1 text-left text-gray-600 underline-offset-2 hover:text-gray-900 hover:underline"
+                      :aria-expanded="expandedLogId === log.id"
+                      @click="toggleLog(log.id)"
+                    >
+                      <ChevronRightIcon v-if="expandedLogId !== log.id" class="h-3.5 w-3.5 shrink-0" />
+                      <ChevronDownIcon v-else class="h-3.5 w-3.5 shrink-0" />
+                      {{ formatTime(log.createdAt) }}
+                    </button>
+                  </td>
+                  <td class="px-3 py-2 text-gray-700">
+                    {{ log.kind === 'orphan-object' ? '孤儿对象' : '悬空行' }}
+                  </td>
+                  <td class="px-3 py-2 text-gray-700">#{{ log.userId }}</td>
+                  <td class="px-3 py-2 font-medium text-gray-900">#{{ log.actorId }}</td>
+                  <td class="px-3 py-2 text-right text-gray-700">{{ log.count }}</td>
+                  <td class="px-3 py-2 text-right text-gray-700">
+                    <span :class="log.kind === 'orphan-object' ? 'text-amber-600' : ''">
+                      {{ formatFileSize(log.bytes) }}
+                    </span>
+                  </td>
+                </tr>
+
+                <tr v-if="expandedLogId === log.id" class="bg-gray-50">
+                  <td colspan="6" class="px-3 pb-3 pt-1.5">
+                    <p class="mb-1.5 text-[11px] text-gray-500">
+                      这一次删掉的：
+                      <span v-if="log.kind === 'orphan-object'" class="text-amber-700">
+                        字节恒为 0 —— 端点只收到 key，删前没测大小，所以这张表答不出「释放了多少存储」
+                      </span>
+                    </p>
+                    <ul class="space-y-1.5">
+                      <li v-for="(item, i) in purgeItems(log)" :key="i" class="text-[11px]">
+                        <span
+                          v-if="item.key"
+                          class="block truncate font-mono text-gray-700"
+                          :title="item.key"
+                        >{{ item.key }}</span>
+                        <span v-if="item.note" class="text-gray-500">{{ item.note }}</span>
+                      </li>
+                    </ul>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </main>
   </div>
 </template>
@@ -340,12 +404,16 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   ArrowDownTrayIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
   CloudIcon,
   ExclamationCircleIcon,
   ExclamationTriangleIcon,
   TrashIcon
 } from '@heroicons/vue/24/outline'
 import { formatFileSize } from '~/utils/format'
+import { parseTimeValue } from '~/utils/time'
+import { purgeItems, type PurgeLogRow } from '~/utils/purge-log'
 import { notify, notifyError } from '~/utils/notify'
 import { useTwoStepConfirm } from '~/composables/useTwoStepConfirm'
 // 显式 import，不靠自动导入。
@@ -373,6 +441,8 @@ interface Orphan {
   lastModified: string
   ageMs: number | null
   deletable: boolean
+  /** 服务端 displayNameFromKey 的裁决：这个 key 还能不能反推原名 */
+  filenameRecoverable: boolean
 }
 interface Dangling {
   id: number
@@ -394,11 +464,13 @@ interface ReconcileResult {
   foreignRows: Array<{ id: number; fileKey: string; ownerId: number | null }>
 }
 
+/** PurgeLogRow 在 app/utils/purge-log.ts —— 载荷解读和它的类型都在那儿 */
+
 const users = ref<Array<{ id: number; username?: string; email?: string }>>([])
 const selectedUserId = ref<number | null>(null)
 const reconciling = ref(false)
 const result = ref<ReconcileResult | null>(null)
-const purgeLog = ref<any[]>([])
+const purgeLog = ref<PurgeLogRow[]>([])
 
 /**
  * 腾讯云密钥配没配。服务端 cosConfigured 的同一份判断。
@@ -480,11 +552,21 @@ function deleteDisabledReason(o: Orphan): string {
  * 下载按钮的提示。**文件名能不能还原**要写出来 ——
  * 上传路径的 key 是 uuid，原名只在那一行 files 里而那一行已经没了，
  * 让人以为那就是文件名会白找一趟。
+ *
+ * 判断依据是服务端给的 `filenameRecoverable`，不是这里再看一眼 key。
+ * 原来写的是 `o.key.startsWith('u/')` —— 那把「哪种形状带原名」这条知识
+ * 复制到了前端，而它恰恰是会变的东西（加前缀、或两种形状并成一个）。
+ * 更糟的是它错也只往一边错：说「能还原」而实际已经永久丢了。
  */
 function downloadHint(o: Orphan): string {
   const hint = '下载这个对象（删除前唯一的退路）'
-  if (o.key.startsWith('u/')) return hint
-  return hint + '；注意：这个 key 是 uuid 形式，原文件名已无法恢复'
+  if (o.filenameRecoverable) return hint
+  // 主句说**事实**（这个 key 不含原名），括号里才说当前的具体形态（uuid）。
+  // 顺序是有意的：uuid 只是「不含原名」的一种情形，命名空间若再变，
+  // 括号里的说法会过时，而事实那一句不会。把 uuid 当主句的话，
+  // 将来加一个「不是 uuid 但也不含原名」的形状，这句提示就开始骗人。
+  // 与 downloadOne 下载后的那句提示保持同一个说法。
+  return hint + '；注意：这个 key 不含原始文件名，已无法恢复（上传路径是 uuid 形式）'
 }
 
 const downloadingKey = ref<string | null>(null)
@@ -588,10 +670,26 @@ async function purgeDanglingAll() {
   }
 }
 
+/**
+ * 表里的时间。**必须走共享的 parseTimeValue，不能裸 Date.parse。**
+ *
+ * DB 里的 created_at 是 SQLite 的 CURRENT_TIMESTAMP，也就是 **UTC 墙钟，
+ * 且不带时区后缀**。`Date.parse('2026-10-07 07:18:29')` 按 ES 规范当成
+ * **本地时间**解释 —— 于是在 +0800 的服务器上，审计表里 15:18 发生的事
+ * 显示成 07:18，**整整差 8 小时**。实测过，不是推演。
+ *
+ * 带 Z 的（COS 的 lastModified）裸 Date.parse 恰好是对的，所以这个 bug
+ * 只在 DB 来源的两列（悬空行创建时间、清理时间）上显形，看起来「时区有时对
+ * 有时不对」，很容易被当成偶发。app/utils/time.ts 的 parseTimeValue 已经
+ * 处理了这个区分（无后缀就补 Z），而且 tests/server-time.test.mjs 专门
+ * 在非 UTC 的 TZ 下钉着它 —— 这里复用它，不自己再实现一遍。
+ *
+ * 输出仍是紧凑格式而不是 formatDateTime 的 zh-CN 长格式：这张表列多，
+ * 「2026年10月7日 15:18」会把表撑宽。
+ */
 function formatTime(v: string): string {
-  const t = Date.parse(v)
-  if (!Number.isFinite(t)) return v || '—'
-  const d = new Date(t)
+  const d = parseTimeValue(v)
+  if (!d) return v || '—'
   const p = (n: number) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
@@ -601,6 +699,17 @@ function formatAge(ms: number): string {
   if (h < 1) return `${Math.floor(ms / 60_000)} 分钟`
   if (h < 48) return `${h} 小时`
   return `${Math.floor(h / 24)} 天`
+}
+
+/**
+ * 载荷解读在 app/utils/purge-log.ts —— 纯函数，好真正执行测试。
+ * 展开中的那一条用 id 而不是行下标：列表顺序会变（ORDER BY id DESC），
+ * 用下标的话折叠/展开会错行。
+ */
+const expandedLogId = ref<number | null>(null)
+
+function toggleLog(id: number) {
+  expandedLogId.value = expandedLogId.value === id ? null : id
 }
 
 onMounted(() => {

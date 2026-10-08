@@ -46,7 +46,7 @@
 // 所以 `minAgeMs` 挡的是**删除**，不是**可见性**：太新的照样列出来，
 // 只是标成 deletable: false —— 不然这个面板会对「桶里到底有什么」撒谎，
 // 而如实说谎正是它唯一的价值。
-import { FILE_KEY_PREFIXES, fileKeyOwnerId } from '~~/server/utils/file-key'
+import { FILE_KEY_PREFIXES, fileKeyOwnerId, displayNameFromKey } from '~~/server/utils/file-key'
 
 /** 24 小时。见文件头：这是「在途」与「废弃」唯一的可分辨信号 */
 export const DEFAULT_ORPHAN_MIN_AGE_MS = 24 * 60 * 60 * 1000
@@ -68,6 +68,18 @@ export interface ReconcileOrphan {
   ageMs: number | null
   /** 未到年龄下限时为 false，页面据此禁用删除按钮 */
   deletable: boolean
+  /**
+   * 这个 key 能不能反推出原始文件名。**由服务端的 displayNameFromKey 裁决。**
+   *
+   * 原来页面自己判断（`o.key.startsWith('u/')`），那是把命名空间知识复制到前端：
+   * 两种 key 形状携带的信息量不同（u/<id>/…_<原名> 名字还在，
+   * users/<id>/<YYYYMM>/<uuid><ext> 只有 uuid），而这个差别是会变的 ——
+   * 一旦加第三个前缀，或者把两种形状并成一个，前端那句判断就开始撒谎，
+   * 而且是往**乐观**方向撒谎：告诉操作者「名字能还原」而那份信息已经没了。
+   *
+   * 与 danglingSuppressedReason 同一个模式：形状判断留在服务端，页面只负责显示。
+   */
+  filenameRecoverable: boolean
 }
 
 export interface ReconcileDangling {
@@ -213,7 +225,8 @@ export async function reconcileUserBucket(
       size: obj.size,
       lastModified: obj.lastModified,
       ageMs,
-      deletable: listingComplete && ageMs !== null && ageMs >= deps.minAgeMs
+      deletable: listingComplete && ageMs !== null && ageMs >= deps.minAgeMs,
+      filenameRecoverable: displayNameFromKey(obj.key).recoverable
     })
   }
 

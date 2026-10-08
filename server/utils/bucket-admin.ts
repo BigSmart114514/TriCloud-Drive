@@ -93,7 +93,16 @@ export interface PurgeLogEntry {
   kind: PurgeKind
   userId: number
   actorId: number
-  /** 被删的条目快照。悬空行存整行，孤儿对象存 key/size/lastModified */
+  /**
+   * 被删的条目快照。**两种 kind 的形状不同**：
+   *   dangling-row  整个 files 行（id/fileKey/filename/folderId/fileSize/createdAt）
+   *   orphan-object 只有 `{ key }`
+   *
+   * 原先这里写的是「孤儿对象存 key/size/lastModified」，而 purge-orphans.post.ts
+   * 实际只传 `{ key: k }` —— 注释比实现多承诺了两列。读代码的人会以为
+   * 有 size 可用，从而以为清理历史能回答「释放了多少存储」；实际上 bytes 恒为 0，
+   * 原因就是这里：端点只收到 key，删前没测大小。
+   */
   entries: Array<Record<string, unknown>>
   bytes: number
   /** 实际成功删掉的条数（entries 可能是尝试数） */
