@@ -7,6 +7,7 @@ import { isExpired } from '~~/server/utils/time'
 import { dbConnectionError } from '~~/types/error'
 import { precheckStorage, resolveQuotaChain } from '~~/server/utils/sub-account'
 import { quotaFailMessage } from '~~/server/utils/quota'
+import { buildUserFileKey } from '~~/server/utils/file-key'
 
 export default defineEventHandler(async (event) => {
   // 处理 CORS 预检
@@ -141,17 +142,12 @@ export default defineEventHandler(async (event) => {
     await fileService.assertFolderOwned(user.id, folderId)
 
     // 生成用于对象存储的 key（与文件夹逻辑解耦，文件夹信息仅存 DB）
-    const uuid = crypto.randomUUID()
-    const fileExtension = filename.includes('.') ? filename.substring(filename.lastIndexOf('.')).toLowerCase() : ''
-    const now = new Date()
-    // 用 UTC 而不是本地：服务器时区不是 UTC 时，月末/年末边界会把文件分到
-    // 相邻的月份桶里（本地 1/1 凌晨 = UTC 前一天），同一批文件散到两个目录。
-    // 注意这只影响**新**文件，已有对象的路径不变（路径里本来就带 uuid，
-    // 不会撞车），也不会去动 COS 上的存量数据。
-    const year = now.getUTCFullYear()
-    const month = String(now.getUTCMonth() + 1).padStart(2, '0')
-    const safeFilename = `${uuid}${fileExtension}`
-    const fileKey = `users/${user.id}/${year}${month}/${safeFilename}`
+    //
+    // 形状与复制功能共用 buildUserFileKey —— 全项目只有那一个函数构造 key。
+    // 这里原来内联了一份（uuid + `substring(lastIndexOf('.'))` 取扩展名），
+    // 而那个扩展名写法在 `a.b/c` 这种输入上会产出带 `/` 的「扩展名」。
+    // user.id 是**目标目录的属主**：上面 assertFolderOwned 刚校验过。
+    const fileKey = buildUserFileKey(user.id, filename)
 
     // 检查 COS 密钥
     if (!config.tencentSecretId || !config.tencentSecretKey ) {
@@ -222,7 +218,6 @@ export default defineEventHandler(async (event) => {
         fileKey,
         folderId,                 // 回传当前目录
         originalFilename: filename,
-        safeFilename,
         uploadUrl: `https://${config.cosBucket}.cos.${config.cosRegion}.myqcloud.com`
       }
     }

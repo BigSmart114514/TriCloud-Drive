@@ -32,7 +32,7 @@ export default defineEventHandler(async (event) => {
     // 鉴权身份：useAdmin 时是属主，否则是我（只往我有 write 的目录里写）
     const authId = Number(authUserId)
     const body = await readBody(event)
-    const { filename, safeFilename, fileKey, fileSize, fileUrl, contentType, overwrite } = body || {}
+    const { filename, fileKey, fileSize, fileUrl, contentType, overwrite } = body || {}
     const folderId = normalizeFolderId(body?.folderId ?? (event as any)?.context?.folderId)
 
     if (!filename || !fileKey || !fileUrl) throw createError({ statusCode: 400, message: '缺少必要的文件信息' })

@@ -21,7 +21,7 @@ import { parse } from '@vue/compiler-sfc'
 
 register(new URL('./helpers/resolve-nuxt-alias.mjs', import.meta.url), import.meta.url)
 
-const { displayNameFromKey } = await import('../server/utils/file-key.ts')
+const { displayNameFromKey, buildUserFileKey } = await import('../server/utils/file-key.ts')
 const { generateCDNUrl, cosDirectUrl } = await import('../server/utils/cdn-sign.ts')
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
@@ -197,16 +197,41 @@ test('不能用 encodeURIComponent（它会把 / 也编码掉，路径就断了�
   assert.doesNotMatch(line, /encodeURIComponent/, 'path 上不能用 encodeURIComponent')
 })
 
-// # 是同一族的第二个坑：sanitizeForKey 剥了 \ ? % * : | " <>，唯独漏了 #。
+// # 是同一族的第二个坑：原来的 sanitizeForKey 剥了 \ ? % * : | " <>，唯独漏了 #。
 // 而「报告#1.txt」是完全合法的文件名（几乎所有文件系统都允许）。
-test('sanitizeForKey 剥掉 #（它会在 URL 里被当片段，把 path 截断）', () => {
-  // 在浏览器/CDN 侧的等价物：new URL 会把 # 之后的部分当成 hash
+//
+// 2026-10-08 之后这个坑从根上没了：key 里不再有原名，所以**没有任何净化面**
+// 需要维护。前半段的演示仍然留着 —— 桶里存量的 `u/` 对象还是这个形状，
+// 迁移跑完之前它们照旧坏着。
+test('# 在 URL 里被当片段（存量 u/ 对象仍然中招）', () => {
   const raw = '/u/1/2026-01-01/1_a_报告#1.txt'
   assert.equal(new URL('https://x' + raw).pathname, '/u/1/2026-01-01/1_a_%E6%8A%A5%E5%91%8A',
     '对照：# 之后真的被截断了 —— 所以留着它必然 403')
-  assert.match(codeOnly(read('server/api/copy/paste.post.ts')),
-    /\[\\\\\?%\*:\|"<>#\]/,
-    '剥除字符集里必须有 #')
+})
+
+test('新 key 结构上不可能含 # 或任何客户端提供的字符', () => {
+  // 比「净化器剥掉了它」强得多：不是靠一张字符表堵，而是 key 里压根没有原名。
+  // 净化字符表漏一个符号就复发一次（# 就是这么漏的），所以能删掉那张表本身就是修复。
+  // 变异扫描抓到过一个洞：下面原先那批输入（`报告#1.txt`、`a#b`、`x#`）里，
+  // `#` 全都落在**名字**部分 —— 而名字已经不进 key 了，所以「扩展名提取不过滤」
+  // 这个变异照样通过。可 `#` 真正能进 key 的位置是**扩展名**：`报告.a#b`
+  // → 扩展名 `a#b` → key = users/1/202610/<uuid>.a#b → new URL 在 # 处截断 → 403。
+  // 那是可达的，所以这批输入是必须的。
+  for (const name of [
+    '报告#1.txt', 'a#b', '#', 'x#', '../../etc/passwd', 'a/b/c.txt', '带?问号.txt',
+    // ↓ # / ? 落在扩展名位置上的那批
+    '报告.a#b', 'x.p?g', 'name.a#b#c', 'x.p%q', 'x.p*q', 'x.p|q'
+  ]) {
+    const key = buildUserFileKey(43, name, new Date('2026-10-08T12:00:00Z'))
+    for (const bad of ['#', '?', '..']) {
+      assert.ok(!key.includes(bad), `${name} → ${key}：key 里出现了 ${bad}`)
+    }
+    // 原名一个字都不该进去。`../../etc/passwd` 这条要特别小心：扩展名是按
+    // **basename** 找的，所以 basename 是 `passwd`（无点）→ 没有扩展名；
+    // 而如果按整个串找最后一个点，会拿到 `etcpasswd` —— 原名的一截就进 key 了。
+    assert.ok(!key.includes('报告'), `${name} → ${key}：原名漏进了 key`)
+    assert.ok(!key.includes('passwd'), `${name} → ${key}：原名漏进了 key（basename 规则失效）`)
+  }
 })
 
 test('签名只取决于 path/ttl/primaryKey（backupKey 不参与）', () => {

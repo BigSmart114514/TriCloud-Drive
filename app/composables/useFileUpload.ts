@@ -16,7 +16,6 @@ interface UploadConfig {
   region: string
   fileKey: string
   originalFilename: string
-  safeFilename: string
   uploadUrl: string
   demoMode?: boolean
   folderId?: number | null
@@ -100,7 +99,6 @@ export const useFileUpload = (options?: {
         const fileUrl = `${config.uploadUrl}/${config.fileKey}`
         const body: any = {
           filename: file.name,
-          safeFilename: config.safeFilename,
           fileKey: config.fileKey,
           fileSize: file.size,
           fileUrl,
@@ -190,7 +188,6 @@ export const useFileUpload = (options?: {
       {
         const body: any = {
           filename: file.name,
-          safeFilename: config.safeFilename,
           fileKey: config.fileKey,
           fileSize: file.size,
           fileUrl,

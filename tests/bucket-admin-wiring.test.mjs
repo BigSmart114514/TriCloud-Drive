@@ -20,7 +20,7 @@
 // 需要 mock 一整个 h3 环境。真正需要执行的分支都在 reconcile 那边测了。
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
-import { readFileSync, readdirSync } from 'node:fs'
+import fs, { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { parse } from '@vue/compiler-sfc'
@@ -499,27 +499,100 @@ describe('迁移与审计表', () => {
   })
 })
 
-describe('key 构造器的收敛', () => {
-  // file-key.ts 的文件头写着「写全是为了让新增前缀时被迫想一下这里」。
-  // 而内联的那份恰好把这条约定架空了。
-  test('paste.post.ts 的 buildCosKey 是 export 的顶层函数，不是端点内联', () => {
-    const s = codeOnly(read('server/api/copy/paste.post.ts'))
-    assert.match(s, /^export function buildCosKey\(/m,
-      '必须在顶层 export —— 内联那份就是「第三套 key 方案最容易长出来的地方」')
-    assert.match(s, /^export function sanitizeForKey\(/m)
-    assert.match(s, /^export function randomId\(/m)
+describe('key 构造器的收敛：全项目只有一个函数构造 key', () => {
+  // 原来的断言是「paste.post.ts 的 buildCosKey 必须是顶层 export 的函数」。
+  // 那条约束有个盲区：它只管 paste 这一个文件，而 upload/credentials.post.ts
+  // 里当时**还有一份内联的实现**，两条断言都照样通过 —— 两份能分叉正是因为
+  // 约束按文件写，不按「全项目只有一个构造器」写。
+  //
+  // 2026-10-08 统一形状之后，两条写入路径共用 file-key.ts 的 buildUserFileKey。
+  // 约束也跟着换成按「构造器」写：枚举仓库里所有构造 key 的写法，出现第二种就红。
+  const WRITERS = [
+    'server/api/copy/paste.post.ts',
+    'server/api/upload/credentials.post.ts'
+  ]
+
+  for (const p of WRITERS) {
+    test(`${p} 用共享的 buildUserFileKey`, () => {
+      assert.match(
+        codeOnly(read(p)),
+        /import \{[^}]*\bbuildUserFileKey\b[^}]*\} from '~~\/server\/utils\/file-key'/,
+        `${p} 必须用共享的构造器 —— 各自实现就是两套形状分叉的起点`
+      )
+      assert.match(codeOnly(read(p)), /buildUserFileKey\s*\(/, '光 import 不算，必须真的调它')
+    })
+  }
+
+  test('两个写入端点都不再自己拼 key 模板', () => {
+    for (const p of WRITERS) {
+      const s = codeOnly(read(p))
+      // 模板字面量拼 key：形如 `users/${...}` 或 `u/${...}` 开头
+      const templates = [...s.matchAll(/`\$\{[A-Za-z_][\w.]*\}(?:\/\$\{[^}]*\})+`/g)]
+        .map((m) => m[0])
+        .filter((t) => /^`\$\{?\s*(ACTIVE_KEY_PREFIX|'users'|'u')/.test(t) || /^`\$\{'u'\}/.test(t))
+      assert.deepEqual(templates, [],
+        `${p} 里出现了自己拼 key 的模板：${templates.join(' | ')} —— ` +
+        `key 的形状只能由 buildUserFileKey 决定`)
+    }
   })
 
-  test('内联那份已删掉（只剩一处定义）', () => {
-    const s = codeOnly(read('server/api/copy/paste.post.ts'))
-    const defs = [...s.matchAll(/function buildCosKey\(/g)]
-    assert.equal(defs.length, 1, `buildCosKey 应只有一处定义，实际 ${defs.length} 处`)
+  test('全仓库只有一处定义 buildUserFileKey', () => {
+    const seen = []
+    const walk = (dir) => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        if (e.name === 'node_modules' || e.name === '.nuxt' || e.name === '.git') continue
+        const full = join(dir, e.name)
+        if (e.isDirectory()) walk(full)
+        else if (e.name.endsWith('.ts')) {
+          const n = [...fs.readFileSync(full, 'utf8').matchAll(/function buildUserFileKey\(/g)].length
+          if (n) seen.push(`${full}: ${n}`)
+        }
+      }
+    }
+    walk(join(root, 'server'))
+    walk(join(root, 'app'))
+    assert.deepEqual(seen, [join(root, 'server/utils/file-key.ts') + ': 1'],
+      `buildUserFileKey 应只在 server/utils/file-key.ts 定义一次，实际：${seen.join(', ')}`)
   })
 
-  test('两个前缀仍是权威清单（对账靠它遍历）', () => {
+  test('旧的那套（u/ 前缀 + 净化原名）已经没有代码路径了', () => {
+    const paste = codeOnly(read('server/api/copy/paste.post.ts'))
+    assert.doesNotMatch(paste, /function sanitizeForKey\(/,
+      'key 里不再有原名 → 没有需要净化的东西 → 净化函数应当消失')
+    assert.doesNotMatch(paste, /function randomId\(/, '同上：随机串是为了消歧原名，不再需要')
+    assert.doesNotMatch(paste, /function buildCosKey\(/, '统一到 buildUserFileKey')
+  })
+
+  test('safeFilename 没有回到上传契约里（key 里已经没有名字要净化）', () => {
+    // 它在 save.post.ts 里解构出来但从未使用，是个死字段。而现在 key 里不再有
+    // 客户端提供的字符 —— 留着一个叫「净化过的文件名」的字段只会让人以为
+    // 存在一个净化步骤，而实际上没有。
+    for (const p of ['server/api/upload/credentials.post.ts',
+                     'server/api/files/save.post.ts',
+                     'app/composables/useFileUpload.ts']) {
+      assert.doesNotMatch(codeOnly(read(p)), /\bsafeFilename\b/,
+        `${p} 里还有 safeFilename —— 它是个从未被使用的死字段`)
+    }
+  })
+
+  test('新 key 只写 users/ 前缀（ACTIVE_KEY_PREFIX 是那个值）', () => {
+    const s = codeOnly(read('server/utils/file-key.ts'))
+    assert.match(s, /ACTIVE_KEY_PREFIX = 'users'/,
+      '新 key 的前缀由这一个常量决定，写错了两条写入路径一起错')
+  })
+
+  test('FILE_KEY_PREFIXES 仍含两个 —— 迁移没跑，u/ 的对象还在桶里', () => {
     const s = codeOnly(read('server/utils/file-key.ts'))
     assert.match(s, /FILE_KEY_PREFIXES = \['users', 'u'\]/,
-      '前缀清单必须同时含两个 —— 漏一个就是「那个前缀下的文件全都不见了」')
+      '不能收成单元素：少一个前缀 = 那批对象在对账里彻底消失 —— ' +
+      '既不报成孤儿（永远清不掉、一直计费），也不报任何异常')
+  })
+
+  test('「写新的」与「认旧的」是两个常量，不是一个索引', () => {
+    const s = codeOnly(read('server/utils/file-key.ts'))
+    // 曾经的写法是 prefixes[0]，那正是「忘了更新清单就静默写错前缀」的地方
+    assert.doesNotMatch(s, /FILE_KEY_PREFIXES\s*\[\s*0\s*\]/,
+      '不能用 FILE_KEY_PREFIXES[0] 当写前缀 —— 那等于把「认旧的」清单当成「写新的」')
   })
 
   test('listUserNamespaceObjects 遍历 FILE_KEY_PREFIXES 而不是写死', () => {

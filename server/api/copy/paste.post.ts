@@ -9,6 +9,7 @@ import { ensurePaths } from '~~/server/utils/folders'
 import { deleteCosObject } from '~~/server/utils/cos'
 import { runSettled } from '~~/server/utils/concurrency'
 import { resolveUniqueFilename } from '~~/server/utils/file'
+import { buildUserFileKey } from '~~/server/utils/file-key'
 import { uniqPositiveInts } from '~~/server/utils/functions'
 import {
   linkGrantsFile,
@@ -26,56 +27,35 @@ import {
 import { DEFAULT_SHARE_MODE, hasPermission, normalizeShareLink, PERM_WRITE } from '~~/types/share'
 
 /**
- * 复制时的对象键： `u/<id>/<YYYY-MM-DD>/<ts>_<rand>_<name>`
+ * 复制不再自己构造 key —— 用 server/utils/file-key.ts 的 buildUserFileKey，
+ * 与上传同一个形状：`users/<id>/<YYYYMM>/<uuid><ext>`。
  *
- * ## 为什么要挪到 file-key.ts
+ * ## 为什么这三个函数没了（2026-10-08）
  *
- * 原来这三个函数（sanitizeForKey / randomId / buildCosKey）是**本文件内联的**，
- * 而 file-key.ts 的文件头明确写着「已知的命名空间前缀。写全是为了让新增前缀时
- * 被迫想一下这里」。内联的那份恰好把这条约定架空了：加第三套 key 方案的人
- * 在本文件里就能直接再写一个 buildCosKey，而没有任何东西提醒他那两个前缀的
- * 列表需要同步。
+ * 原来这里内联着 sanitizeForKey / randomId / buildCosKey，产出
+ * `u/<id>/<YYYY-MM-DD>/<ts>_<rand>_<原名>`。统一之后它们全部删除，理由不是
+ * 「重复」，而是那个形状本身有两个毛病：
  *
- * 另外文件里已经有一个带注释的完整前缀清单（`users/…` 与 `u/…`），
- * 往 storage 的对账（bucket-reconcile.ts）正是靠它遍历两个前缀。漏掉一个前缀
- * 的表现是「那个前缀下的对象全都不见了」—— 没有任何报错。
+ *   分区粒度不同 —— 同一个用户的对象散在 `YYYYMM` 和 `YYYY-MM-DD` 两种目录形状里。
+ *   **原名进了 key** —— 于是 key 形状依赖客户端给的文件名，多出一整个净化面。
  *
- * 日/月/年一律走 UTC：服务器时区不是 UTC 时，跨月边界会把同一批文件分到
- * 相邻两天的目录里（与 upload/credentials.post.ts 同一个理由）。
+ * 那个净化面是有前科的：sanitizeForKey 的字符表里原本没有 `#`，而
+ * 「报告#1.txt」是完全合法的文件名，于是 key = u/1/…/1_a_报告#1.txt 被
+ * `new URL(...).pathname` 在 `#` 处截断，而签名覆盖完整串 → CDN 永远算不对 → 403。
+ * 补上 `#` 只是堵住了那一个症状；根因是「把不可信的文件名塞进 key」这件事。
+ *
+ * ## 跨用户粘贴：userId 是**目标属主**
+ *
+ * 下面的 `const userId = destOwnerId` 是安全边界，不是命名。副本永远落在目标
+ * 目录的属主树里 —— 复制到别人树里时副本归对方。`buildUserFileKey` 拿到的
+ * 就是这个值，所以跨用户粘贴产出的 key 也在**对方**的命名空间下。
+ * 传成发起人（authId）就是「把副本写进自己的树却记在对方账上」，
+ * 而 `assertFileKeyOwner` 会认为它合法 —— 因为按构造它就是合法的。
+ *
+ * 删掉 sanitizeForKey 也意味着那个净化面**整体消失**：key 里不再有任何
+ * 客户端提供的字符，不需要净化。桶里已存在的 `u/` 对象不受影响（它们的 key
+ * 不会变，改了就是另一个对象），迁移前它们仍然是坏的普通下载。
  */
-/**
- * 剥掉会破坏对象键或 URL 结构的字符。
- *
- * # 原来不在列表里，而它一定会坏事：
- *
- *   key = u/1/2026-01-01/1_a_报告#1.txt
- *   new URL('https://cdn/…' + encodeURI(key)).pathname
- *     → /u/1/2026-01-01/1_a_%E6%8A%A5%E5%91%8A     ← 在 # 处被截断
- *   而签名覆盖的是完整串 → CDN 永远算不对 → 403
- *
- * 「报告#1.txt」是完全合法的文件名（几乎所有文件系统都允许），所以这不是
- * 造出来的不可能输入。
- *
- * 注意这只对**将来**的复制生效：桶里已经存在的、带 # 的对象仍然是坏的 ——
- * 它们的 key 不会变（改了就是另一个对象）。那些对象在存储桶管理页里能下载
- * （key 不经这里），但普通下载走不通。
- *
- * 空格换成单个空格而不是剥掉：文件名里的空格要保留，只是折叠连续的。
- */
-export function sanitizeForKey(name: string): string {
-  return name.replace(/[\\?%*:|"<>#]/g, '_').replace(/[\s]+/g, ' ')
-}
-
-export function randomId(len = 10) {
-  return Math.random().toString(36).slice(2, 2 + len)
-}
-
-export function buildCosKey(userId: number, filename: string): string {
-  const safe = sanitizeForKey(filename)
-  const y = new Date()
-  const day = `${y.getUTCFullYear()}-${(y.getUTCMonth() + 1).toString().padStart(2, '0')}-${y.getUTCDate().toString().padStart(2, '0')}`
-  return `u/${userId}/${day}/${Date.now()}_${randomId(6)}_${safe}`
-}
 
 export default defineEventHandler(async (event) => {
   /**
@@ -537,9 +517,9 @@ try {
   // 不留日志）。共享版带配置守卫与失败日志，且**永不抛** —— 正合这里两处用法：
   // 覆盖时删旧对象（失败不该影响整体）、全败回滚时补偿删除（已在错误路径上，
   // 再抛第二个错只会盖掉真正的失败原因）。
-  // buildCosKey / sanitizeForKey / randomId 已提到文件顶层并 export —— 理由见那里的注释：
-  // 内联那份把这个文件变成了「第三套 key 方案最容易长出来的地方」，而 file-key.ts
-  // 的前缀清单正是靠「新增前缀时被迫想一下这里」来保持有效的。
+  // key 由 file-key.ts 的 buildUserFileKey 生成（跨用户时 userId 是目标属主，
+  // 见文件头）。这里只负责把 key 变成一个可 PUT 的 URL，不再参与 key 的形状 ——
+  // 形状散在两处正是原来那套东西能分叉的原因。
   function buildCosUrl(key: string) {
     return `https://${Bucket}.cos.${Region}.myqcloud.com/${encodeURIComponent(key)}`
   }
@@ -570,7 +550,7 @@ try {
     destUrl: string
   }
   const tasks: CopyTask[] = toCopy.map((p) => {
-    const destKey = buildCosKey(userId, p.finalFilename)
+    const destKey = buildUserFileKey(userId, p.finalFilename)
     const destUrl = buildCosUrl(destKey)
     return { item: p, destKey, destUrl }
   })
