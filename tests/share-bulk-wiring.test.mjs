@@ -32,9 +32,17 @@ const BROWSER = 'app/components/FileBrowser.vue'
 const SERVICE = 'app/services/share.service.ts'
 const FILE_TYPES = 'types/files.ts'
 
-/** 去掉注释，免得注释里提到的东西把判定带偏 */
+/** 去掉注释，免得注释里提到的东西把判定带偏。
+ *
+ *  Vue 模板里的 **HTML 注释** 也要去：只去前两种的话，一段
+ *  `<!-- … max-w-[60vw] … -->` 就能让下面那条「面包屑有宽度上限」的断言绿，
+ *  而元素上其实早就没有那个类了 —— 测的就成了注释。
+ *  （这条是被 tests/file-browser-toolbar.test.mjs 的变异扫描逼出来的：
+ *  它把 nav 上的类一个个删掉，发现其中一条是「靠注释里的同名类」绿的。）
+ */
 function codeOnly(src) {
   return src
+    .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/\/\*[\s\S]*?\*\//g, '')
     .split('\n')
     .filter((l) => !/^\s*\/\//.test(l) && !/^\s*[*]/.test(l))

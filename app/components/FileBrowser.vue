@@ -14,7 +14,7 @@
       class="flex items-center justify-between gap-2"
       :class="fill ? 'shrink-0 px-4 py-3' : 'mb-4 flex-wrap'"
     >
-      <div class="flex items-center gap-2 min-w-0">
+      <div class="flex min-w-0 flex-1 items-center gap-2">
         <!--
           主复选框（全选/全不选）。**不要加 hidden sm:block**。
 
@@ -45,17 +45,41 @@
           aria-label="全选/全不选"
         />
         <h3 class="text-lg font-medium text-gray-900 shrink-0">{{ title || defaultTitle }}</h3>
-        <nav class="text-sm text-gray-500 overflow-x-auto whitespace-nowrap no-scrollbar max-w-[60vw] sm:max-w-none">
+        <!--
+          面包屑的宽度规则，三条同时成立才有意义：
+
+          1. min-w-0 + max-w-[60vw]：flex 子项默认 min-width:auto，不给 min-w-0
+             就压不下去；上限让「一整条路径」不至于把整行吃光。
+          2. overflow-x-auto + whitespace-nowrap：层级深时横向滚动，不换行
+             （换行会把标题栏撑高）。
+          3. 每一级自己截断（见下面那颗按钮）：只有第 1 条时，一级超长的
+             文件夹名仍会把 nav 顶到 60vw —— 长名字照样挤掉右边那组按钮。
+
+          这里原来还挂着一个 sm 断点变体，它在宽屏时把上限整个撤掉，于是 nav
+          宽度 = 长名字的全宽。标题栏在 fill 模式下是 shrink-0 不换行的，多出来
+          的宽度只能去挤右侧，症状是「已复制 1 项」被压成一列竖着的字。所以
+          **不能**在这里再加任何 sm 断点的宽度变体
+          （tests/file-browser-toolbar.test.mjs 把整类都禁掉了）。
+
+          左侧那组是 flex-1：吃满剩余空间、被压时也只压面包屑；右侧那组
+          shrink-0，不参与压缩。
+        -->
+        <nav class="min-w-0 max-w-[60vw] text-sm text-gray-500 overflow-x-auto whitespace-nowrap no-scrollbar">
           <span v-for="(crumb, idx) in breadcrumbs" :key="String(crumb.id) + '-' + idx">
             <span v-if="idx > 0" class="mx-1">/</span>
-            <button class="hover:text-indigo-600" @click="handleGoToBreadcrumb(idx)" :disabled="idx === breadcrumbs.length - 1">
+            <button
+              class="max-w-[12rem] truncate hover:text-indigo-600"
+              :title="crumb.name"
+              @click="handleGoToBreadcrumb(idx)"
+              :disabled="idx === breadcrumbs.length - 1"
+            >
               {{ crumb.name }}
             </button>
           </span>
         </nav>
       </div>
 
-      <div class="flex items-center gap-2">
+      <div class="flex shrink-0 items-center gap-2">
         <button
           v-if="breadcrumbs.length > 1"
           class="p-1 text-sm text-gray-600 hover:text-gray-800"
@@ -138,7 +162,12 @@
         >
           <ClipboardDocumentCheckIcon class="h-5 w-5" />
         </button>
-        <span v-if="hasClipboard" class="text-xs text-gray-500 hidden sm:inline">{{ clipboardActionLabel }} {{ clipboardCount }} 项</span>
+        <!--
+          不断行是必须的，不是美观问题：中文在任意两个汉字之间都能断行，这段
+          「已复制 N 项」一旦被压窄就会变成一个字一行的竖排。外层工具栏
+          shrink-0 保证它不会被压窄，这里是第二道保险。
+        -->
+        <span v-if="hasClipboard" class="whitespace-nowrap text-xs text-gray-500 hidden sm:inline">{{ clipboardActionLabel }} {{ clipboardCount }} 项</span>
 
         <div v-if="canWriteHere" ref="uploadMenuRef" class="relative" @mouseenter="openUploadMenu()" @mouseleave="scheduleCloseUploadMenu()">
           <button
