@@ -15,7 +15,7 @@
             对象浏览
           </h1>
           <p class="mt-0.5 text-xs text-gray-500">
-            直接翻对象存储里的真实对象。
+            浏览器里的对象。
           </p>
         </div>
       </div>
@@ -31,8 +31,7 @@
         <div class="text-sm text-amber-900">
           <p class="font-medium">未配置腾讯云密钥</p>
           <p class="mt-0.5 text-xs leading-relaxed">
-            下面会是 0 个对象。这不是「桶里没有东西」，而是服务端没有可用的对象存储凭据 ——
-            这两件事在界面上本来长得一模一样，所以由服务端把事实报上来。
+            这里列不出东西。配置好密钥后才能看到桶里的内容。
           </p>
         </div>
       </div>
@@ -51,7 +50,7 @@
         <div class="flex flex-wrap items-end gap-3">
           <div class="min-w-0 flex-1">
             <label for="browse-prefix" class="mb-1.5 block text-xs font-medium text-gray-700">
-              前缀（留空 = 整个桶）
+              前缀
             </label>
             <input
               id="browse-prefix"
@@ -59,7 +58,7 @@
               type="text"
               spellcheck="false"
               autocomplete="off"
-              placeholder="留空则列出整个桶"
+              placeholder="留空 = 整个桶"
               class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 font-mono text-sm text-gray-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
               @keyup.enter="runBrowse(true)"
             />
@@ -67,14 +66,14 @@
 
           <div class="min-w-0 flex-1">
             <label for="browse-user" class="mb-1.5 block text-xs font-medium text-gray-700">
-              用户（只用来取该用户的命名空间快捷方式，不决定范围）
+              用户
             </label>
             <select
               id="browse-user"
               v-model="selectedUserId"
               class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
             >
-              <option :value="null">不指定</option>
+              <option :value="null">全部</option>
               <option v-for="u in users" :key="u.id" :value="u.id">
                 {{ u.username || u.email || `#${u.id}` }}（#{{ u.id }}）
               </option>
@@ -107,10 +106,10 @@
           后果是只往「说能还原」那一侧错）。
         -->
         <div v-if="allPrefixes.length" class="mt-3 flex flex-wrap items-center gap-1.5">
-          <span class="text-xs text-gray-500">快捷前缀：</span>
+          <span class="text-xs text-gray-500">快捷</span>
           <button
             type="button"
-            class="rounded-md border border-gray-200 px-2 py-1 font-mono text-[11px] text-gray-700 transition-colors hover:bg-gray-100"
+            class="rounded-md border border-gray-200 px-2 py-1 font-mono text-xs text-gray-700 transition-colors hover:bg-gray-100"
             :class="{ 'border-indigo-300 bg-indigo-50 text-indigo-700': prefixInput === '' }"
             @click="jumpToPrefix('')"
           >
@@ -120,7 +119,7 @@
             v-for="p in allPrefixes"
             :key="p"
             type="button"
-            class="rounded-md border border-gray-200 px-2 py-1 font-mono text-[11px] text-gray-700 transition-colors hover:bg-gray-100"
+            class="rounded-md border border-gray-200 px-2 py-1 font-mono text-xs text-gray-700 transition-colors hover:bg-gray-100"
             :class="{ 'border-indigo-300 bg-indigo-50 text-indigo-700': prefixInput === p }"
             @click="jumpToPrefix(p)"
           >
@@ -131,17 +130,18 @@
 
       <!-- 当前范围：放开前缀之后，这是界面上唯一的护栏 -->
       <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
-        <span class="text-gray-500">当前列举范围</span>
+        <span class="text-gray-500">当前路径</span>
         <code
-          class="max-w-full truncate rounded bg-gray-800 px-1.5 py-0.5 font-mono text-[11px] text-gray-100"
+          class="max-w-full truncate rounded bg-gray-800 px-1.5 py-0.5 font-mono text-xs text-gray-100"
           :title="displayedPrefix"
         >{{ displayedPrefix }}</code>
         <button
           v-if="prefixInput"
           type="button"
-          class="rounded-md border border-gray-200 px-2 py-1 text-[11px] text-gray-700 transition-colors hover:bg-gray-100"
+          class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-700 transition-colors hover:bg-gray-100"
           @click="goUp"
         >
+          <ArrowUpIcon class="h-3.5 w-3.5 shrink-0" />
           上一级
         </button>
       </div>
@@ -156,10 +156,10 @@
       >
         <ExclamationCircleIcon class="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
         <div class="min-w-0 text-sm text-red-900">
-          <p class="font-medium">列举未能完成，下面的结果不完整</p>
+          <p class="font-medium">没能列全，下面不是全部。</p>
           <p class="mt-0.5 text-xs leading-relaxed">{{ page.error }}</p>
           <p class="mt-1 text-xs leading-relaxed">
-            「0 个对象」在这种状态下**不能**当成「这个范围是空的」。缩小前缀再试。
+            所以「0 个对象」不代表这里真的空着。换个前缀再试。
           </p>
         </div>
       </div>
@@ -170,7 +170,7 @@
           v-if="!page.objects.length && !page.commonPrefixes.length"
           class="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-500"
         >
-          这个前缀下没有任何对象。
+          这里没有对象。
         </p>
 
         <div
@@ -179,7 +179,7 @@
         >
           <table class="w-full text-left text-xs">
             <caption class="sr-only">
-              对象浏览结果。目录行可点进去；对象行每行一个下载按钮。这一页没有任何删除入口。
+              对象列表。目录可点开，对象可下载。
             </caption>
             <thead class="border-b border-gray-200 bg-gray-50 text-gray-600">
               <tr>
@@ -196,7 +196,7 @@
                 <td class="max-w-0 px-3 py-2" colspan="4">
                   <button
                     type="button"
-                    class="flex min-w-0 items-center gap-1.5 text-left font-mono text-[11px] text-indigo-700 hover:underline"
+                    class="flex min-w-0 items-center gap-1.5 text-left font-mono text-xs text-indigo-700 hover:underline"
                     :title="d"
                     @click="enterDir(d)"
                   >
@@ -209,7 +209,7 @@
 
               <tr v-for="o in page.objects" :key="o.key" class="hover:bg-gray-50">
                 <td class="max-w-0 px-3 py-2">
-                  <span class="block truncate font-mono text-[11px] text-gray-700" :title="o.key">
+                  <span class="block truncate font-mono text-xs text-gray-700" :title="o.key">
                     {{ o.key }}
                   </span>
                 </td>
@@ -225,7 +225,7 @@
                   <div class="flex items-center justify-end">
                     <button
                       type="button"
-                      class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+                      class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
                       :disabled="downloadingKey === o.key"
                       :title="downloadHint(o)"
                       @click="downloadOne(o)"
@@ -248,19 +248,21 @@
         <div class="mt-3 flex items-center gap-2 text-xs">
           <button
             type="button"
-            class="rounded-md border border-gray-200 px-2.5 py-1 text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+            class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
             :disabled="!canGoPrev"
             @click="goPrevPage"
           >
+            <ChevronLeftIcon class="h-3.5 w-3.5 shrink-0" />
             上一页
           </button>
           <button
             type="button"
-            class="rounded-md border border-gray-200 px-2.5 py-1 text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+            class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2.5 py-1 text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
             :disabled="!page.truncated"
             @click="goNextPage"
           >
             下一页
+            <ChevronRightIcon class="h-3.5 w-3.5 shrink-0" />
           </button>
           <span class="text-gray-500">第 {{ pageNo }} 页</span>
         </div>
@@ -270,7 +272,7 @@
         v-else
         class="rounded-xl border border-gray-200 bg-white px-4 py-6 text-center text-sm text-gray-500"
       >
-        输入一个前缀（或留空列整个桶），然后点「列出」。
+        输入前缀，或留空看整个桶。
       </p>
     </main>
   </div>
@@ -280,6 +282,9 @@
 import { computed, onMounted, ref } from 'vue'
 import {
   ArrowDownTrayIcon,
+  ArrowUpIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
   ExclamationCircleIcon,
   ExclamationTriangleIcon,
   FolderIcon,
@@ -349,7 +354,7 @@ const allPrefixes = computed(() => page.value?.allPrefixes ?? [])
  * 空前缀在界面上**不能显示成空白** —— 一片空白读起来像「没在列任何东西」，
  * 而它的真实含义是「整个桶」。这一页默认就是空前缀，所以这个换算不是装饰。
  */
-const displayedPrefix = computed(() => (page.value ? page.value.prefix || '（整个桶）' : prefixInput.value || '（整个桶）'))
+const displayedPrefix = computed(() => (page.value ? page.value.prefix || '整个桶' : prefixInput.value || '整个桶'))
 
 const fmtHeaders = process.server ? useRequestHeaders(['cookie']) : undefined
 

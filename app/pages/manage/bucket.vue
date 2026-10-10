@@ -119,7 +119,7 @@
             <p class="text-xs font-medium text-amber-900">
               不在该用户命名空间下的对象（{{ result.foreignObjects.length }}）
             </p>
-            <ul class="mt-1 max-h-24 space-y-0.5 overflow-y-auto font-mono text-[11px] text-amber-800">
+            <ul class="mt-1 max-h-24 space-y-0.5 overflow-y-auto font-mono text-xs text-amber-800">
               <li v-for="k in result.foreignObjects.slice(0, 50)" :key="k" class="truncate">{{ k }}</li>
             </ul>
           </div>
@@ -127,7 +127,7 @@
             <p class="text-xs font-medium text-amber-900">
               file_key 属主对不上的行（{{ result.foreignRows.length }}）
             </p>
-            <ul class="mt-1 max-h-24 space-y-0.5 overflow-y-auto font-mono text-[11px] text-amber-800">
+            <ul class="mt-1 max-h-24 space-y-0.5 overflow-y-auto font-mono text-xs text-amber-800">
               <li v-for="r in result.foreignRows.slice(0, 50)" :key="r.id" class="truncate">
                 #{{ r.id }} → {{ r.fileKey }}（解析属主：{{ r.ownerId ?? '不认识' }}）
               </li>
@@ -174,7 +174,7 @@
               <tbody class="divide-y divide-gray-100">
                 <tr v-for="o in result.orphans" :key="o.key" class="hover:bg-gray-50">
                   <td class="max-w-0 px-3 py-2">
-                    <span class="block truncate font-mono text-[11px] text-gray-700" :title="o.key">
+                    <span class="block truncate font-mono text-xs text-gray-700" :title="o.key">
                       {{ o.key }}
                     </span>
                   </td>
@@ -197,7 +197,7 @@
                       -->
                       <button
                         type="button"
-                        class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-[11px] font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
+                        class="inline-flex items-center gap-1 rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-40"
                         :disabled="downloadingKey === o.key"
                         :title="downloadHint(o)"
                         @click="downloadOne(o)"
@@ -207,7 +207,7 @@
                       </button>
                       <button
                         type="button"
-                        class="inline-flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-[11px] font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
+                        class="inline-flex items-center gap-1 rounded-md border border-red-200 px-2 py-1 text-xs font-medium text-red-600 transition-colors hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-40"
                         :disabled="!o.deletable || purgingKey === o.key"
                         :title="o.deletable ? '删除这个对象，不可撤销' : deleteDisabledReason(o)"
                         @click="purgeOne(o)"
@@ -373,14 +373,14 @@
 
                 <tr v-if="expandedLogId === log.id" class="bg-gray-50">
                   <td colspan="6" class="px-3 pb-3 pt-1.5">
-                    <p class="mb-1.5 text-[11px] text-gray-500">
+                    <p class="mb-1.5 text-xs text-gray-500">
                       这一次删掉的：
                       <span v-if="log.kind === 'orphan-object'" class="text-amber-700">
                         字节恒为 0 —— 端点只收到 key，删前没测大小，所以这张表答不出「释放了多少存储」
                       </span>
                     </p>
                     <ul class="space-y-1.5">
-                      <li v-for="(item, i) in purgeItems(log)" :key="i" class="text-[11px]">
+                      <li v-for="(item, i) in purgeItems(log)" :key="i" class="text-xs">
                         <span
                           v-if="item.key"
                           class="block truncate font-mono text-gray-700"

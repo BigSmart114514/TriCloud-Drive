@@ -207,7 +207,55 @@ describe('前缀放开：契约换成了什么', () => {
   })
 })
 
+/** 取出装着某段文字的那颗 <button> 本身。
+ *
+ *  不用 `slice(indexOf, +200)` 那种宽窗口：browse.vue 里「上一页」和「下一页」
+ *  上下挨着，窗口够宽就会跨到隔壁那颗上去，于是「上一页 按钮里有 icon」这条
+ *  断言可以被「下一页 的 icon」顶替。宽度收在标签内。
+ */
+function buttonOf(t, text) {
+  const at = t.indexOf(text)
+  assert.ok(at > 0, `模板里找不到「${text}」`)
+  const open = t.lastIndexOf('<button', at)
+  const close = t.indexOf('</button>', at)
+  assert.ok(open >= 0 && close > at, `「${text}」周围没有配平的 <button>`)
+  return t.slice(open, close + '</button>'.length)
+}
+
 describe('页面：/manage/browse', () => {
+  test('翻页与「上一级」都带 icon（bucket.vue 的按钮一律 icon + 文字）', () => {
+    // 全站其它按钮都是 icon + 文字：bucket.vue 的下载是
+    // `<ArrowDownTrayIcon /> 下载`，清理历史的展开是 ChevronRight/Down。
+    // 这三个翻页/回退按钮原来是纯文字，于是同一组按钮一半有一半没有 ——
+    // 这正是「割裂」的一部分。
+    const t = tpl()
+    assert.match(buttonOf(t, '上一页'), /<ChevronLeftIcon/, '上一页要 ChevronLeftIcon')
+    assert.match(buttonOf(t, '下一页'), /<ChevronRightIcon/, '下一页要 ChevronRightIcon')
+    assert.match(buttonOf(t, '上一级'), /<ArrowUpIcon/, '上一级要 ArrowUpIcon')
+
+    // 图标在行内还得真的被用上（template 里出现了不等于 script import 了）
+    const s = scr()
+    for (const name of ['ChevronLeftIcon', 'ChevronRightIcon', 'ArrowUpIcon']) {
+      assert.match(
+        s,
+        new RegExp(`${name}[,\\s]`),
+        `${name} 在模板里用了却没有 import`
+      )
+    }
+  })
+
+  test('下载按钮也带 icon（这一页最容易漏，因为它整页都是自绘）', () => {
+    // 锚点用 `downloadingKey === o.key` 而不是「下载」两个字 ——
+    // 「下载」在 <caption> 的说明文字里先出现，indexOf 会落到 caption 上，
+    // 然后 lastIndexOf('<button') 找的是一颗毫不相干的按钮。
+    // 同一个错我这轮犯了两次（上一条是宽窗口跨到隔壁那颗按钮）。
+    assert.match(
+      buttonOf(tpl(), 'downloadingKey === o.key'),
+      /<ArrowDownTrayIcon/,
+      '下载要 ArrowDownTrayIcon'
+    )
+  })
+
   test('页面存在，且是超管页的三件套（layout: false / NavBar / 客户端兜底）', () => {
     const t = tpl()
     const s = scr()
@@ -340,10 +388,34 @@ describe('页面：/manage/browse', () => {
       /v-if="page\s*&&\s*page\.error\b/,
       '必须显示 page.error（且带 page 非空保护 —— page 初始为 null）'
     )
+    // 措辞这条要**落在那条横幅的标题上**，不能拿整页去搜一个词 ——
+    // 页面上别处出现同样的词就能顶替掉它。
+    //
+    // 第一版用 `slice(at, at + 300)` 取窗口，而我手算的距离是 273，剩下的
+    // 27 个字符刚好不够放完标题标签再加一个字，测试红了 —— 一个纯粹因为我
+    // 算错了一个常数的失败。这里改成**按元素取**：从 v-if 往后找第一个
+    // `<p class="font-medium">`，把它的文字单独切出来。窗口宽度这个变量
+    // 整个消失了。
+    const t = tpl()
+    // 锚点用 `page && page.error` 而不是 `v-if="page && page.error"` ——
+    // 后者把收尾的引号也吃进锚点，于是 `&& page.error.length` 这种**语义完全
+    // 相同**的写法会让锚点找不到，测试报「没找到横幅」。变异扫描的 B 段把这条
+    // 报成了「守卫过紧」，而它其实是我的锚点脆。
+    const bannerAt = t.indexOf('page && page.error')
+    assert.ok(bannerAt > 0, '没找到列举失败的横幅')
+    const headAt = t.indexOf('<p class="font-medium">', bannerAt)
+    assert.ok(headAt > bannerAt, '横幅里没有标题段')
+    assert.ok(
+      headAt - bannerAt < 600,
+      `第一个 font-medium 段离横幅 ${headAt - bannerAt} 字符 —— 取到的是别处的标题`
+    )
+    const headEnd = t.indexOf('</p>', headAt)
+    assert.ok(headEnd > headAt, '横幅标题没有闭合')
+    const heading = t.slice(headAt + '<p class="font-medium">'.length, headEnd)
     assert.match(
-      tpl(),
-      /列举未能完成|不完整/,
-      '措辞要说清「没列完」，而不是让它读起来像「桶里就这些」'
+      heading,
+      /(没列全|不是全部|列不全|不完整)/,
+      `横幅标题要说清「没列全」，现在写的是「${heading}」`
     )
   })
 
