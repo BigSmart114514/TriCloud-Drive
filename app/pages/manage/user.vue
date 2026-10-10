@@ -121,17 +121,75 @@
             </form>
           </div>
 
-          <!-- 简要统计 -->
+          <!--
+            简要统计。
+
+            两个环的数据来自**已经在内存里的 users**：`/api/manage/listUsers`
+            早就返回了每个用户的 usedStorage / usedDownload，而且没有
+            LIMIT/OFFSET（全量）。所以这里不发第二个请求 —— 两份可能不一致的
+            数据源比慢一点更糟。
+
+            环会跟着上面的搜索框一起变。这不是新引入的不一致：面板里原有的
+            「用户总数」本来就来自同一个响应、同一个过滤。
+
+            配色由 assignColors 从**两个环的切片一起**分配，所以同一个用户在
+            两个环里是同一个颜色 —— 否则 BigSmart 在左边蓝、右边橙，一眼
+            扫过去像两个人。图例每个环一份，跟着自己的切片走。
+          -->
           <div class="bg-white shadow rounded-lg p-6">
-            <h3 class="text-lg font-medium text-gray-900 mb-4">概览</h3>
-            <dl class="space-y-3">
+            <div class="mb-4 flex items-baseline justify-between gap-3">
+              <h3 class="text-lg font-medium text-gray-900">概览</h3>
+              <span class="text-xs text-gray-500">
+                {{ loading ? '正在加载用户数据...' : `最近刷新：${lastRefreshed ? formatDateTime(lastRefreshed) : '—'}` }}
+              </span>
+            </div>
+
+            <div class="mb-5 flex flex-wrap items-end gap-x-6 gap-y-1">
               <div>
-                <dt class="text-sm font-medium text-gray-500">用户总数</dt>
-                <dd class="text-2xl font-semibold text-gray-900">{{ totalCount }}</dd>
+                <p class="text-sm font-medium text-gray-500">用户总数</p>
+                <p class="text-2xl font-semibold text-gray-900">{{ totalCount }}</p>
               </div>
-              <div v-if="loading" class="text-sm text-gray-500">正在加载用户数据...</div>
-              <div v-else class="text-sm text-gray-500">最近刷新：{{ lastRefreshed ? formatDateTime(lastRefreshed) : '—' }}</div>
-            </dl>
+              <!--
+                零值用户单独说一句，不进环。零值若进环，每个都「小于 2%」，
+                于是全被折进「其他」，得到一条「其他: 0 B，占 0%」—— 最蠢的一种
+                图例，而且它把「有 6 个用户在用」这件事整个藏起来了。
+              -->
+              <p v-if="storageDonut.zeroCount" class="pb-1 text-xs text-gray-500">
+                另有 {{ storageDonut.zeroCount }} 个用户没有用量
+              </p>
+            </div>
+
+            <div class="flex flex-wrap gap-8">
+              <div v-for="ring in rings" :key="ring.title" class="min-w-0">
+                <DonutChart
+                  :slices="ring.slices"
+                  :total="ring.total"
+                  :colors="chartColors"
+                  :title="ring.title"
+                />
+                <ul class="mt-3 min-w-[13rem] space-y-1 text-xs">
+                  <li
+                    v-for="s in ring.slices"
+                    :key="s.key"
+                    class="flex items-center gap-1.5"
+                  >
+                    <span
+                      class="h-2 w-2 shrink-0 rounded-sm"
+                      :style="{ backgroundColor: chartColors[s.key] }"
+                    />
+                    <span class="min-w-0 flex-1 truncate text-gray-600" :title="s.label">
+                      {{ s.label }}
+                    </span>
+                    <span class="shrink-0 tabular-nums text-gray-500">
+                      {{ formatFileSize(s.value) }}
+                    </span>
+                    <span class="w-9 shrink-0 text-right tabular-nums text-gray-400">
+                      {{ Math.round(s.share * 100) }}%
+                    </span>
+                  </li>
+                </ul>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -216,6 +274,8 @@ import { formatDateTime } from '~/utils/time'
 import { notify, notifyError, toMessage } from '~/utils/notify'
 import { askNewPassword } from '~/utils/password'
 import { formatBytes, parseBytes } from '~/utils/size'
+import { formatFileSize } from '~/utils/format'
+import { assignColors, buildDonut } from '~/utils/donut'
 import { fromDatetimeLocal, toDatetimeLocal } from '~/utils/datetimeLocal'
 import { PencilSquareIcon, ShieldCheckIcon, StarIcon } from '@heroicons/vue/24/outline'
 import UserEditDialog, { type DbUser } from '~/components/UserEditDialog.vue'
@@ -266,6 +326,38 @@ const changePassword = async (u: DbUser) => {
 }
 
 const users = ref<DbUser[]>([])
+
+/**
+ * 两个环的数据源，就是上面这份 users。
+ *
+ * `DbUser.usedStorage` 是 `number | string`（sqlite3 有些驱动把 INTEGER
+ * 返成字符串），所以一律 `Number(...) || 0` —— 而 0 值用户会被 buildDonut
+ * 排除在环之外，只留在 zeroCount 里。
+ *
+ * 用用户 **id** 当 key，不用名字：名字会重复，也会改。
+ */
+const donutItems = (valueOf: (u: DbUser) => number) =>
+  (users.value ?? []).map((u) => ({
+    key: String(u.id),
+    label: u.username || u.email || `#${u.id}`,
+    value: valueOf(u)
+  }))
+
+const storageDonut = computed(() => buildDonut(donutItems((u) => Number(u.usedStorage) || 0)))
+const downloadDonut = computed(() => buildDonut(donutItems((u) => Number(u.usedDownload) || 0)))
+
+/**
+ * 顺序固定为「存储、下载」，图例也按这个顺序从左到右，所以同一个用户在两个
+ * 环里拿到同一个颜色。
+ */
+const rings = computed(() => [
+  { title: '存储空间', ...storageDonut.value },
+  { title: '下载流量', ...downloadDonut.value }
+])
+
+/** 两个环**一起**分配颜色 —— 只传一个的话，下载环里靠前排名的用户会拿到自己的
+ *  颜色，同一个用户于是左右不同色。 */
+const chartColors = computed(() => assignColors(storageDonut.value.slices, downloadDonut.value.slices))
 const totalCount = ref(0)
 const lastRefreshed = ref<string | null>(null)
 
