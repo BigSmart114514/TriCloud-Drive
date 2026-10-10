@@ -22,10 +22,10 @@
       （a6e7336 那个说不清的 `useAuth is not defined` 是 **composable** 自动导入，
       机制与组件这条不同，别混为一谈。）
     -->
-    <AppNavbar fluid />
+    <AppNavbar />
 
     <header class="border-b border-gray-200 bg-white">
-      <div class="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
+      <div class="mx-auto flex max-w-7xl items-center gap-3 py-3 sm:px-6 lg:px-8">
         <div class="min-w-0 flex-1">
           <h1 class="flex items-center gap-1.5 text-base font-semibold text-gray-900">
             <CloudIcon class="h-5 w-5 shrink-0 text-gray-500" />
@@ -38,7 +38,7 @@
       </div>
     </header>
 
-    <main class="mx-auto max-w-6xl px-4 py-5">
+    <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
       <!-- 没配腾讯云密钥 -->
       <div
         v-if="!cosConfigured"

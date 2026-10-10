@@ -5,25 +5,23 @@
       就拦掉非超管），顶栏自己放 AppNavbar —— 本项目没有 app/layouts/，
       Navbar 不由 layout 提供。理由与踩过的坑见 bucket.vue 里那段注释。
     -->
-    <AppNavbar fluid />
+    <AppNavbar />
 
     <header class="border-b border-gray-200 bg-white">
-      <div class="mx-auto flex max-w-6xl items-center gap-3 px-4 py-3">
+      <div class="mx-auto flex max-w-7xl items-center gap-3 py-3 sm:px-6 lg:px-8">
         <div class="min-w-0 flex-1">
           <h1 class="flex items-center gap-1.5 text-base font-semibold text-gray-900">
             <FolderOpenIcon class="h-5 w-5 shrink-0 text-gray-500" />
             对象浏览
           </h1>
           <p class="mt-0.5 text-xs text-gray-500">
-            直接翻对象存储里的真实对象。只读 —— 删除仍然只在
-            <NuxtLink to="/manage/bucket" class="underline underline-offset-2 hover:text-gray-700">存储桶管理</NuxtLink>
-            的对账结果里做。
+            直接翻对象存储里的真实对象。
           </p>
         </div>
       </div>
     </header>
 
-    <main class="mx-auto max-w-6xl px-4 py-5">
+    <main class="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
       <!-- 没配腾讯云密钥 -->
       <div
         v-if="page && !page.cosConfigured"
