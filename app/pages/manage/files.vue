@@ -130,7 +130,7 @@ await fetchUsers()
 <template>
   <!-- 整页铺满：上至 NavBar，下至屏幕底部；内容区不产生页面级滚动 -->
   <div class="flex h-[100dvh] flex-col overflow-hidden bg-gray-50">
-    <AppNavbar fluid />
+    <AppNavbar />
 
     <div class="flex min-h-0 flex-1">
       <SidePanelLayout v-model:open="drawerOpen" aria-label="用户列表">

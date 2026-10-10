@@ -12,7 +12,7 @@
     永远不成立，是一段死代码。现在按身份 × 有无链接展开成四个真实分支。
   -->
   <div v-if="showShell" class="flex h-[100dvh] flex-col overflow-hidden bg-gray-50">
-    <AppNavbar fluid>
+    <AppNavbar>
       <template #extra>
         <NuxtLink
           to="/services/change-password"

@@ -1,31 +1,29 @@
-// 页面的「外壳」口径：导航栏的宽度模式必须与页面内容一致。
+// 页面的「外壳」口径：顶栏只有一种宽度，内容容器只有一种口径。
 //
 // ## 实际发生过什么
 //
-// manage/bucket.vue 用 `<AppNavbar fluid />`（导航内容通栏铺到视口两边）配一个
-// `max-w-6xl` 的居中内容容器。于是两者的左边缘对不上：从「文件总览」点进
-// 「存储桶管理」，导航里的 logo 与菜单是贴边的，而下面的标题与表格是内缩的。
+// AppNavbar 有一个 `fluid` prop，在两种宽度之间切换：
 //
-// 加上 `max-w-6xl` 这个宽度本身——全仓库只有 bucket 与 browse 在用，其余是
-// 7xl（accounts / index / user）、5xl（shares，刻意更窄）、md（改密码，单卡）。
-// browse.vue 是照着 bucket 抄的，等于把同一处分歧复制了一份。
+//   默认    max-w-7xl mx-auto px-4 sm:px-6 lg:px-8   ← 内容居中，两侧留白
+//   fluid   w-full px-3 sm:px-4                      ← 通栏，贴到视口两边
 //
-// ## 为什么写成「模式必须一致」而不是「都用 7xl」
+// 它是 e834f74（做侧栏外壳那次）加进来的，为的是让整页铺满的页面能有通栏顶栏；
+// 而默认值留在了旧样式上，于是另外五个页面一直没迁过去。结果是切换页面时
+// 顶栏宽度突变 —— logo 从视口边缘跳到中间，再跳回来。
 //
-// 因为两种组合都成立，只是不该混用：
+// 两种模式**不能**并存的原因不是审美，是可行性的其中一个方向做不到：
+// 首页与文件总览是侧栏 + 文件列表的整页铺满应用外壳，把它们的顶栏改成居中
+// 等于在通栏界面上方悬一条小岛。所以 2026-10-10 定为**永远通栏**，prop 删除 ——
+// 让「两种样式」这件事在结构上无法再被问出来。
 //
-//   默认导航栏（内容 max-w-7xl 居中）  +  居中内容      ← accounts / user / shares
-//   fluid 导航栏                        +  整页铺满    ← files（SidePanelLayout）
+// 另外 manage/bucket.vue 与 manage/browse.vue 自创过 `max-w-6xl`（全仓库只有
+// 这两页在用），已一并归到项目口径。那两页同时还把 fluid 顶栏配了居中内容，
+// 导航与内容的左边缘对不上 —— 见下面「没有页面自创宽度口径」。
 //
-// index.vue 两种都有：它按分支选 —— 有侧栏时 fluid，没有侧栏时默认。
-// 所以规则是「同页之内不得把 fluid 导航栏与 max-w-* 内容配在一起」，
-// 多分支的页面则单独确认它确实整页铺满。
-//
-// ## 为什么不能用源码断言
+// ## 为什么只能用源码断言
 //
 // 同 share-bulk-wiring.test.mjs 开头那段：没有 DOM 环境。这里能断言的是
-// **类名口径**（「内容容器有没有被约束」「导航栏是不是 fluid」），不是渲染
-// 出来的像素。好不好看仍然得在浏览器里看一眼。
+// **类名口径**，不是渲染出来的像素。好不好看仍然得在浏览器里看一眼。
 import { test, describe } from 'node:test'
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
@@ -35,6 +33,7 @@ import { parse } from '@vue/compiler-sfc'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const PAGES_DIR = join(root, 'app/pages')
+const NAVBAR = join(root, 'app/components/AppNavbar.vue')
 
 function codeOnly(src) {
   return src
@@ -55,35 +54,38 @@ function walk(dir) {
   return out
 }
 
-function templateOf(p) {
-  const { descriptor, errors } = parse(readFileSync(p, 'utf8'), { filename: p })
-  assert.equal(errors?.length ?? 0, 0, `${p} SFC 解析出错 —— 测试的输入本身有问题`)
+/** 收绝对路径。页面扫描给的是 walk() 的绝对路径，AppNavbar 给的是 join 出来的 ——
+ *  混用两种基准过一次，报的是 ENOENT 加一个看着莫名其妙的路径。 */
+function templateOf(absPath) {
+  const { descriptor, errors } = parse(readFileSync(absPath, 'utf8'), { filename: absPath })
+  assert.equal(errors?.length ?? 0, 0, `${absPath} SFC 解析出错 —— 测试的输入本身有问题`)
   return codeOnly(descriptor.template?.content ?? '')
+}
+
+function scriptOf(absPath) {
+  const { descriptor, errors } = parse(readFileSync(absPath, 'utf8'), { filename: absPath })
+  assert.equal(errors?.length ?? 0, 0, `${absPath} SFC 解析出错 —— 测试的输入本身有问题`)
+  return codeOnly(descriptor.scriptSetup?.content ?? '')
 }
 
 /**
  * 整页铺满：内容根不设 max-w，靠侧栏或视口高度撑满。
  *
- * 刻意**不含** `min-h-screen`：bucket/browse 也是 min-h-screen，但它们的内容
- * 是有宽度上限的居中容器。把 min-h-screen 算成「铺满」的话，那两页就直接
- * 蒙混过关了 —— 这条判据必须是它蒙混不过去的那条。
+ * 刻意**不含** `min-h-screen`：manage/bucket 与 manage/browse 也是
+ * min-h-screen，但它们的内容是有宽度上限的居中容器。把 min-h-screen 算成
+ * 「铺满」的话那两页会蒙混过关 —— 这条判据必须是它蒙混不过去的那条。
  */
 const FULL_BLEED_RE = /SidePanelLayout|h-\[100dvh\]|h-screen|flex-col overflow-hidden/
 
-/** 项目里「宽的居中容器」统一口径。三处（accounts / index / user）逐字相同。
- *  下面是按 token 断言的，所以这里只作文档用途 —— 见最后一个 describe 的注释。 */
-const CENTERED_RECIPE = 'max-w-7xl mx-auto py-6 sm:px-6 lg:px-8'
-
 const pages = walk(PAGES_DIR)
-  .map((p) => {
-    const t = templateOf(p)
-    const tags = [...t.matchAll(/<AppNavbar\b([^>]*)>/g)].map((m) => m[1])
+  .map((abs) => {
+    const t = templateOf(abs)
     return {
-      p: relative(PAGES_DIR, p),
+      abs,
+      p: relative(PAGES_DIR, abs),
       t,
-      hasNavbar: tags.length > 0,
-      fluid: tags.filter((a) => /\bfluid\b/.test(a)).length,
-      plain: tags.filter((a) => !/\bfluid\b/.test(a)).length,
+      hasNavbar: /<AppNavbar\b/.test(t),
+      passesFluid: /<AppNavbar\b[^>]*\bfluid\b/.test(t),
       maxWs: [...new Set([...t.matchAll(/max-w-(\w+)/g)].map((m) => m[1]))],
       fullBleed: FULL_BLEED_RE.test(t)
     }
@@ -95,50 +97,81 @@ const BUCKETISH = ['manage/bucket.vue', 'manage/browse.vue']
 describe('扫描自检（防恒真）', () => {
   test('扫到页面了（目录或过滤写错就会扫 0 个而全绿）', () => {
     assert.ok(pages.length >= 7, `app/pages 下只扫到 ${pages.length} 个带 AppNavbar 的页面`)
-    assert.ok(
-      pages.some((x) => x.fluid > 0) && pages.some((x) => x.plain > 0),
-      '两种导航栏模式一个都没扫到 —— 下面的「模式必须一致」会恒真'
-    )
   })
 
-  test('两种模式确实都在用（规则才有意义）', () => {
-    const fluid = pages.filter((x) => x.plain === 0).map((x) => x.p)
-    const plain = pages.filter((x) => x.fluid === 0).map((x) => x.p)
-    assert.ok(fluid.length > 0, '没有任何页面用 fluid 导航栏')
-    assert.ok(plain.length > 0, '没有任何页面用默认导航栏')
+  test('两种内容形态都在（所以顶栏的统一才需要被钉）', () => {
+    // 全站顶栏统一成通栏之后，内容**仍然**有两种形态（通栏外壳 / 居中 7xl）。
+    // 若哪天全站都变成同一种，这条自检会报出来，届时下面的断言需要重新想。
+    assert.ok(pages.some((x) => x.fullBleed), '没有任何整页铺满的页面')
+    assert.ok(pages.some((x) => !x.fullBleed && x.maxWs.length > 0), '没有任何居中内容的页面')
   })
 })
 
-describe('导航栏的宽度模式必须与页面内容一致', () => {
-  for (const x of pages) {
-    const multi = x.fluid > 0 && x.plain > 0
-    test(`${x.p}`, () => {
-      if (multi) {
-        // 多分支页面（index.vue：有侧栏用 fluid，没有用默认）。规则对它是
-        // 「两种模式都出现」，只要求它确实整页铺满。
-        assert.ok(
-          x.fullBleed,
-          `${x.p} 两种导航栏模式都有，却没有整页铺满的结构 —— ` +
-            `fluid 那条分支的内容会与导航左边缘对不上`
-        )
-        return
-      }
-      const constrained = x.maxWs.length > 0
-      if (x.fluid > 0) {
-        assert.ok(
-          !constrained,
-          `${x.p} 用 fluid 导航栏（内容通栏贴边）却把内容限制在 max-w-${x.maxWs.join('/')} —— ` +
-            `导航的内容边缘与页面内容的边缘对不上，切换菜单项时能看出来。` +
-            `要么内容整页铺满，要么导航栏改回默认（内容居中）`
-        )
-      } else {
-        assert.ok(
-          constrained || x.fullBleed,
-          `${x.p} 用默认导航栏（内容 7xl 居中）却没有居中内容容器 —— 导航是居中的而内容是通栏的`
-        )
-      }
-    })
-  }
+describe('顶栏只有一种宽度：通栏', () => {
+  test('AppNavbar 的内层容器是静态类，且通栏', () => {
+    const t = templateOf(NAVBAR)
+    const nav = t.slice(t.indexOf('<nav'), t.indexOf('</nav>'))
+
+    // 关键的一条：**静态** class，不是 :class 绑定的。
+    // 两种样式的根源就是那一句 `:class="fluid ? … : …"`；只要它还在，
+    // 「两种宽度」就还能被重新引入 —— 哪怕所有调用点都不传 fluid。
+    const firstDiv = /<div\b([^>]*)>/.exec(nav)
+    assert.ok(firstDiv, 'nav 里没有 div —— 切法变了，这条要跟着改')
+    assert.doesNotMatch(
+      firstDiv[1],
+      /:class/,
+      'nav 的内层容器不能用 :class 切宽度 —— 那是两种样式的根源。' +
+        '要通栏就直接写死，通栏是唯一的口径'
+    )
+
+    const attr = /class="([^"]*)"/.exec(firstDiv[1])
+    assert.ok(attr, 'nav 的内层容器没有 class 属性')
+    const tokens = attr[1].split(/\s+/)
+    assert.ok(tokens.includes('w-full'), `顶栏内容必须通栏（w-full），现有：${attr[1]}`)
+
+    // 有 max-w-* 就是「居中那种」回来了
+    const ws = tokens.filter((t2) => t2.startsWith('max-w-'))
+    assert.deepEqual(ws, [], `顶栏内层不该有宽度上限：${ws.join(' ')}`)
+  })
+
+  test('fluid prop 删干净了', () => {
+    assert.doesNotMatch(
+      scriptOf(NAVBAR),
+      /fluid/,
+      'fluid 必须删干净 —— 留着 prop 就留着「两种样式」这个选项'
+    )
+  })
+
+  test('没有任何页面再给顶栏传 fluid', () => {
+    // prop 删了但模板还在传的话，Vue 会把它当 fallthrough attribute 落到
+    // <nav> 上：界面上看不出差别，而源码里已经是一句骗人的话。
+    for (const x of pages) {
+      assert.ok(
+        !x.passesFluid,
+        `${x.p} 还在给 <AppNavbar> 传 fluid —— prop 已删除，这只是落到 <nav> 上的无意义属性`
+      )
+    }
+  })
+
+  test('带 #extra 插槽的两处顶栏都写成了不带 prop 的 <AppNavbar>', () => {
+    // 第一版这条是**假绿**：写成 `/<AppNavbar>\s*<template #extra>/`，而 index.vue
+    // 有两处 #extra 插槽（第 15 行带 fluid、第 145 行不带），于是它匹配上了
+    // 第二处，绿了 —— 而它本该红。index.vue 有两个 v-if 分支各放一条顶栏，
+    // 「只改其中一处」是这个页面最容易犯的错。
+    //
+    // 所以改成配对计数：插槽有几处，不带 prop 的写法就得有几处。
+    const x = pages.find((p) => p.p === 'index.vue')
+    assert.ok(x, '没扫到 index.vue')
+    const slots = (x.t.match(/<template #extra>/g) || []).length
+    assert.ok(slots >= 2, `index.vue 的 #extra 插槽数变成 ${slots} 了 —— 这条要跟着改，否则是空断言`)
+    const bare = (x.t.match(/<AppNavbar>\s*<template #extra>/g) || []).length
+    assert.equal(
+      bare,
+      slots,
+      `index.vue 有 ${slots} 处 #extra 插槽，却只有 ${bare} 处写成了不带 prop 的 <AppNavbar> —— ` +
+        '其中一处还带着 fluid。它不会被单独指出来，而首页顶栏会因此变居中'
+    )
+  })
 })
 
 describe('没有页面自创宽度口径', () => {
@@ -160,14 +193,13 @@ describe('没有页面自创宽度口径', () => {
       for (const need of NEEDED) {
         assert.ok(tokens.includes(need), `${rel} 的 <main> 缺 ${need}（现有：${main[1]}）`)
       }
-      // 宽度上限有且只有一个 —— 两个 max-w-* 同时挂着会互相打架
-      const ws = tokens.filter((t) => t.startsWith('max-w-'))
+      const ws = tokens.filter((t2) => t2.startsWith('max-w-'))
       assert.deepEqual(ws, ['max-w-7xl'], `${rel} 的 <main> 上有多个宽度上限：${ws.join(' ')}`)
     }
   })
 
   test('全仓库没有 max-w-6xl（它就是 bucket 自创的那个宽度）', () => {
-    // 正向地钉住「宽容器只有一种口径」之后，再从反面确认一次：
+    // 正向钉住「宽容器只有一种口径」之后，再从反面确认一次：
     // 6xl 出现过一次，就说明又有人自己定了一个宽度。
     for (const x of pages) {
       assert.ok(
@@ -182,7 +214,6 @@ describe('没有页面自创宽度口径', () => {
     for (const rel of BUCKETISH) {
       const x = pages.find((p) => p.p === rel)
       assert.ok(x, `没扫到 ${rel}`)
-      // 标题在 <header> 的内层 div，表格在 <main>。两个宽度上限必须一致。
       const band = /<header[\s\S]*?<div class="([^"]*max-w-\w+[^"]*)"/.exec(x.t)
       assert.ok(band, `${rel} 的标题带里没找到带 max-w 的内层容器`)
       const main = /<main class="([^"]*)"/.exec(x.t)

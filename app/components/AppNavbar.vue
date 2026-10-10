@@ -2,7 +2,27 @@
 <template>
   <!-- border-b 是必须的：没有这条细线，导航栏会和下面的内容糊成一片 -->
   <nav data-liquid class="shrink-0 border-b border-gray-200 bg-white shadow-sm">
-    <div :class="fluid ? 'w-full px-3 sm:px-4' : 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8'">
+    <!--
+      **通栏，两侧到底，且是唯一的口径。**
+
+      这里原来有一个 `fluid` prop 在两种宽度之间切：
+        fluid   w-full px-3 sm:px-4                     通栏
+        默认    max-w-7xl mx-auto px-4 sm:px-6 lg:px-8  居中，两侧留白
+
+      它是 e834f74（做侧栏外壳那次）加进来的，为的是让整页铺满的页面能有通栏
+      顶栏；而默认值留在了旧样式上，于是另外五个页面一直没迁过去。表现出来的
+      症状是切换页面时顶栏宽度突变 —— logo 从视口边缘跳到中间，再跳回来。
+
+      不能反过来统一成「居中」：首页与文件总览是侧栏 + 文件列表的整页铺满
+      应用外壳，把它们的顶栏改成居中，等于在通栏界面上方悬一条小岛。
+
+      所以是删 prop，而不是改默认值。留着 prop 就留着「两种样式」这个选项，
+      而这个选项只会在有人赶时间的时候被用上。
+      tests/page-shell-consistency.test.mjs 从三个方向钉它：内层容器必须是
+      静态 class（不能用 :class 切）、必须 w-full、且不许有 max-w-*；
+      另外所有调用点都不许再传 fluid。
+    -->
+    <div class="w-full px-3 sm:px-4">
       <div class="flex justify-between h-16">
         <div class="flex items-center min-w-0">
           <!-- /manage 下的页面自动带「管理」徽标，不用每个页面各写一遍 -->
@@ -132,8 +152,8 @@ import {
 import UiManageMenu from '~/components/UiManageMenu.vue'
 import UiSettingsMenu from '~/components/UiSettingsMenu.vue'
 
-const props = withDefaults(defineProps<{ fluid?: boolean }>(), { fluid: false })
-const fluid = computed(() => props.fluid)
+// 没有 fluid prop：顶栏只有通栏一种口径，理由见模板里那段注释。
+// 要加第二种宽度之前，先读那段注释 —— 它写了为什么「反过来统一成居中」不可行。
 
 const route = useRoute()
 const isManageArea = computed(() => route.path === '/manage' || route.path.startsWith('/manage/'))
