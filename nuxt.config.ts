@@ -33,9 +33,26 @@ export default defineNuxtConfig({
         }
       }
     },
-    externals: {
-      inline: ['jsonwebtoken', 'semver']
-    },
+    // 这里原来有 externals: { inline: ['jsonwebtoken', 'semver'] }，2026-10-11 已删除。
+    //
+    // 删掉 jsonwebtoken 的理由不是「顺手清理」，是它把生产打挂了。内联之后该包
+    // 自己的 CJS 依赖不会被一起内联，而是留成裸 ESM 命名空间导入：
+    //
+    //     import * as lodash from 'lodash.includes'
+    //     const includes = getDefaultExportFromNamespaceIfNotNamed(lodash)
+    //
+    // 那个 helper（unenv 生成）只在命名空间**恰好有 1 个 key** 时才解包 default，
+    // 而 Node 新版本给 CJS 的命名空间是 2 个 key（default 与 module.exports）。
+    // 于是 includes 变成一个对象而不是函数，产物在**模块求值期**就炸：
+    //
+    //     TypeError: includes.bind is not a function
+    //
+    // 走默认的 external 就没有这一层：运行时原生 require()，命名空间互操作根本不
+    // 参与，对所有 Node 版本都成立。测试见 tests/nitro-bundling.test.mjs。
+    //
+    // 顺带一提，这不是任何一次提交引入的：上一次跑得好好的生产构建（15478ec）
+    // 已经带着同样的 inline，package.json 与这段配置在这 39 个提交里零变化，
+    // 变的只有服务器上的 Node 版本。
     esbuild: {
       options: {
         target: 'es2020'
