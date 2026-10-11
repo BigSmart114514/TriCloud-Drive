@@ -27,6 +27,7 @@ const {
   polarToCartesian,
   sliceAngles,
   assignColors,
+  toDonutItems,
   DONUT_PALETTE,
   OTHERS_COLOR,
   OTHERS_KEY,
@@ -185,6 +186,74 @@ describe('端到端：真实数据 → 弧的角度确实等于占比', () => {
     // 零值用户被排除之后，剩下单切片占满是常态，不是异常
     const many = [{ key: 'a', label: 'a', value: 42 }, ...PROD.slice(2).map((u) => ({ key: u.key, label: u.label, value: 0 }))]
     assert.equal(buildDonut(many).slices.length, 1)
+  })
+})
+
+describe('toDonutItems：页面的数据形状 → 环的输入', () => {
+  // ## 这组是补上一次的洞
+  //
+  // 上一轮环画出来是空的：7 个用户、两个空圈、提示「另有 7 个用户没有用量」。
+  // 而开发库里明明有三个用户有量。根因是 user.vue 存的是 `formatBytes(...)`
+  // 出来的**显示字符串**（"9.37 KB"，给编辑弹窗的输入框用），而我的环算的是
+  // `Number(u.usedStorage)` → NaN → `NaN || 0` → 0。
+  //
+  // 为什么那一整轮测试都没抓到：它们断言的都是**名字与调用形式** ——
+  // 「源码里出现过 usedStorage」「调了 buildDonut」。而 `DbUser.usedStorage`
+  // 的类型是 `number | string`，`Number(x || 0)` 对两者都通过类型检查，
+  // tsc 也就没话说。**提到名字不等于值对。**
+  //
+  // 所以这条通路必须有**能执行**的测试，而它只能是纯函数 —— 项目没有 DOM 环境。
+
+  const u = (over) => ({ id: 1, username: 'a', usedStorageBytes: 100, usedDownloadBytes: 50, ...over })
+
+  test('正常的数值直接用（数字与数字字符串都算）', () => {
+    const r = toDonutItems([u({ id: 1 }), u({ id: 2, usedStorageBytes: '200' })], 'usedStorageBytes')
+    assert.deepEqual(r.items.map((i) => i.value), [100, 200])
+    assert.deepEqual(r.unreadable, [], '不该有读不出来的')
+  })
+
+  test('显示字符串（"9.37 KB"）**不算 0**，而是进 unreadable', () => {
+    // 这就是上一轮那个 bug 的形状。若这里返回 0，界面上就是「没有用量」，
+    // 而真相是「读错了」—— 两者在屏幕上无法区分。
+    const r = toDonutItems([u({ usedStorageBytes: '9.37 KB' })], 'usedStorageBytes')
+    assert.equal(r.items[0].value, 0, '读不出时这一项只能是 0（画不出扇形）')
+    assert.deepEqual(r.unreadable, ['a'], '但必须被记下来报给界面')
+  })
+
+  test('null / undefined / 空串算「没有用量」，不是「读不出来」', () => {
+    // 0 是一个合法值；「字段根本没来」是另一回事。两者不该混。
+    for (const v of [null, undefined, '']) {
+      const r = toDonutItems([u({ usedStorageBytes: v })], 'usedStorageBytes')
+      assert.equal(r.items[0].value, 0, `${JSON.stringify(v)} 应算 0`)
+      assert.deepEqual(r.unreadable, [], `${JSON.stringify(v)} 不该算读不出来`)
+    }
+  })
+
+  test('负值夹到 0，不画反向扇形', () => {
+    const r = toDonutItems([u({ usedStorageBytes: -5 })], 'usedStorageBytes')
+    assert.equal(r.items[0].value, 0)
+    assert.deepEqual(r.unreadable, [])
+  })
+
+  test('key 用 id、label 有三级兜底', () => {
+    const r = toDonutItems(
+      [u({ id: 7, username: '有名' }), u({ id: 8, username: '', email: 'e@x' }), u({ id: 9, username: '', email: '' })],
+      'usedStorageBytes'
+    )
+    assert.deepEqual(r.items.map((i) => i.key), ['7', '8', '9'])
+    assert.deepEqual(r.items.map((i) => i.label), ['有名', 'e@x', '#9'])
+  })
+
+  test('下载与存储是两个独立字段，不能串', () => {
+    const rows = [u({ usedStorageBytes: 100, usedDownloadBytes: 7 })]
+    assert.equal(toDonutItems(rows, 'usedStorageBytes').items[0].value, 100)
+    assert.equal(toDonutItems(rows, 'usedDownloadBytes').items[0].value, 7)
+  })
+
+  test('空数组、null、undefined 都安全（兜底在函数里，不在每个调用点）', () => {
+    assert.deepEqual(toDonutItems([], 'usedStorageBytes'), { items: [], unreadable: [] })
+    assert.deepEqual(toDonutItems(null, 'usedStorageBytes'), { items: [], unreadable: [] })
+    assert.deepEqual(toDonutItems(undefined, 'usedStorageBytes'), { items: [], unreadable: [] })
   })
 })
 

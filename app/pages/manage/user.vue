@@ -157,6 +157,15 @@
               <p v-if="storageDonut.zeroCount" class="pb-1 text-xs text-gray-500">
                 另有 {{ storageDonut.zeroCount }} 个用户没有用量
               </p>
+              <!--
+                读不出来的必须喊出来。上一轮这张图是空的、提示「另有 7 个用户没有
+                用量」，而真相是「一个都没读出来」—— 两句话在屏幕上一模一样，
+                所以这次让它自己说。
+              -->
+              <p v-if="unreadableUsage.length" class="pb-1 text-xs text-amber-700">
+                有 {{ unreadableUsage.length }} 个用户的用量读不出数字，未计入
+                （{{ unreadableUsage.join('、') }}）
+              </p>
             </div>
 
             <div class="flex flex-wrap gap-8">
@@ -275,7 +284,7 @@ import { notify, notifyError, toMessage } from '~/utils/notify'
 import { askNewPassword } from '~/utils/password'
 import { formatBytes, parseBytes } from '~/utils/size'
 import { formatFileSize } from '~/utils/format'
-import { assignColors, buildDonut } from '~/utils/donut'
+import { assignColors, buildDonut, toDonutItems } from '~/utils/donut'
 import { fromDatetimeLocal, toDatetimeLocal } from '~/utils/datetimeLocal'
 import { PencilSquareIcon, ShieldCheckIcon, StarIcon } from '@heroicons/vue/24/outline'
 import UserEditDialog, { type DbUser } from '~/components/UserEditDialog.vue'
@@ -330,21 +339,32 @@ const users = ref<DbUser[]>([])
 /**
  * 两个环的数据源，就是上面这份 users。
  *
- * `DbUser.usedStorage` 是 `number | string`（sqlite3 有些驱动把 INTEGER
- * 返成字符串），所以一律 `Number(...) || 0` —— 而 0 值用户会被 buildDonut
- * 排除在环之外，只留在 zeroCount 里。
+ * 读的是 **usedStorageBytes / usedDownloadBytes** 这两个数值字段，不是
+ * `usedStorage`。后者在下面 fetchUsers 里被 `formatBytes` 覆盖成了显示字符串
+ * （"9.37 KB"）—— 那是给 UserEditDialog 的「已使用」输入框用的，删不得。
+ * 而环需要字节：`Number("9.37 KB")` 是 NaN，`NaN || 0` 就是 0，于是整张图
+ * 画成两个空圈 + 「另有 N 个用户没有用量」，而真相是「读错了」。
  *
- * 用用户 **id** 当 key，不用名字：名字会重复，也会改。
+ * 数值字段在 fetchUsers 里、**格式化之前**取好，格式化的结果一个字节都不准
+ * （formatBytes 会四舍五入：9598 → "9.37 KB"，再 parse 回来是 9594.88）。
  */
-const donutItems = (valueOf: (u: DbUser) => number) =>
-  (users.value ?? []).map((u) => ({
-    key: String(u.id),
-    label: u.username || u.email || `#${u.id}`,
-    value: valueOf(u)
-  }))
+const storageDonut = computed(() =>
+  buildDonut(toDonutItems(users.value as never, 'usedStorageBytes').items)
+)
+const downloadDonut = computed(() =>
+  buildDonut(toDonutItems(users.value as never, 'usedDownloadBytes').items)
+)
 
-const storageDonut = computed(() => buildDonut(donutItems((u) => Number(u.usedStorage) || 0)))
-const downloadDonut = computed(() => buildDonut(donutItems((u) => Number(u.usedDownload) || 0)))
+/**
+ * 读不出数字的用户名。两个环都要看，因为两个字段可能只有一个坏了 ——
+ * 那种情况下只报一次就够了，所以取并集。
+ */
+const unreadableUsage = computed(() => [
+  ...new Set([
+    ...toDonutItems(users.value as never, 'usedStorageBytes').unreadable,
+    ...toDonutItems(users.value as never, 'usedDownloadBytes').unreadable
+  ])
+])
 
 /**
  * 顺序固定为「存储、下载」，图例也按这个顺序从左到右，所以同一个用户在两个
@@ -467,6 +487,17 @@ const { loading, reload: fetchUsers } = useAsyncResource(async () => {
     ...u,
     IsAdmin: !!u.IsAdmin,
     IsSuperAdmin: !!u.IsSuperAdmin,
+    // 数值字段必须在下面四行 formatBytes **之前**取好。
+    //
+    // 下面四个字段是显示字符串，UserEditDialog 的「已使用」输入框直接 v-model
+    // 绑它们，所以不能改回数字。但环需要字节，而
+    // `parseBytes(formatBytes(n))` 会丢精度（9598 → "9.37 KB" → 9594.88），
+    // 所以只能在这里、格式化之前留一份原值。
+    //
+    // 第一版没有这个字段，环去读格式化后的 `usedStorage`，
+    // Number("9.37 KB") = NaN → 0 → 两个空圈。
+    usedStorageBytes: Number(u.usedStorage ?? 0) || 0,
+    usedDownloadBytes: Number(u.usedDownload ?? 0) || 0,
     usedStorage: formatBytes(Number(u.usedStorage ?? 0)),
     maxStorage: formatBytes(Number(u.maxStorage ?? 0)),
     usedDownload: formatBytes(Number(u.usedDownload ?? 0)),

@@ -142,6 +142,54 @@ describe('DonutChart 本身的几处硬约束', () => {
   })
 })
 
+describe('环读的是数值，不是页面上那个显示字符串', () => {
+  // 这一组是上一轮整批测试漏掉的那个 bug 的直接守卫。
+  //
+  // user.vue 存进 users 的是 `formatBytes(...)` 的显示字符串（"9.37 KB"）——
+  // 那是给 UserEditDialog 的「已使用」输入框用的（`:show-used="true"` 且
+  // used-read-only 默认 false），**删不得**。而环需要字节。
+  // 于是必须另有一个在格式化之前取好的数值字段。
+  //
+  // 第一版的断言只有一句「源码里出现过 usedStorage」—— 而那正是坏掉的地方。
+  // 提到名字不等于值对。
+  test('环有自己的数值字段，且它在 formatBytes 之前从 raw 响应取', () => {
+    const s = page().s
+    assert.match(s, /usedStorageBytes/, '必须有数值字段')
+    assert.match(s, /usedDownloadBytes/, '下载同理')
+    const at = s.indexOf('usedStorageBytes:')
+    assert.ok(at > 0, '找不到 usedStorageBytes 的赋值')
+    const line = s.slice(at, at + 120).split('\n')[0]
+    assert.match(line, /Number\(/, `必须是从 raw 响应取数字，实际：${line}`)
+    assert.doesNotMatch(line, /formatBytes/, `不能取 formatBytes 的结果，实际：${line}`)
+  })
+
+  test('环走 toDonutItems，且传的是**数值字段**', () => {
+    // 直接调 buildDonut 就绕过了「值对不对」这一段 —— 上一次就是这么绕过去的。
+    const s = page().s
+    assert.match(s, /toDonutItems\(/, '必须经 toDonutItems，它把读不出来的值报出来')
+    // 光断言「出现了 toDonutItems」不够：把参数换成 'usedStorage'（那个显示
+    // 字符串）**同样**是调用了 toDonutItems，而环照样全零。要害是**字段名**。
+    assert.match(s, /toDonutItems\([^)]*'usedStorageBytes'/, "存储环必须传 'usedStorageBytes'")
+    assert.match(s, /toDonutItems\([^)]*'usedDownloadBytes'/, "下载环必须传 'usedDownloadBytes'")
+    // 模式带收尾引号，所以 'usedStorageBytes' 不会被这条误伤
+    assert.doesNotMatch(
+      s,
+      /toDonutItems\([^)]*'usedStorage'/,
+      "不能传格式化后的 'usedStorage' —— 它是 \"9.37 KB\" 这种显示字符串"
+    )
+    assert.doesNotMatch(
+      s,
+      /Number\(u\.usedStorage\)/,
+      '不能再对显示字符串用 Number() —— Number("9.37 KB") 是 NaN，而 NaN || 0 就是 0'
+    )
+  })
+
+  test('读不出来的用量要在界面上说出来', () => {
+    assert.match(page().t, /unreadable/, '模板要读 unreadable')
+    assert.match(page().t, /读不出/, '界面上要有「读不出」这句话')
+  })
+})
+
 describe('概览面板：rings 恰好两个', () => {
   test('图例跟着各自的环（同一份 colors 让同用户在两个环里同色）', () => {
     const t = page().t
@@ -186,7 +234,10 @@ describe('概览面板：数据来源不新增接口', () => {
 
   test('空/脏数据不会让环崩掉（total 为 0 是常态，不是异常）', () => {
     const s = page().s
-    assert.match(s, /\?\? \[\]/, 'users 缺失时要有兜底空数组')
+    // 兜底在 toDonutItems 里（它接受 nullish），不在调用点 —— `users.value`
+    // 初始化就是 []、赋值处又是 `resp.users || []`，所以调用点再加 `?? []`
+    // 是不可达的防御代码。要那层兜底，测它自己那条（donut-utils 里）。
     assert.match(s, /buildDonut\(/, '必须走 buildDonut（它处理了 0 与负值）')
+    assert.match(s, /toDonutItems\(/, '取值必须走 toDonutItems（它处理了 nullish 与非数字）')
   })
 })

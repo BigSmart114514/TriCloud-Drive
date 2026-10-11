@@ -32,6 +32,68 @@ export interface DonutItem {
   value: number
 }
 
+/** toDonutItems 吃的就是用户管理页 users 数组里的元素 */
+export interface UsageSource {
+  id: number | string
+  username?: string | null
+  email?: string | null
+  usedStorageBytes?: number | string | null
+  usedDownloadBytes?: number | string | null
+}
+
+/**
+ * 页面的数据形状 → 环的输入。**这一段以前没有测试，于是环画出来是空的。**
+ *
+ * 用户管理页把 `usedStorage` 存成的是 `formatBytes(...)` 的显示字符串
+ * （"9.37 KB"）—— 那是有用的：UserEditDialog 的「已使用」输入框要的就是它
+ * （`:show-used="true"` 且 used-read-only 默认 false）。所以那个字段不能改回数字。
+ *
+ * 而环要字节。第一版写的是 `Number(u.usedStorage) || 0`：
+ * `Number("9.37 KB")` 是 NaN，`NaN || 0` 就是 **0**，于是 7 个用户全变成零用量，
+ * 界面上两个空圈 + 「另有 7 个用户没有用量」，而真相是「读错了」。两者在屏幕上
+ * 无法区分。
+ *
+ * 所以取值分成三档，**不再有「读不出来」被当成 0 的路**：
+ *
+ *   数字 / 数字字符串   → 用它
+ *   null / undefined / '' → 0（真的没有用量，这是合法值）
+ *   其它非空字符串      → 0 **并记进 unreadable**
+ *
+ * 最后一档是关键：`"9.37 KB"` 不是数字，把它静默折成 0 就是把「读错了」说成
+ * 「没有」。unreadable 里的名字由界面显示出来 —— 宁可界面吵一点，也不要界面撒谎。
+ */
+export function toDonutItems(
+  users: UsageSource[] | null | undefined,
+  field: 'usedStorageBytes' | 'usedDownloadBytes'
+): { items: DonutItem[]; unreadable: string[] } {
+  const items: DonutItem[] = []
+  const unreadable: string[] = []
+
+  // nullish 的兜底放在**这里**而不是每个调用点：这是一份会被复用的纯函数，
+  // 而调用点各有各的初始化方式，逐个加 `?? []` 是重复的防御。
+  for (const u of users ?? []) {
+    const label = u.username || u.email || `#${u.id}`
+    const raw = u[field]
+
+    let value = 0
+    if (raw === null || raw === undefined || raw === '') {
+      value = 0
+    } else if (typeof raw === 'number') {
+      value = Number.isFinite(raw) ? Math.max(0, raw) : 0
+      if (!Number.isFinite(raw)) unreadable.push(label)
+    } else {
+      const trimmed = String(raw).trim()
+      const n = Number(trimmed)
+      if (trimmed !== '' && Number.isFinite(n)) value = Math.max(0, n)
+      else unreadable.push(label)
+    }
+
+    items.push({ key: String(u.id), label, value })
+  }
+
+  return { items, unreadable }
+}
+
 export interface DonutSlice {
   key: string
   label: string
