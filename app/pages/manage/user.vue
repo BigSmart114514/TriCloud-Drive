@@ -140,14 +140,21 @@
             <div class="mb-4 flex items-baseline justify-between gap-3">
               <h3 class="text-lg font-medium text-gray-900">概览</h3>
               <span class="text-xs text-gray-500">
-                {{ loading ? '正在加载用户数据...' : `最近刷新：${lastRefreshed ? formatDateTime(lastRefreshed) : '—'}` }}
+                {{ lastRefreshed ? `最近刷新：${formatDateTime(lastRefreshed)}` : '' }}
               </span>
             </div>
 
             <div class="mb-5 flex flex-wrap items-end gap-x-6 gap-y-1">
               <div>
                 <p class="text-sm font-medium text-gray-500">用户总数</p>
-                <p class="text-2xl font-semibold text-gray-900">{{ totalCount }}</p>
+                <p class="text-2xl font-semibold text-gray-900">
+                  <!--
+                    加载中显示 0 是在**说谎**：真实的 0 与还没加载出来长得一模一样。
+                    上一版的两个环就是这么画的 —— 空圈 + 「另有 7 个用户没有用量」。
+                  -->
+                  <UiSkeleton v-if="loading" width="3.5rem" height="1.75rem" />
+                  <template v-else>{{ totalCount }}</template>
+                </p>
               </div>
               <!--
                 零值用户单独说一句，不进环。零值若进环，每个都「小于 2%」，
@@ -168,35 +175,55 @@
               </p>
             </div>
 
-            <div class="flex flex-wrap gap-8">
-              <div v-for="ring in rings" :key="ring.title" class="min-w-0">
-                <DonutChart
-                  :slices="ring.slices"
-                  :total="ring.total"
-                  :colors="chartColors"
-                  :title="ring.title"
-                />
-                <ul class="mt-3 min-w-[13rem] space-y-1 text-xs">
-                  <li
-                    v-for="s in ring.slices"
-                    :key="s.key"
-                    class="flex items-center gap-1.5"
-                  >
-                    <span
-                      class="h-2 w-2 shrink-0 rounded-sm"
-                      :style="{ backgroundColor: chartColors[s.key] }"
-                    />
-                    <span class="min-w-0 flex-1 truncate text-gray-600" :title="s.label">
-                      {{ s.label }}
-                    </span>
-                    <span class="shrink-0 tabular-nums text-gray-500">
-                      {{ formatFileSize(s.value) }}
-                    </span>
-                    <span class="w-9 shrink-0 text-right tabular-nums text-gray-400">
-                      {{ Math.round(s.share * 100) }}%
-                    </span>
-                  </li>
-                </ul>
+            <!--
+              环区。min-h-[15rem] 是给加载态预留的：两个环 7rem + 标题/数值 2.5rem
+              + 图例若干行。不预留的话，数据回来时长出图例，下面的用户列表整体下移
+              —— 那一下比滚动条那一下更难看。
+            -->
+            <div class="min-h-[15rem]">
+              <!--
+                加载中不再画「空的环 + 还没有用量」—— 那是在说「没人用」，
+                而真相是「还没加载」。空状态该在真的空的时候出现。
+              -->
+              <div v-if="loading" class="flex flex-wrap gap-8">
+                <div v-for="n in 2" :key="n" class="w-40">
+                  <UiSkeleton variant="circle" width="7rem" height="7rem" />
+                  <UiSkeleton class="mx-auto mt-2" width="4rem" height="0.75rem" />
+                  <UiSkeleton class="mt-3" width="100%" height="0.75rem" />
+                  <UiSkeleton width="100%" height="0.75rem" />
+                </div>
+              </div>
+
+              <div v-else class="flex flex-wrap gap-8">
+                <div v-for="ring in rings" :key="ring.title" class="min-w-0">
+                  <DonutChart
+                    :slices="ring.slices"
+                    :total="ring.total"
+                    :colors="chartColors"
+                    :title="ring.title"
+                  />
+                  <ul class="mt-3 min-w-[13rem] space-y-1 text-xs">
+                    <li
+                      v-for="s in ring.slices"
+                      :key="s.key"
+                      class="flex items-center gap-1.5"
+                    >
+                      <span
+                        class="h-2 w-2 shrink-0 rounded-sm"
+                        :style="{ backgroundColor: chartColors[s.key] }"
+                      />
+                      <span class="min-w-0 flex-1 truncate text-gray-600" :title="s.label">
+                        {{ s.label }}
+                      </span>
+                      <span class="shrink-0 tabular-nums text-gray-500">
+                        {{ formatFileSize(s.value) }}
+                      </span>
+                      <span class="w-9 shrink-0 text-right tabular-nums text-gray-400">
+                        {{ Math.round(s.share * 100) }}%
+                      </span>
+                    </li>
+                  </ul>
+                </div>
               </div>
             </div>
           </div>
@@ -218,8 +245,18 @@
                 </tr>
               </thead>
               <tbody class="bg-white divide-y divide-gray-200">
+                <!--
+                  骨架行。行数写死 6：真实行高约 3rem，6 行 ≈ 18rem，
+                  7 个用户时几乎一样高，所以数据回来时表格不跳。
+                  原来是 colspan 的一行「载入中...」，高度只有 1 行，
+                  数据回来时表格从 1 行长到 7 行 —— 底下整页都在动。
+                -->
                 <tr v-if="loading">
-                  <td colspan="3" class="px-6 py-8 text-center text-sm text-gray-500">载入中...</td>
+                  <td v-for="n in 6" :key="n" class="px-6 py-3">
+                    <UiSkeleton variant="text" :width="n === 3 ? '4rem' : '9rem'" height="0.875rem" />
+                  </td>
+                  <td class="px-6 py-3"><UiSkeleton variant="text" width="3rem" height="0.875rem" /></td>
+                  <td class="px-6 py-3"></td>
                 </tr>
                 <tr v-else-if="users.length === 0">
                   <td colspan="3" class="px-6 py-8 text-center text-sm text-gray-500">暂无数据</td>

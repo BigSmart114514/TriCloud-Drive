@@ -13,7 +13,10 @@ export default defineNuxtConfig({
     }
   },
 
-  css: ['~/assets/css/experimental.css'],
+  // 基础在前、主题在后。base.css 里是与主题无关的那几条（目前是滚动条凹槽
+  // 预留与 reduced-motion），experimental.css 整份挂在
+  // html[data-ui='experimental'] 下，只在用户开了实验主题时生效。
+  css: ['~/assets/css/base.css', '~/assets/css/experimental.css'],
 
   nitro: {
     preset: 'node-server',

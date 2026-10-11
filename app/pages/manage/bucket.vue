@@ -321,14 +321,31 @@
           </span>
         </div>
 
-        <p
-          v-if="!purgeLog.length"
-          class="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-500"
-        >
-          还没有任何清理记录。
-        </p>
+        <!--
+          min-h-[7rem] 是给加载态预留的：4 行骨架 ≈ 6.5rem。不预留的话，
+          请求回来时表格从 1 行长到 4 行，下面整页跟着下移。
+        -->
+        <div class="min-h-[7rem]">
+          <div
+            v-if="purgeLogLoading"
+            class="space-y-2 rounded-lg border border-gray-200 bg-white px-4 py-3"
+          >
+            <UiSkeleton v-for="n in 4" :key="n" variant="text" width="100%" height="0.875rem" />
+          </div>
 
-        <div v-else class="overflow-hidden rounded-lg border border-gray-200 bg-white">
+          <!--
+            加载中的那句「还没有任何清理记录。」是**假的** —— 原来只有
+            `v-if="!purgeLog.length"`，而请求还没回来时长度确实是 0。
+            空状态该在真的空的时候出现，不能拿来当加载态。
+          -->
+          <p
+            v-else-if="!purgeLog.length"
+            class="rounded-lg border border-gray-200 bg-white px-4 py-3 text-sm text-gray-500"
+          >
+            还没有任何清理记录。
+          </p>
+
+          <div v-else class="overflow-hidden rounded-lg border border-gray-200 bg-white">
           <table class="w-full text-left text-xs">
             <caption class="sr-only">
               清理审计记录：时间、类型、对象属主、操作者、条数、字节。点时间可展开被删除的对象。
@@ -394,6 +411,7 @@
               </template>
             </tbody>
           </table>
+          </div>
         </div>
       </section>
     </main>
@@ -506,7 +524,16 @@ async function loadUsers() {
   }
 }
 
+/**
+ * 清理历史**自己的**加载标志，与对账无关。
+ *
+ * 原来没有，于是面板在 onMounted 的第一帧就显示「还没有任何清理记录。」——
+ * 那句话在请求返回前是假的，而且和真的空状态长得一模一样。
+ */
+const purgeLogLoading = ref(true)
+
 async function loadPurgeLog() {
+  purgeLogLoading.value = true
   try {
     const res = await $fetch<{ entries: any[] }>('/api/manage/bucket/purge-log', {
       headers: fmtHeaders,
@@ -516,6 +543,8 @@ async function loadPurgeLog() {
   } catch {
     // 历史读不到不该挡住对账的主流程
     purgeLog.value = []
+  } finally {
+    purgeLogLoading.value = false
   }
 }
 

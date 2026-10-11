@@ -1,0 +1,63 @@
+/*
+ * 基础样式：与主题无关的那一部分。
+ *
+ * ## 分层
+ *
+ *   base.css          ← 本文件。不随主题变的那几条
+ *   experimental.css  ← 液态玻璃主题，整份挂在 html[data-ui='experimental'] 下
+ *
+ * 顺序在 nuxt.config.ts 的 `css` 数组里定死：基础在前，主题在后。
+ *
+ * ## 为什么需要单独一份，而不是加进 experimental.css
+ *
+ * 因为 experimental.css 整份都在 `html[data-ui='experimental']` 下面，而实验
+ * 主题是**默认关闭**的可选开关（app/composables/useUiPreferences.ts）。
+ * 任何写在那里的规则，在默认模式下都不生效 —— 而下面这条恰恰是**最不该**
+ * 只在实验模式下生效的一条：它是布局稳定性，抖动对每个用户都发生。
+ */
+
+/*
+ * 滚动条凹槽：一直预留。
+ *
+ * ## 它修的是什么
+ *
+ * 内容加载后长过视口 → 页面开始能滚 → 滚动条占掉 10px（实验主题）或约 15px
+ * （默认主题）→ **整个视口宽度变了**，所有横向位置向左移一截。表现为「抖一下」。
+ *
+ * `scrollbar-gutter: stable` 让那道凹槽**始终存在**，于是宽度不再变。
+ * 它只影响横向布局，纵向滚动不受任何影响。
+ *
+ * ## 代价
+ *
+ * 预留就是预留：即使页面并不需要滚动，右边也会空出 10~15px。
+ * `manage/files.vue` 是 `h-[100dvh] overflow-hidden` 的整页铺满外壳、页面本身
+ * 不滚，那道凹槽它用不上，会看到右边一条空边。
+ * 换来的好处是其余所有会滚动的页面都不再抖 —— 这是少数与多数的取舍。
+ *
+ * ## 为什么用 stable 而不是 both
+ *
+ * `both` 只在**溢出**时预留。也就是说 overflow: hidden 的外壳照样不预留，
+ * 而可滚动的页面在「此刻还没溢出」时也不预留 —— 那正是加载完成、滚动条刚刚
+ * 要出现的那一刻。stable 是无条件预留，正好对上这个场景。
+ */
+html {
+  scrollbar-gutter: stable;
+}
+
+/*
+ * 尊重「减少动态效果」的系统设置。
+ *
+ * 骨架屏的呼吸（animate-pulse）在这个设置下不该继续。Tailwind 的 motion-safe /
+ * motion-reduce 变体各页自己加会漏，所以在这里兜住全局：媒体查询里把动画
+ * 时长压到 1ms，元素仍然存在（布局不变），只是不再动。
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+    scroll-behavior: auto !important;
+  }
+}
