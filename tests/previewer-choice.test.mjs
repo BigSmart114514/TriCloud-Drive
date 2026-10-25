@@ -257,13 +257,15 @@ describe('FilePreviewer 顶栏按钮：全部换成图标', () => {
 })
 
 describe('FilePreviewer 的预览器下拉', () => {
-  test('有一个 select', () => {
-    assert.equal(collectElements('select').length, 1)
+  test('两个 select：预览器一个，文本编码一个', () => {
+    // 编码下拉由 tests/text-encoding.test.mjs 负责，这里只钉住总数，
+    // 免得「预览器下拉被复制了一份」这种改动溜过去。
+    assert.equal(collectElements('select').length, 2)
   })
 
   test('option 来自 PREVIEWERS 的 v-for，且没有被条件挡住', () => {
     const options = collectElements('option')
-    const looped = options.filter((o) => directiveNames(o).includes('for'))
+    const looped = options.filter((o) => directiveExp(o, 'for').replace(/\s+/g, ' ') === 'p in PREVIEWERS')
     assert.equal(looped.length, 1, '应该只有一个 option 负责遍历预览器表')
     const option = looped[0]
     const expr = directiveExp(option, 'for').replace(/\s+/g, ' ')

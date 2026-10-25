@@ -179,25 +179,37 @@
         <div v-else class="flex h-full items-center justify-center text-gray-500">无法加载 PDF 预览</div>
       </div>
 
-      <div v-else-if="activePreviewer === 'text' && isEditable" class="flex h-full flex-col">
-        <div class="border-b px-4 py-2 text-xs text-gray-500">
-          {{ isMd ? 'Markdown' : '纯文本' }} · 大小 {{ prettySize }}
-        </div>
-        <textarea v-model="textContent" class="flex-1 w-full p-3 font-mono text-sm outline-none sm:p-4" placeholder="正在加载内容..." />
-        <div v-if="tooLargeHint" class="border-t border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-700">{{ tooLargeHint }}</div>
-      </div>
-
       <!--
-        文本预览但不可编辑：链接视角只读，或者用户把非文本文件强行丢给了文本预览器。
-        内容照常加载（load() 不看视角），所以必须把拿到的字显示出来 ——
-        掉进「请选择预览器」是假消息。
+        文本预览：可不可编辑只看视角，不看扩展名。
+        用户把 .png 强行丢进文本预览器时也给编辑 —— 那是他自己选的，按当前编码
+        写回。分享链接仍然是只读：保存走的是上传接口，没有 link 分支，给了按钮
+        也只能失败。
       -->
       <div v-else-if="activePreviewer === 'text'" class="flex h-full flex-col">
         <div class="flex items-center justify-between gap-2 border-b px-4 py-2 text-xs text-gray-500">
-          <span>{{ isMd ? 'Markdown' : '纯文本' }} · 大小 {{ prettySize }}</span>
-          <span v-if="linkMode" class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600">分享链接 · 只读</span>
+          <div class="flex min-w-0 items-center gap-2">
+            <span class="truncate">{{ isMd ? 'Markdown' : '纯文本' }} · 大小 {{ prettySize }}</span>
+            <!--
+              编码选择。GBK 的 .txt 按 UTF-8 解就是满屏「�」，只能靠这里换。
+              换编码只是重新解同一份字节（缓存层已有一份），不重新下载。
+              有未保存修改时先问一句：重新解码会把它们冲掉。
+            -->
+            <select
+              :value="encoding"
+              title="选择编码"
+              aria-label="选择编码"
+              :disabled="loading"
+              class="shrink-0 rounded border border-gray-200 bg-white py-0.5 pl-1.5 pr-5 text-xs text-gray-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100 disabled:opacity-50"
+              @change="pickEncoding"
+            >
+              <option v-for="e in TEXT_ENCODINGS" :key="e.id" :value="e.id">{{ e.label }}</option>
+            </select>
+          </div>
+          <span v-if="linkMode" class="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600">分享链接 · 只读</span>
         </div>
-        <pre class="flex-1 w-full overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-sm outline-none sm:p-4">{{ textContent }}</pre>
+        <textarea v-if="isEditable" v-model="textContent" class="flex-1 w-full p-3 font-mono text-sm outline-none sm:p-4" placeholder="正在加载内容..." />
+        <pre v-else class="flex-1 w-full overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-sm outline-none sm:p-4">{{ textContent }}</pre>
+        <div v-if="tooLargeHint" class="border-t border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-700">{{ tooLargeHint }}</div>
       </div>
     </div>
   </div>
@@ -218,11 +230,18 @@ import {
   IMAGE_EXTENSIONS,
   TEXT_EXTENSIONS,
   extensionOf,
-  previewerFor,
   resolvePreviewer,
   isPreviewerId,
   type PreviewerId
 } from '~/utils/previewer'
+import {
+  TEXT_ENCODINGS,
+  DEFAULT_TEXT_ENCODING,
+  decodeText,
+  encodeText,
+  isTextEncodingId,
+  type TextEncodingId
+} from '~/utils/text-encoding'
 import { createPreviewSource } from '~/utils/preview-source'
 import type { FileRecord } from '~~/types/files'
 import type { ArchiveFileItem } from '~~/types/zip'
@@ -256,6 +275,8 @@ const currentFileKey = ref(props.file.fileKey)
 const replaceInputRef = ref<HTMLInputElement | null>(null)
 /** 用户在当前文件上手动选过的预览器。null = 用默认（按扩展名判定）。 */
 const chosenPreviewer = ref<PreviewerId | null>(null)
+/** 文本按哪种编码解、按哪种编码写回。只对当前文件有效，换文件重置。 */
+const encoding = ref<TextEncodingId>(DEFAULT_TEXT_ENCODING)
 const loading = ref(false)
 const error = ref('')
 const textContent = ref('')
@@ -300,8 +321,6 @@ const source = createPreviewSource({
 })
 
 const ext = computed(() => extensionOf(props.file?.filename ?? ''))
-/** 按扩展名推出来的默认预览器；null 表示认不出来。 */
-const defaultPreviewer = computed(() => previewerFor(props.file?.filename ?? ''))
 /** 当前实际使用：用户选过的优先，否则按扩展名。 */
 const activePreviewer = computed(() => resolvePreviewer(props.file?.filename ?? '', chosenPreviewer.value))
 const isMd = computed(() => ext.value === 'md' || ext.value === 'markdown')
@@ -311,17 +330,21 @@ const archiveFormat = computed<'zip' | '7z'>(() => isZip.value ? 'zip' : '7z')
  * 链接视角。链接只给读+下载，所以「可编辑」在这里必须为 false ——
  * 否则会渲染出文本编辑框和保存按钮，而保存走的是上传接口（没有 link 分支）。
  *
- * 还要求扩展名本身就是文本：允许把任意文件丢进文本预览器看，但那种情况只读。
- * 否则一个 .png 被当文本打开后点保存，写回去的就是一段乱码。
+ * 除此之外**只要求当前预览器是文本**，不再要求扩展名本身是文本。
+ * 原来还卡了一层「扩展名是文本才给编辑」，结果是：没有扩展名的新建文件、
+ * .js/.ts/.py 这些，点开文本预览只能看不能改。用户既然已经手动选中了文本
+ * 预览器，编辑权就该给他 —— 把 .png 当文本改再保存是他自己的选择。
  */
 const linkMode = computed(() => !!props.link)
-const isEditable = computed(() => !linkMode.value && activePreviewer.value === 'text' && defaultPreviewer.value === 'text')
+const isEditable = computed(() => !linkMode.value && activePreviewer.value === 'text')
 const isZipEntryImage = computed(() => !!zipEntry.value && isImageName(zipEntry.value.filename))
 const isZipEntryPdf = computed(() => !!zipEntry.value && extensionOf(zipEntry.value.filename) === 'pdf')
 const isZipEntryText = computed(() => !!zipEntry.value && isTextName(zipEntry.value.filename) && zipEntry.value.fileSize <= 10 * 1024 * 1024)
 const currentFileSize = computed(() => {
   if (zipEntry.value) return zipEntry.value.fileSize
-  if (isEditable.value) return new TextEncoder().encode(textContent.value).length
+  // 边打字边算大小只在 UTF-8 下做：TextEncoder 是现成的。其他编码要先建反查表
+  // 再逐字查，放进每次按键都会重算的 computed 里不合适，就退回磁盘上的大小。
+  if (isEditable.value && encoding.value === 'utf-8') return new TextEncoder().encode(textContent.value).length
   return props.file.fileSize
 })
 const dirty = computed(() => isEditable.value && textContent.value !== originalContent.value)
@@ -383,8 +406,11 @@ const cleanup = () => {
 /**
  * 把已拿到的字节铺到当前预览器上。**不发请求** —— 切换预览器走的就是这条路。
  *
- * renderId 兜住一个竞态：文本分支要 await blob.text()，这期间用户可能又切了
- * 预览器。没有它，先发起的那次会在新视图上贴一段旧文本。
+ * renderId 兜住一个竞态：文本分支要 await arrayBuffer()，这期间用户可能又切了
+ * 预览器或换了编码。没有它，先发起的那次会在新视图上贴一段旧文本。
+ *
+ * 文本按**当前选中的编码**解，不是 Blob.text() 的固定 UTF-8 —— 换编码时走的
+ * 也是这里，字节还是缓存里那一份，不重新下载。
  */
 const renderPreview = async (blob: Blob | null) => {
   const id = ++renderId
@@ -396,7 +422,7 @@ const renderPreview = async (blob: Blob | null) => {
 
   const target = activePreviewer.value
   if (target === 'text') {
-    const text = await blob.text()
+    const text = decodeText(new Uint8Array(await blob.arrayBuffer()), encoding.value)
     if (id !== renderId) return
     originalContent.value = text
     textContent.value = text
@@ -565,7 +591,10 @@ const saveText = async () => {
   try {
     error.value = ''
     const type = isMd.value ? 'text/markdown' : 'text/plain'
-    const blob = new Blob([textContent.value], { type })
+    // 用选中的编码写回，不是固定 UTF-8 —— 否则「按 GBK 看」再保存一下，
+    // 磁盘上的文件就被悄悄转成 UTF-8 了。写不下的字会抛，错误挂在 error 上。
+    const bytes = encodeText(textContent.value, encoding.value)
+    const blob = new Blob([bytes], { type })
     const newFile = new File([blob], props.file.filename, { type })
     currentFileKey.value = await uploadFile(newFile, {
       // 写回**文件自己的**目录，不是当前浏览的目录 ——
@@ -636,10 +665,32 @@ const pickPreviewer = (event: Event) => {
   if (activePreviewer.value !== before) void load()
 }
 
+/**
+ * 换编码：重新解**缓存里那份字节**，不重新下载（load() 取数走的是
+ * preview-source，同 key 直接命中）。
+ *
+ * 有未保存的修改时先问一句。重新解码会把编辑框里的内容整个替换掉，
+ * 而那可能是用户打了半天的一段话 —— 这里不能默认他愿意丢。
+ * 取消时要把 select 的值拨回去：它现在是 DOM 自己改的，状态没变，
+ * Vue 不会重渲染这个元素。
+ */
+const pickEncoding = (event: Event) => {
+  const select = event.target as HTMLSelectElement
+  const raw = select.value
+  if (!isTextEncodingId(raw) || raw === encoding.value) return
+  if (dirty.value && !confirm('切换编码会丢掉未保存的修改，继续？')) {
+    select.value = encoding.value
+    return
+  }
+  encoding.value = raw
+  void load()
+}
+
 watch(() => props.file?.id, (id) => {
   if (id === undefined) return
   currentFileKey.value = props.file.fileKey
   chosenPreviewer.value = null
+  encoding.value = DEFAULT_TEXT_ENCODING
   void load()
 }, { immediate: true })
 
