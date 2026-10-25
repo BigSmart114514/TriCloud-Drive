@@ -3,6 +3,21 @@ import type { FileRecord } from '~/types/files.ts'
 
 export const FilesService = {
   /**
+   * 新建一个空白文件（0 字节）。
+   *
+   * 只送名字与目录：对象路径、大小、直链都由服务端定。空文件也要真的在桶里
+   * 落一个对象 —— 只写数据库那一行的话，列表里看得见、点开 404。
+   */
+  async create(filename: string, folderId: number | null, targetUserId?: number | null, useAdmin?: boolean) {
+    const body: any = { filename, folderId }
+    withScope(body, { targetUserId, useAdmin })
+    return await $fetch<{ success: boolean; statusMessage?: string; file?: FileRecord }>(
+      '/api/files/create',
+      { method: 'POST', body }
+    )
+  },
+
+  /**
    * 列目录。
    *
    * `link` 走 **query**（不是 body）：分享链接的匿名放行由中间件判定，

@@ -72,6 +72,32 @@ export function useNameEditing(
     }
   }
 
+  /**
+   * 新建空白文件。与建目录同一套流程：先问名字（取消 = 什么都不做），再提交。
+   *
+   * 校验走 `isFolder = false`：文件名里带点是常态（`报告 v1.2.txt`），
+   * 不能按目录名那套挡。`.` / `..` 由服务端挡 —— 前端校验不是边界。
+   */
+  const createFile = async () => {
+    const name = await openPrompt({
+      title: '新建文件',
+      label: '文件名',
+      placeholder: '未命名.txt',
+      confirmText: '创建',
+      trim: true,
+      validate: nameValidator(false)
+    })
+    // 与建目录一致：取消（null）和空值都归为「不做」。
+    if (!name) return
+    try {
+      const res = await FilesService.create(name, currentFolderId.value ?? null, tRef?.value ?? null, admin())
+      if (res.success) await fetchFiles()
+      else notify(res.statusMessage || '新建失败', 'error')
+    } catch (e) {
+      notifyError(e, '新建文件失败')
+    }
+  }
+
   const renameFolder = async (folder: FolderRecord) => {
     const entered = await openPrompt({
       title: '重命名文件夹',
@@ -122,10 +148,11 @@ export function useNameEditing(
   }
 
   // keepExtIfNone / validateName 只在本 composable 内部用（renameFile 与
-  // createFolder/renameFolder 都调它们），所以不放进返回值 —— 放进来的话
-  // 每个消费方都能看到，却只有这里用。
+  // createFolder/createFile/renameFolder 都调它们），所以不放进返回值 ——
+  // 放进来的话每个消费方都能看到，却只有这里用。
   return {
     createFolder,
+    createFile,
     renameFolder,
     renameFile
   }

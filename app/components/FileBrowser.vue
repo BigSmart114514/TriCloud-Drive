@@ -214,6 +214,15 @@
         >
           <FolderPlusIcon class="h-5 w-5" />
         </button>
+        <button
+          v-if="canWriteHere"
+          class="p-1 text-sm text-indigo-600 hover:text-indigo-500 hidden sm:inline-flex"
+          @click="createFile"
+          title="新建文件"
+          aria-label="新建文件"
+        >
+          <DocumentPlusIcon class="h-5 w-5" />
+        </button>
         <button class="p-1 text-sm text-indigo-600 hover:text-indigo-500" @click="fetchFiles" title="刷新" aria-label="刷新">
           <ArrowPathIcon class="h-5 w-5" />
         </button>
@@ -246,6 +255,9 @@
               <div class="border-t border-gray-100 my-1" />
               <button v-if="canWriteHere" class="w-full px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-700" @click="createFolder(); mobileMoreOpen = false">
                 <FolderPlusIcon class="h-5 w-5 text-indigo-600" />新建文件夹
+              </button>
+              <button v-if="canWriteHere" class="w-full px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 text-gray-700" @click="createFile(); mobileMoreOpen = false">
+                <DocumentPlusIcon class="h-5 w-5 text-indigo-600" />新建文件
               </button>
             </div>
           </template>
@@ -430,6 +442,7 @@ import {
   ClipboardDocumentCheckIcon,
   DocumentArrowUpIcon,
   DocumentDuplicateIcon,
+  DocumentPlusIcon,
   EllipsisVerticalIcon,
   FolderPlusIcon,
   ScissorsIcon,
@@ -678,7 +691,7 @@ const {
   toggleUploadMenu
 } = useUploadMenu()
 const closeUploadMenu = () => { showUploadMenu.value = false }
-const { createFolder, renameFolder, renameFile } = useNameEditing(
+const { createFolder, createFile, renameFolder, renameFile } = useNameEditing(
   folders,
   files,
   breadcrumbs,

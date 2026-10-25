@@ -1,20 +1,25 @@
-// 腾讯云 COS 的删除。
+// 腾讯云 COS 的对象操作：删除，以及放一个 0 字节对象。
 //
 // ## 为什么要单独一个模块
 //
-// 「配没配密钥」这道守卫 + 「建客户端」+ 「deleteObject 包 Promise」这三步，
-// 在本项目里被**逐字抄了四遍**：files/delete.post.ts、folders/delete.post.ts、
+// 「配没配密钥」这道守卫 + 「建客户端」+ 「包 Promise」这三步，在删除这一侧
+// 被**逐字抄了四遍**：files/delete.post.ts、folders/delete.post.ts、
 // copy/paste.post.ts、utils/purge-user.ts。第五个使用方是 files/save.post.ts
 // —— 它要清掉「已经传上去、但数据库事务回滚了」的孤儿对象。
 //
 // 五份里任何一份改了守卫条件（比如加上 CDN 域名判断），其余四份就会静默失配：
 // 该删的对象没删，桶里的空间只增不减，而没有任何报错。
 //
-// ## 语义：尽力而为，不抛
+// 新建空白文件是第一个**写**的对象操作，用的是同一套守卫与客户端构造。放在
+// 这里而不是端点里内联，理由相同：不要出现第二份「怎么判断配没配」。
 //
-// 删除**永远不抛**。调用方的目的是「清理」，不是为了判成败 ——
-// 一个已经失败的请求再去抛第二个错误，只会把第一个真正的失败原因盖掉。
-// 删不掉就记一条日志，返回 false，由调用方决定要不要记着。
+// ## 语义：删除永不抛，新建必须抛
+//
+// 删除的调用方目的是「清理」，不是为了判成败 —— 一个已经失败的请求再去抛
+// 第二个错误，只会把第一个真正的失败原因盖掉。删不掉就记一条日志，返回 false。
+//
+// 新建相反：它就是用户按下的那一步本身。失败还给 false 让调用方自己决定要不要
+// 写库，等于开一个「库里有行、桶里没对象」的口子（列表里看得见、点下载 404）。
 //
 // 幂等：删一个不存在的 key，COS 返回 204，仍然算成功。
 // useRuntimeConfig 靠 Nuxt 自动导入（与 db-adapter.ts、auth-middleware.ts 一致）。
@@ -84,4 +89,41 @@ export async function deleteCosObjects(keys: string[]): Promise<{ ok: string[]; 
     else failed.push(k)
   }
   return { ok, failed }
+}
+
+/**
+ * 对象的直链。形状与 useFileUpload 里算出来的那个一致：
+ * `https://<bucket>.cos.<region>.myqcloud.com/<key>`
+ *
+ * 这一列（files.file_url）现在没有任何读路径在用 —— 真正下载走的是
+ * /api/files/download 签出来的 CDN 地址。但它是 NOT NULL，而且对账/排查时
+ * 一个能直接打开的对象地址是有用的，所以照旧写。
+ */
+export function cosObjectUrl(key: string): string {
+  const config = useRuntimeConfig()
+  return `https://${config.cosBucket}.cos.${config.cosRegion}.myqcloud.com/${key}`
+}
+
+/**
+ * 在桶里放一个 **0 字节**对象。失败时抛。
+ *
+ * `Buffer.alloc(0)` 而不是 `''`：SDK 内部对 Body 有 truthy 判断的版本差异，
+ * 空 Buffer 是明确的「长度为 0 的内容」，不会退化成「没给 Body」。
+ */
+export async function putEmptyObject(key: string): Promise<void> {
+  if (!key) throw createError({ statusCode: 400, message: '对象路径不能为空' })
+  if (!cosConfigured()) {
+    throw createError({ statusCode: 500, message: '对象存储未配置，暂时无法新建文件' })
+  }
+
+  const { cos, bucket, region } = await getCos()
+  await new Promise<void>((resolve, reject) => {
+    cos.putObject(
+      { Bucket: bucket, Region: region, Key: key, Body: Buffer.alloc(0) },
+      (err: any) => {
+        if (err) reject(err)
+        else resolve()
+      }
+    )
+  })
 }

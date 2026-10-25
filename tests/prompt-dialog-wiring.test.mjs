@@ -153,10 +153,10 @@ describe('密码必须隐藏', () => {
 describe('名字类提示：trim 与校验口径', () => {
   const dnd = 'app/composables/useNameEditing.ts'
 
-  test('三处都传 trim: true（名字要 trim）', () => {
+  test('四处都传 trim: true（名字要 trim）', () => {
     const src = codeOnly(read(dnd))
     const trims = [...src.matchAll(/trim:\s*true/g)]
-    assert.equal(trims.length, 3, `新建文件夹 / 重命名文件夹 / 重命名文件 三处都该 trim，实际 ${trims.length} 处`)
+    assert.equal(trims.length, 4, `新建文件夹 / 新建文件 / 重命名文件夹 / 重命名文件 四处都该 trim，实际 ${trims.length} 处`)
   })
 
   test('三处都传 confirmText（文案要说清这一步做什么）', () => {
