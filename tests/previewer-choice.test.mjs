@@ -295,4 +295,26 @@ describe('FilePreviewer 的预览器下拉', () => {
     const script = descriptor.scriptSetup?.content ?? ''
     assert.match(script, /resolvePreviewer\s*\(/, '没有调用 resolvePreviewer —— 默认预览器就无从谈起')
   })
+
+  /*
+   * 「切换预览器不重新下载」这条属性由 tests/preview-source.test.mjs 真跑缓存来保证。
+   * 但那管不到组件绕过缓存自己发请求 —— 界面上看不出区别，只是一次大文件悄悄传两遍。
+   * 所以这里断几个**调用计数**：网络原语只允许出现在约定位置，多一处就说明有人
+   * 又开了一条下载路径。
+   */
+  test('字节只从缓存层取，没有第二条预览下载路径', () => {
+    const script = descriptor.scriptSetup?.content ?? ''
+    assert.match(script, /createPreviewSource\s*\(/, '没有接上缓存层')
+
+    const signs = (script.match(/FilesService\.downloadSign\s*\(/g) ?? []).length
+    assert.equal(signs, 2, `downloadSign 应该只有两处（缓存层 + 显式下载），实际 ${signs} 处`)
+
+    const fetches = (script.match(/\bfetch\s*\(/g) ?? []).length
+    assert.equal(fetches, 2, `fetch 应该只有两处（缓存层 + 显式下载），实际 ${fetches} 处`)
+
+    // invalidate 只该出现在卸载清理里。切换预览器时调它等于把缓存当场作废，
+    // 下次切换又得重新下载 —— 这正是要防的那件事。
+    const invalids = (script.match(/\binvalidate\b/g) ?? []).length
+    assert.equal(invalids, 1, `invalidate 只该出现在卸载清理里，实际 ${invalids} 处`)
+  })
 })

@@ -223,6 +223,7 @@ import {
   isPreviewerId,
   type PreviewerId
 } from '~/utils/previewer'
+import { createPreviewSource } from '~/utils/preview-source'
 import type { FileRecord } from '~~/types/files'
 import type { ArchiveFileItem } from '~~/types/zip'
 import { NO_DOWNLOAD_MESSAGE } from '~~/types/share'
@@ -269,10 +270,34 @@ const zipEntryText = ref('')
 const zipEntryPassword = ref('')
 const zipEntryController = ref<AbortController | null>(null)
 const MAX_ENTRY_SIZE = 100 * 1024 * 1024
-let loadController: AbortController | null = null
+let renderId = 0
 let loadId = 0
 
 const { uploading, uploadProgress, uploadFile } = useFileUpload({ targetUserId: targetUserIdRef, useAdmin: useAdminRef })
+
+/**
+ * 预览字节的缓存。切换预览器时字节是同一份，不该重新下载 —— 由这一层记住它。
+ *
+ * 组件这边只通过 source.get() 取字节，没有第二条下载路径；否则缓存会被绕过，
+ * 而界面上看不出区别（只是一次大文件不知不觉传了两遍）。
+ */
+const source = createPreviewSource({
+  sign: async (fileKey) => {
+    const sign = await FilesService.downloadSign(
+      { fileKey, filename: props.file.filename },
+      props.targetUserId ?? null,
+      props.useAdmin,
+      props.link ?? null
+    )
+    if (!sign.success) throw new Error('获取下载链接失败')
+    return sign.data.downloadUrl
+  },
+  fetchBlob: async (url, signal) => {
+    const response = await fetch(url, { method: 'GET', signal })
+    if (!response.ok) throw new Error('拉取文件内容失败')
+    return response.blob()
+  }
+})
 
 const ext = computed(() => extensionOf(props.file?.filename ?? ''))
 /** 按扩展名推出来的默认预览器；null 表示认不出来。 */
@@ -349,21 +374,48 @@ const cleanupZipEntry = () => {
 }
 const cleanup = () => {
   loadId += 1
-  loadController?.abort()
-  loadController = null
+  source.invalidate()
   cleanupZipEntry()
   revokeBlob()
   archiveBlob.value = null
 }
 
-const load = async () => {
-  const requestId = ++loadId
-  loadController?.abort()
-  cleanupZipEntry()
+/**
+ * 把已拿到的字节铺到当前预览器上。**不发请求** —— 切换预览器走的就是这条路。
+ *
+ * renderId 兜住一个竞态：文本分支要 await blob.text()，这期间用户可能又切了
+ * 预览器。没有它，先发起的那次会在新视图上贴一段旧文本。
+ */
+const renderPreview = async (blob: Blob | null) => {
+  const id = ++renderId
   revokeBlob()
   archiveBlob.value = null
-  loading.value = true
+  textContent.value = ''
+  originalContent.value = ''
+  if (!blob) return
+
+  const target = activePreviewer.value
+  if (target === 'text') {
+    const text = await blob.text()
+    if (id !== renderId) return
+    originalContent.value = text
+    textContent.value = text
+  } else if (target === 'image' || target === 'pdf') {
+    blobUrl.value = URL.createObjectURL(blob)
+  } else if (target === 'archive') {
+    archiveBlob.value = blob
+  }
+}
+
+const load = async () => {
+  const requestId = ++loadId
+  cleanupZipEntry()
+  // 已经有这个文件的字节就不显示转圈：切换预览器不该看起来像在重新加载。
+  if (source.cachedKey() !== currentFileKey.value) loading.value = true
   error.value = ''
+  renderId += 1
+  revokeBlob()
+  archiveBlob.value = null
   textContent.value = ''
   originalContent.value = ''
   try {
@@ -382,40 +434,14 @@ const load = async () => {
      */
     if (target === null || target === 'none') return
 
-    const sign = await FilesService.downloadSign(
-      { fileKey: currentFileKey.value, filename: props.file.filename },
-      props.targetUserId ?? null,
-      props.useAdmin,
-      props.link ?? null
-    )
-    if (!sign.success) throw new Error('获取下载链接失败')
+    // 命中的就是这里：同一个文件第二次要字节时不签名、不请求。
+    const blob = await source.get(currentFileKey.value)
     if (requestId !== loadId) return
-    const controller = new AbortController()
-    loadController = controller
-    const response = await fetch(sign.data.downloadUrl, { method: 'GET', signal: controller.signal })
-    if (!response.ok) throw new Error('拉取文件内容失败')
-    if (requestId !== loadId) return
-
-    // 按**当前选中的预览器**取数据，不按可编辑与否：把 .png 强行丢进文本
-    // 预览器时也要拿文本，只是不给编辑。
-    if (target === 'text') {
-      const text = await response.text()
-      originalContent.value = text
-      textContent.value = text
-    } else {
-      const blob = await response.blob()
-      if (requestId === loadId) {
-        if (target === 'archive') archiveBlob.value = blob
-        else blobUrl.value = URL.createObjectURL(blob)
-      }
-    }
+    await renderPreview(blob)
   } catch (e: any) {
     if (requestId === loadId && e?.name !== 'AbortError') error.value = e?.message || '加载失败'
   } finally {
-    if (requestId === loadId) {
-      loading.value = false
-      loadController = null
-    }
+    if (requestId === loadId) loading.value = false
   }
 }
 
