@@ -8,57 +8,81 @@
       </div>
       <div class="flex items-center gap-2">
         <!--
+          预览器选择。永远列出全部预览器，不按当前文件类型过滤 —— 认不出扩展名
+          和「这个文件真不是那种东西」在界面上长得一样，把判断权交出去更诚实。
+
+          压缩包内页不显示：那时顶栏指的是压缩包里的那个文件，换外层文件的预览器
+          会把当前视图直接冲掉。
+        -->
+        <div v-if="!zipEntry" class="flex items-center gap-1.5">
+          <EyeIcon class="hidden h-4 w-4 shrink-0 text-gray-400 sm:block" />
+          <select
+            :value="activePreviewer ?? ''"
+            title="选择预览器"
+            aria-label="选择预览器"
+            class="rounded-md border border-gray-200 bg-white py-1.5 pl-2 pr-6 text-xs text-gray-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+            @change="pickPreviewer"
+          >
+            <option value="" disabled>选择预览器</option>
+            <option v-for="p in PREVIEWERS" :key="p.id" :value="p.id">{{ p.label }}</option>
+          </select>
+        </div>
+
+        <!--
           链接视角只读：保存 / 替换文件两个入口都不给。
           服务端本来也拦（/api/upload/credentials 与 /api/files/save 没有 link 分支），
           但给一个点了必失败的按钮不如不给。
         -->
         <button
           v-if="isEditable && !zipEntry && !linkMode"
-          class="rounded-md bg-indigo-600 px-3 py-2 text-white hover:bg-indigo-700 disabled:opacity-50"
+          class="rounded-md bg-indigo-600 p-2 text-white hover:bg-indigo-700 disabled:opacity-50"
+          title="保存"
+          aria-label="保存"
           :disabled="!dirty || uploading"
           @click="saveText"
         >
-          <span v-if="!uploading">保存</span>
-          <span v-else class="inline-flex items-center">
-            <svg class="mr-1 h-4 w-4 animate-spin" viewBox="0 0 24 24">
-              <circle class="opacity-25" cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="4" />
-              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-            </svg>
-            保存中
-          </span>
+          <svg v-if="uploading" class="h-5 w-5 animate-spin" viewBox="0 0 24 24">
+            <circle class="opacity-25" cx="12" cy="12" r="10" fill="none" stroke="currentColor" stroke-width="4" />
+            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+          </svg>
+          <CheckIcon v-else class="h-5 w-5" />
         </button>
 
         <button
           v-if="!zipEntry && !linkMode"
-          class="rounded-md border border-indigo-200 px-3 py-2 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
+          class="rounded-md border border-indigo-200 p-2 text-indigo-600 hover:bg-indigo-50 disabled:opacity-50"
+          title="替换文件"
+          aria-label="替换文件"
           :disabled="uploading"
           @click="replaceInputRef?.click()"
         >
-          替换文件
+          <ArrowUpTrayIcon class="h-5 w-5" />
         </button>
         <input ref="replaceInputRef" type="file" class="hidden" @change="handlePickReplacement" />
 
         <button
           v-if="zipEntry"
-          class="rounded-md border border-gray-200 px-3 py-2 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          class="rounded-md border border-gray-200 p-2 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          title="下载当前文件"
+          aria-label="下载当前文件"
           :disabled="zipEntryLoading"
           @click="downloadZipEntry"
         >
-          下载当前文件
+          <ArrowDownTrayIcon class="h-5 w-5" />
         </button>
         <button
           v-else
-          class="rounded-md border border-gray-200 px-3 py-2 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          class="rounded-md border border-gray-200 p-2 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          title="下载"
+          aria-label="下载"
           :disabled="loading"
           @click="handleDownload"
         >
-          下载
+          <ArrowDownTrayIcon class="h-5 w-5" />
         </button>
 
-        <button class="p-2 text-gray-600 hover:text-gray-800" @click="handleClose" aria-label="关闭">
-          <svg class="h-6 w-6" viewBox="0 0 24 24" fill="none">
-            <path d="M6 18L18 6M6 6l12 12" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-          </svg>
+        <button class="rounded-md p-2 text-gray-600 hover:bg-gray-100 hover:text-gray-900" title="关闭" aria-label="关闭" @click="handleClose">
+          <XMarkIcon class="h-6 w-6" />
         </button>
       </div>
     </div>
@@ -88,7 +112,7 @@
         </div>
       </div>
 
-      <div v-else-if="isArchive" class="h-full min-h-0">
+      <div v-else-if="activePreviewer === 'archive'" class="h-full min-h-0">
         <ZipPreview
           v-if="archiveBlob && archiveFormat === 'zip'"
           v-show="!zipEntry"
@@ -105,8 +129,8 @@
         />
         <div v-if="zipEntry" class="flex h-full min-h-0 flex-col">
           <div class="flex items-center gap-3 border-b bg-white px-4 py-2">
-            <button class="rounded-md border border-gray-200 px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50" @click="backToArchive">
-              返回压缩包
+            <button class="rounded-md border border-gray-200 p-1.5 text-gray-700 hover:bg-gray-50" title="返回压缩包" aria-label="返回压缩包" @click="backToArchive">
+              <ArrowLeftIcon class="h-4 w-4" />
             </button>
             <span class="truncate text-xs text-gray-500">{{ zipEntry.path }} · {{ formatFileSize(zipEntry.fileSize) }}<span v-if="zipEntry.encrypted"> · 已加密</span></span>
           </div>
@@ -138,16 +162,24 @@
         </div>
       </div>
 
-      <div v-else-if="isImage" class="h-full w-full overflow-auto bg-gray-50 flex items-center justify-center">
+      <div v-else-if="activePreviewer === null" class="flex h-full items-center justify-center px-4 text-center text-sm text-gray-500">
+        请选择预览器
+      </div>
+
+      <div v-else-if="activePreviewer === 'none'" class="flex h-full items-center justify-center px-4 text-center text-sm text-gray-500">
+        已选择不预览，可直接下载
+      </div>
+
+      <div v-else-if="activePreviewer === 'image'" class="h-full w-full overflow-auto bg-gray-50 flex items-center justify-center">
         <img v-if="blobUrl" :src="blobUrl" class="max-h-full max-w-full object-contain" referrerpolicy="no-referrer" alt="预览" />
       </div>
 
-      <div v-else-if="isPdf" class="h-full w-full bg-gray-50">
+      <div v-else-if="activePreviewer === 'pdf'" class="h-full w-full bg-gray-50">
         <iframe v-if="blobUrl" :src="blobUrl" class="h-full w-full" title="PDF 预览" />
         <div v-else class="flex h-full items-center justify-center text-gray-500">无法加载 PDF 预览</div>
       </div>
 
-      <div v-else-if="isEditable" class="flex h-full flex-col">
+      <div v-else-if="activePreviewer === 'text' && isEditable" class="flex h-full flex-col">
         <div class="border-b px-4 py-2 text-xs text-gray-500">
           {{ isMd ? 'Markdown' : '纯文本' }} · 大小 {{ prettySize }}
         </div>
@@ -156,20 +188,16 @@
       </div>
 
       <!--
-        链接视角下的纯文本：内容照常加载（load() 不分视角），但只读。
-        不能靠 isEditable=false 掉进下面那个「暂不支持在线预览」分支 ——
-        对 .txt 来说那是假消息，而内容明明已经拿到了。
+        文本预览但不可编辑：链接视角只读，或者用户把非文本文件强行丢给了文本预览器。
+        内容照常加载（load() 不看视角），所以必须把拿到的字显示出来 ——
+        掉进「请选择预览器」是假消息。
       -->
-      <div v-else-if="linkMode && isTextLike" class="flex h-full flex-col">
+      <div v-else-if="activePreviewer === 'text'" class="flex h-full flex-col">
         <div class="flex items-center justify-between gap-2 border-b px-4 py-2 text-xs text-gray-500">
           <span>{{ isMd ? 'Markdown' : '纯文本' }} · 大小 {{ prettySize }}</span>
-          <span class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600">分享链接 · 只读</span>
+          <span v-if="linkMode" class="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600">分享链接 · 只读</span>
         </div>
         <pre class="flex-1 w-full overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-sm outline-none sm:p-4">{{ textContent }}</pre>
-      </div>
-
-      <div v-else class="flex h-full items-center justify-center text-gray-500">
-        暂不支持该类型的在线预览，可尝试下载。
       </div>
     </div>
   </div>
@@ -177,6 +205,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, toRef, watch } from 'vue'
+import { ArrowDownTrayIcon, ArrowLeftIcon, ArrowUpTrayIcon, CheckIcon, EyeIcon, XMarkIcon } from '@heroicons/vue/24/outline'
 import ZipPreview from '~/components/ZipPreview.vue'
 import SevenZipPreview from '~/components/SevenZipPreview.vue'
 import { FilesService } from '~/services/files.service'
@@ -184,6 +213,16 @@ import { useFileUpload } from '~/composables/useFileUpload'
 import { openPrompt } from '~/composables/usePromptDialog'
 import { formatFileSize } from '~/utils/format'
 import { notify } from '~/utils/notify'
+import {
+  PREVIEWERS,
+  IMAGE_EXTENSIONS,
+  TEXT_EXTENSIONS,
+  extensionOf,
+  previewerFor,
+  resolvePreviewer,
+  isPreviewerId,
+  type PreviewerId
+} from '~/utils/previewer'
 import type { FileRecord } from '~~/types/files'
 import type { ArchiveFileItem } from '~~/types/zip'
 import { NO_DOWNLOAD_MESSAGE } from '~~/types/share'
@@ -214,6 +253,8 @@ const targetUserIdRef = toRef(props, 'targetUserId')
 const useAdminRef = toRef(props, 'useAdmin')
 const currentFileKey = ref(props.file.fileKey)
 const replaceInputRef = ref<HTMLInputElement | null>(null)
+/** 用户在当前文件上手动选过的预览器。null = 用默认（按扩展名判定）。 */
+const chosenPreviewer = ref<PreviewerId | null>(null)
 const loading = ref(false)
 const error = ref('')
 const textContent = ref('')
@@ -233,26 +274,23 @@ let loadId = 0
 
 const { uploading, uploadProgress, uploadFile } = useFileUpload({ targetUserId: targetUserIdRef, useAdmin: useAdminRef })
 
-const ext = computed(() => {
-  const name = props.file?.filename?.toLowerCase() || ''
-  const index = name.lastIndexOf('.')
-  return index >= 0 ? name.slice(index + 1) : ''
-})
-const isImage = computed(() => ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'].includes(ext.value))
-const isPdf = computed(() => ext.value === 'pdf')
-const isText = computed(() => ['txt', 'log', 'csv', 'json', 'xml', 'yml', 'yaml', 'ini', 'env'].includes(ext.value))
+const ext = computed(() => extensionOf(props.file?.filename ?? ''))
+/** 按扩展名推出来的默认预览器；null 表示认不出来。 */
+const defaultPreviewer = computed(() => previewerFor(props.file?.filename ?? ''))
+/** 当前实际使用：用户选过的优先，否则按扩展名。 */
+const activePreviewer = computed(() => resolvePreviewer(props.file?.filename ?? '', chosenPreviewer.value))
 const isMd = computed(() => ext.value === 'md' || ext.value === 'markdown')
-const archiveExtensions = new Set(['zip', '7z', 'rar', 'tar', 'gz', 'tgz', 'bz2', 'tbz', 'tbz2', 'xz', 'txz', 'zst', 'lz', 'lzma', 'cab', 'iso', 'arj', 'cpio', 'rpm', 'deb', 'dmg', 'msi', 'xar', 'z'])
 const isZip = computed(() => ext.value === 'zip')
-const isArchive = computed(() => archiveExtensions.has(ext.value))
 const archiveFormat = computed<'zip' | '7z'>(() => isZip.value ? 'zip' : '7z')
 /**
  * 链接视角。链接只给读+下载，所以「可编辑」在这里必须为 false ——
- * 否则会渲染出文本编辑框和「保存」按钮，而保存走的是上传接口（没有 link 分支）。
+ * 否则会渲染出文本编辑框和保存按钮，而保存走的是上传接口（没有 link 分支）。
+ *
+ * 还要求扩展名本身就是文本：允许把任意文件丢进文本预览器看，但那种情况只读。
+ * 否则一个 .png 被当文本打开后点保存，写回去的就是一段乱码。
  */
 const linkMode = computed(() => !!props.link)
-const isTextLike = computed(() => isText.value || isMd.value)
-const isEditable = computed(() => !linkMode.value && !isArchive.value && isTextLike.value)
+const isEditable = computed(() => !linkMode.value && activePreviewer.value === 'text' && defaultPreviewer.value === 'text')
 const isZipEntryImage = computed(() => !!zipEntry.value && isImageName(zipEntry.value.filename))
 const isZipEntryPdf = computed(() => !!zipEntry.value && extensionOf(zipEntry.value.filename) === 'pdf')
 const isZipEntryText = computed(() => !!zipEntry.value && isTextName(zipEntry.value.filename) && zipEntry.value.fileSize <= 10 * 1024 * 1024)
@@ -268,13 +306,12 @@ const tooLargeHint = computed(() => {
   return '提示：文件较大（>5MB），在浏览器中编辑可能会较慢。'
 })
 
-const extensionOf = (filename: string) => {
-  const name = filename.toLowerCase()
-  const index = name.lastIndexOf('.')
-  return index >= 0 ? name.slice(index + 1) : ''
-}
-const isImageName = (filename: string) => ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'].includes(extensionOf(filename))
-const isTextName = (filename: string) => ['txt', 'log', 'csv', 'json', 'xml', 'yml', 'yaml', 'ini', 'env', 'md', 'markdown'].includes(extensionOf(filename))
+/**
+ * 压缩包内文件的判定复用同一批扩展名表 —— 原来这里和顶部各抄了一份，
+ * 改一处漏一处就会让压缩包里预览得了、外面预览不了。
+ */
+const isImageName = (filename: string) => IMAGE_EXTENSIONS.has(extensionOf(filename))
+const isTextName = (filename: string) => TEXT_EXTENSIONS.has(extensionOf(filename))
 const mimeFor = (filename: string) => {
   const extension = extensionOf(filename)
   const types: Record<string, string> = {
@@ -333,6 +370,18 @@ const load = async () => {
     // 服务端不给没有下载位的人 fileKey（真实对象路径）。预览走的就是
     // /api/files/download，没有它必然 400 —— 直接说清原因。
     if (!currentFileKey.value) throw new Error(NO_DOWNLOAD_MESSAGE)
+
+    const target = activePreviewer.value
+    /**
+     * 没有选定的预览器（类型认不出来、用户还没选），或者用户选了不预览：
+     * 连签名请求都不该发，更不该把整个文件拉下来再丢掉。
+     *
+     * 原来对不支持的扩展名是走完整条链路的 —— 签名、fetch、读完响应体，
+     * 然后三个分支一个都不匹配，字节白下载一遍。打开一个 .exe 就是这么
+     * 把几百 MB 流量烧掉的。
+     */
+    if (target === null || target === 'none') return
+
     const sign = await FilesService.downloadSign(
       { fileKey: currentFileKey.value, filename: props.file.filename },
       props.targetUserId ?? null,
@@ -347,15 +396,18 @@ const load = async () => {
     if (!response.ok) throw new Error('拉取文件内容失败')
     if (requestId !== loadId) return
 
-    if (isEditable.value) {
+    // 按**当前选中的预览器**取数据，不按可编辑与否：把 .png 强行丢进文本
+    // 预览器时也要拿文本，只是不给编辑。
+    if (target === 'text') {
       const text = await response.text()
       originalContent.value = text
       textContent.value = text
-    } else if (isImage.value || isPdf.value) {
+    } else {
       const blob = await response.blob()
-      if (requestId === loadId) blobUrl.value = URL.createObjectURL(blob)
-    } else if (isArchive.value) {
-      archiveBlob.value = await response.blob()
+      if (requestId === loadId) {
+        if (target === 'archive') archiveBlob.value = blob
+        else blobUrl.value = URL.createObjectURL(blob)
+      }
     }
   } catch (e: any) {
     if (requestId === loadId && e?.name !== 'AbortError') error.value = e?.message || '加载失败'
@@ -545,9 +597,23 @@ const handleDownload = async () => {
 
 const handleClose = () => emit('close')
 
+/**
+ * 换预览器。选择只对当前文件有效 —— 记住会让「类型认得出来就用默认」失效：
+ * 上一个文件被强行指定成图片之后，下一个 .md 也会是图片。
+ */
+const pickPreviewer = (event: Event) => {
+  const raw = (event.target as HTMLSelectElement).value
+  const next = isPreviewerId(raw) ? raw : null
+  const before = activePreviewer.value
+  chosenPreviewer.value = next
+  // 解析结果没变（比如对 .png 重选图片）就不必重新拉一遍内容。
+  if (activePreviewer.value !== before) void load()
+}
+
 watch(() => props.file?.id, (id) => {
   if (id === undefined) return
   currentFileKey.value = props.file.fileKey
+  chosenPreviewer.value = null
   void load()
 }, { immediate: true })
 
