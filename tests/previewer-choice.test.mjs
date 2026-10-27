@@ -32,6 +32,8 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const {
   PREVIEWERS,
   IMAGE_EXTENSIONS,
+  VIDEO_EXTENSIONS,
+  AUDIO_EXTENSIONS,
   TEXT_EXTENSIONS,
   ARCHIVE_EXTENSIONS,
   extensionOf,
@@ -41,13 +43,10 @@ const {
 } = await import('../app/utils/previewer.ts')
 
 describe('PREVIEWERS：网站提供的全部预览器', () => {
-  test('顺序与 id 固定，且只此七个', () => {
-    // zip.js 与 7z-wasm 是两台引擎，能力并不一样：7z 认得出 zip，zip.js
-    // 只认 zip。合成一个「压缩包预览」再按扩展名偷偷二选一，遇到改名/无扩展名
-    // 的文件就只能报错，用户也没法换一台引擎重试。这里把它们拆成两个条目。
+  test('顺序与 id 固定，且只此九个', () => {
     assert.deepEqual(
       PREVIEWERS.map((p) => p.id),
-      ['image', 'pdf', 'text', 'code', 'zip', '7z', 'none']
+      ['image', 'video', 'audio', 'pdf', 'text', 'code', 'zip', '7z', 'none']
     )
   })
 
@@ -81,6 +80,18 @@ describe('previewerFor：按扩展名给出默认预览器', () => {
   test('图片', () => {
     for (const name of ['a.png', 'a.JPG', 'a.jpeg', 'a.gif', 'a.webp', 'a.bmp', 'a.svg', 'a.avif']) {
       assert.equal(previewerFor(name), 'image', name)
+    }
+  })
+
+  test('视频', () => {
+    for (const name of ['a.mp4', 'a.MP4', 'a.m4v', 'a.webm', 'a.ogv', 'a.mov', 'a.mkv']) {
+      assert.equal(previewerFor(name), 'video', name)
+    }
+  })
+
+  test('音频', () => {
+    for (const name of ['a.mp3', 'a.MP3', 'a.wav', 'a.ogg', 'a.oga', 'a.m4a', 'a.aac', 'a.flac', 'a.opus', 'a.weba']) {
+      assert.equal(previewerFor(name), 'audio', name)
     }
   })
 
@@ -150,11 +161,19 @@ describe('isPreviewerId：挡住任意字符串', () => {
 })
 
 describe('扩展名表本身', () => {
-  test('三张表逐项固定', () => {
+  test('五张表逐项固定', () => {
     // 整张表钉死，不是抽查几项。抽查漏掉的那一项，删掉时没有任何测试会响 ——
     // 第一版就漏了 cpio，而它唯一的间接覆盖是 previewerFor 里恰好列了这项。
     // 冷门格式收窄的表现只是「点开说暂不支持」，很难联想到是这里少了一项。
     assert.deepEqual([...IMAGE_EXTENSIONS].sort(), ['avif', 'bmp', 'gif', 'jpeg', 'jpg', 'png', 'svg', 'webp'])
+    assert.deepEqual(
+      [...VIDEO_EXTENSIONS].sort(),
+      ['m4v', 'mkv', 'mov', 'mp4', 'ogv', 'webm']
+    )
+    assert.deepEqual(
+      [...AUDIO_EXTENSIONS].sort(),
+      ['aac', 'flac', 'm4a', 'mp3', 'oga', 'ogg', 'opus', 'wav', 'weba']
+    )
     assert.deepEqual(
       [...TEXT_EXTENSIONS].sort(),
       ['csv', 'env', 'ini', 'json', 'log', 'markdown', 'md', 'txt', 'xml', 'yaml', 'yml']
@@ -166,18 +185,25 @@ describe('扩展名表本身', () => {
     )
   })
 
-  test('三张表都是非空 Set，且互不重叠', () => {
-    for (const [name, set] of [['IMAGE', IMAGE_EXTENSIONS], ['TEXT', TEXT_EXTENSIONS], ['ARCHIVE', ARCHIVE_EXTENSIONS]]) {
+  test('五张表都是非空 Set，且互不重叠', () => {
+    const sets = [
+      ['IMAGE', IMAGE_EXTENSIONS],
+      ['VIDEO', VIDEO_EXTENSIONS],
+      ['AUDIO', AUDIO_EXTENSIONS],
+      ['TEXT', TEXT_EXTENSIONS],
+      ['ARCHIVE', ARCHIVE_EXTENSIONS]
+    ]
+    for (const [name, set] of sets) {
       assert.ok(set instanceof Set, `${name} 必须是 Set`)
       assert.ok(set.size > 0, `${name} 不能为空`)
       for (const ext of set) assert.equal(ext, ext.toLowerCase(), `${name} 里的 ${ext} 必须是小写`)
     }
-    for (const ext of IMAGE_EXTENSIONS) {
-      assert.ok(!TEXT_EXTENSIONS.has(ext), `图片表里的 ${ext} 不该同时在文本表`)
-      assert.ok(!ARCHIVE_EXTENSIONS.has(ext), `图片表里的 ${ext} 不该同时在压缩包表`)
-    }
-    for (const ext of TEXT_EXTENSIONS) {
-      assert.ok(!ARCHIVE_EXTENSIONS.has(ext), `文本表里的 ${ext} 不该同时在压缩包表`)
+    for (let i = 0; i < sets.length; i += 1) {
+      for (let j = i + 1; j < sets.length; j += 1) {
+        for (const ext of sets[i][1]) {
+          assert.ok(!sets[j][1].has(ext), `${sets[i][0]} 表里的 ${ext} 不该同时出现在 ${sets[j][0]} 表`)
+        }
+      }
     }
   })
 })

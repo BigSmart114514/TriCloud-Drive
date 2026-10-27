@@ -15,7 +15,7 @@
 // 「这个文件真的不是那种东西」看起来一样：一个没有扩展名的文件可能是 PDF，
 // 也可能什么都不是。把选择权交出去，比替用户断定「暂不支持」要好。
 
-export type PreviewerId = 'image' | 'pdf' | 'text' | 'code' | 'zip' | '7z' | 'none'
+export type PreviewerId = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'code' | 'zip' | '7z' | 'none'
 
 export interface Previewer {
   id: PreviewerId
@@ -33,6 +33,8 @@ export interface Previewer {
  */
 export const PREVIEWERS: readonly Previewer[] = [
   { id: 'image', label: '图片预览' },
+  { id: 'video', label: '视频预览' },
+  { id: 'audio', label: '音频预览' },
   { id: 'pdf', label: 'PDF 预览' },
   { id: 'text', label: '文本预览' },
   { id: 'code', label: '代码预览' },
@@ -43,6 +45,22 @@ export const PREVIEWERS: readonly Previewer[] = [
 
 export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'
+])
+
+/**
+ * 浏览器里**有希望**直接播的容器，不是「所有视频后缀」。
+ *
+ * 刻意不收 avi / wmv / flv：浏览器没有对应解码器，默认选中只会得到一个
+ * 打不开的播放器，比「没有默认预览」更让人困惑。用户仍然可以从下拉里
+ * 手动选视频预览，成败交给浏览器。
+ */
+export const VIDEO_EXTENSIONS: ReadonlySet<string> = new Set([
+  'mp4', 'm4v', 'webm', 'ogv', 'mov', 'mkv'
+])
+
+/** 同理，不收 wma / ape / midi 这类浏览器不保证能解的格式。 */
+export const AUDIO_EXTENSIONS: ReadonlySet<string> = new Set([
+  'mp3', 'wav', 'ogg', 'oga', 'm4a', 'aac', 'flac', 'opus', 'weba'
 ])
 
 /**
@@ -82,6 +100,8 @@ export function previewerFor(filename: string): PreviewerId | null {
   const ext = extensionOf(filename)
   if (!ext) return null
   if (IMAGE_EXTENSIONS.has(ext)) return 'image'
+  if (VIDEO_EXTENSIONS.has(ext)) return 'video'
+  if (AUDIO_EXTENSIONS.has(ext)) return 'audio'
   if (ext === 'pdf') return 'pdf'
   if (TEXT_EXTENSIONS.has(ext)) return 'text'
   if (ext === 'zip') return 'zip'

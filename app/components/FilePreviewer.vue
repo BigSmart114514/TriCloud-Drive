@@ -147,6 +147,12 @@
           <div v-else-if="isZipEntryImage && zipEntryBlobUrl" class="h-full w-full overflow-auto bg-gray-50 p-4">
             <img :src="zipEntryBlobUrl" class="mx-auto max-h-full max-w-full object-contain" alt="预览" />
           </div>
+          <div v-else-if="isZipEntryVideo && zipEntryBlobUrl" class="flex h-full w-full items-center justify-center bg-black">
+            <video :src="zipEntryBlobUrl" class="max-h-full max-w-full" controls playsinline preload="metadata" />
+          </div>
+          <div v-else-if="isZipEntryAudio && zipEntryBlobUrl" class="flex h-full items-center justify-center bg-gray-50 p-6">
+            <audio :src="zipEntryBlobUrl" class="w-full max-w-xl" controls preload="metadata" />
+          </div>
           <div v-else-if="isZipEntryPdf && zipEntryBlobUrl" class="h-full w-full bg-gray-50">
             <iframe :src="zipEntryBlobUrl" class="h-full w-full" title="PDF 预览" />
           </div>
@@ -172,6 +178,29 @@
 
       <div v-else-if="activePreviewer === 'image'" class="h-full w-full overflow-auto bg-gray-50 flex items-center justify-center">
         <img v-if="blobUrl" :src="blobUrl" class="max-h-full max-w-full object-contain" referrerpolicy="no-referrer" alt="预览" />
+      </div>
+
+      <div v-else-if="activePreviewer === 'video'" class="flex h-full w-full items-center justify-center bg-black">
+        <video
+          v-if="blobUrl"
+          :src="blobUrl"
+          class="max-h-full max-w-full"
+          controls
+          playsinline
+          preload="metadata"
+        />
+        <div v-else class="text-sm text-gray-400">无法加载视频预览</div>
+      </div>
+
+      <div v-else-if="activePreviewer === 'audio'" class="flex h-full w-full flex-col items-center justify-center gap-4 bg-gray-50 p-6">
+        <audio
+          v-if="blobUrl"
+          :src="blobUrl"
+          class="w-full max-w-xl"
+          controls
+          preload="metadata"
+        />
+        <div v-else class="text-sm text-gray-500">无法加载音频预览</div>
       </div>
 
       <div v-else-if="activePreviewer === 'pdf'" class="h-full w-full bg-gray-50">
@@ -271,12 +300,15 @@ import { notify } from '~/utils/notify'
 import {
   PREVIEWERS,
   IMAGE_EXTENSIONS,
+  VIDEO_EXTENSIONS,
+  AUDIO_EXTENSIONS,
   TEXT_EXTENSIONS,
   extensionOf,
   resolvePreviewer,
   isPreviewerId,
   type PreviewerId
 } from '~/utils/previewer'
+import { mimeFor, withMimeType } from '~/utils/mime'
 import {
   TEXT_ENCODINGS,
   DEFAULT_TEXT_ENCODING,
@@ -429,6 +461,8 @@ const resolvedCodeTheme = computed<ResolvedCodeTheme>(() => resolveCodeTheme(cod
 const linkMode = computed(() => !!props.link)
 const isEditable = computed(() => !linkMode.value && (activePreviewer.value === 'text' || activePreviewer.value === 'code'))
 const isZipEntryImage = computed(() => !!zipEntry.value && isImageName(zipEntry.value.filename))
+const isZipEntryVideo = computed(() => !!zipEntry.value && isVideoName(zipEntry.value.filename))
+const isZipEntryAudio = computed(() => !!zipEntry.value && isAudioName(zipEntry.value.filename))
 const isZipEntryPdf = computed(() => !!zipEntry.value && extensionOf(zipEntry.value.filename) === 'pdf')
 const isZipEntryText = computed(() => !!zipEntry.value && isTextName(zipEntry.value.filename) && zipEntry.value.fileSize <= 10 * 1024 * 1024)
 const currentFileSize = computed(() => {
@@ -450,23 +484,9 @@ const tooLargeHint = computed(() => {
  * 改一处漏一处就会让压缩包里预览得了、外面预览不了。
  */
 const isImageName = (filename: string) => IMAGE_EXTENSIONS.has(extensionOf(filename))
+const isVideoName = (filename: string) => VIDEO_EXTENSIONS.has(extensionOf(filename))
+const isAudioName = (filename: string) => AUDIO_EXTENSIONS.has(extensionOf(filename))
 const isTextName = (filename: string) => TEXT_EXTENSIONS.has(extensionOf(filename))
-const mimeFor = (filename: string) => {
-  const extension = extensionOf(filename)
-  const types: Record<string, string> = {
-    png: 'image/png',
-    jpg: 'image/jpeg',
-    jpeg: 'image/jpeg',
-    gif: 'image/gif',
-    webp: 'image/webp',
-    bmp: 'image/bmp',
-    svg: 'image/svg+xml',
-    avif: 'image/avif',
-    pdf: 'application/pdf',
-    zip: 'application/zip'
-  }
-  return types[extension] || 'application/octet-stream'
-}
 
 const revokeUrl = (url: string) => {
   if (url) URL.revokeObjectURL(url)
@@ -519,6 +539,8 @@ const renderPreview = async (blob: Blob | null) => {
     textContent.value = text
   } else if (target === 'image' || target === 'pdf') {
     blobUrl.value = URL.createObjectURL(blob)
+  } else if (target === 'video' || target === 'audio') {
+    blobUrl.value = URL.createObjectURL(withMimeType(blob, props.file?.filename ?? ''))
   } else if (target === 'zip' || target === '7z') {
     archiveBlob.value = blob
   }
