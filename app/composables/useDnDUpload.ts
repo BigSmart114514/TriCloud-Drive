@@ -36,6 +36,12 @@ export function useDnDUpload(
   }
 
   const handleDrop = async (event: DragEvent) => {
+    // **第一件事，且必须在任何 await 之前。** 不取消默认行为，浏览器就把
+    // 这次 drop 当成「把文件拖进标签页」：上传照常成功，页面同时跳到那个
+    // 文件（图片/PDF 直接打开成 blob 或本地路径）。handleDrop 是 async，
+    // 一旦这一行落到某个 await 后面，事件分发已经结束，再调也拦不住。
+    event.preventDefault()
+
     dragCounter.value = 0
     isDragging.value = false
 

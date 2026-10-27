@@ -5,10 +5,10 @@
       fill ? 'flex h-full min-h-0 flex-col p-0' : 'rounded-lg shadow p-4 sm:p-6',
       { 'border-2 border-dashed border-indigo-400 bg-indigo-50': isDragging && canDropUpload }
     ]"
-    @dragover="canDropUpload && $event.preventDefault()"
+    @dragover.prevent
     @dragenter="canDropUpload && onDragEnter()"
     @dragleave="canDropUpload && onDragLeave()"
-    @drop="canDropUpload && handleDrop($event)"
+    @drop.prevent="canDropUpload && handleDrop($event)"
   >
     <div
       class="flex items-center justify-between gap-2"

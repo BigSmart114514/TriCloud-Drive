@@ -306,3 +306,67 @@ describe('接线：时序与「只实体化一次」只能从源码看', () => {
     assert.ok(resetAt < classifyAt, '先归零，再做任何 await 之前')
   })
 })
+
+describe('drop 事件：不许让浏览器打开被拖进来的文件', () => {
+  // 症状：文件传上去了，同时浏览器跳到了这个文件（图片/PDF 直接打开，
+  // 其它类型变成下载），页面没了。
+  //
+  // 原因：浏览器把「默认行为没被取消的 drop」当成把文件拖进标签页。
+  // 只有 drop 里调过 preventDefault，上传才算接管了这次拖拽。
+  //
+  // 两条都必须卡死在「同步」上。handleDrop 是 async：把 preventDefault
+  // 写在第一个 await 后面，事件分发早就结束了，浏览器已经导航走 ——
+  // 而源码里照样能看到 preventDefault。所以第一条用真函数跑，并且在
+  // 不 await 返回值的瞬间就检查。
+  test('拖纯文件：第一个 await 之前就 preventDefault，且上传照常发生', async () => {
+    const { useDnDUpload } = await import('../app/composables/useDnDUpload.ts')
+    const { ref } = await import('vue')
+    let uploads = 0
+    let prevented = 0
+    const dnd = useDnDUpload(
+      ref(null),
+      async () => { uploads += 1 },
+      async () => {},
+      () => {}
+    )
+    const event = {
+      dataTransfer: {
+        items: [{ kind: 'file', type: 'text/plain', name: 'a.txt' }],
+        files: [{ name: 'a.txt' }]
+      },
+      preventDefault() { prevented += 1 }
+    }
+
+    const running = dnd.handleDrop(event)
+    assert.equal(
+      prevented,
+      1,
+      '必须在同步阶段取消默认行为：handleDrop 是 async，等到 await 之后浏览器已经导航走了'
+    )
+    await running
+    assert.equal(uploads, 1, '取消默认行为不等于吞掉这次拖拽 —— 上传仍要走')
+  })
+
+  test('模板：根节点的 dragover / drop 无条件取消默认行为', () => {
+    // dragover 不取消，浏览器根本不会把这里当合法 drop 目标，drop 事件
+    // 也就不会来 —— 于是 drop 里的 preventDefault 永远没机会执行。
+    // drop 的取消不能挂在 `canDropUpload &&` 后面：只读目录、别人的分享里
+    // 拖文件进来，同样不能让浏览器把页面导航走。
+    const src = read('app/components/FileBrowser.vue')
+    const start = src.indexOf('<div')
+    const end = src.indexOf('>', start)
+    assert.ok(start >= 0 && end > start, '找不到根节点开标签')
+    const tag = src.slice(start, end + 1)
+
+    assert.match(
+      tag,
+      /@dragover\.prevent(?=[\s=>])/,
+      'dragover 必须无条件 prevent：它决定浏览器认不认这个 drop 目标'
+    )
+    assert.match(
+      tag,
+      /@drop\.prevent="canDropUpload && handleDrop\(\$event\)"/,
+      'drop 必须无条件 prevent；上传动作仍由 canDropUpload 守门'
+    )
+  })
+})
