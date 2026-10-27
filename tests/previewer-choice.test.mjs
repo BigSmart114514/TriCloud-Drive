@@ -257,11 +257,11 @@ describe('FilePreviewer 顶栏按钮：全部换成图标', () => {
 })
 
 describe('FilePreviewer 的预览器下拉', () => {
-  test('三个 select：预览器、文本编码、代码主题', () => {
-    // 编码下拉由 tests/text-encoding.test.mjs 负责，主题下拉由
+  test('四个 select：预览器、文本编码、代码语言、代码主题', () => {
+    // 编码下拉由 tests/text-encoding.test.mjs 负责，语言与主题下拉由
     // tests/code-previewer.test.mjs 负责，这里只钉住总数，
     // 免得「下拉被复制了一份」这种改动溜过去。
-    assert.equal(collectElements('select').length, 3)
+    assert.equal(collectElements('select').length, 4)
   })
 
   test('option 来自 PREVIEWERS 的 v-for，且没有被条件挡住', () => {

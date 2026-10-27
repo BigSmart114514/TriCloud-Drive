@@ -32,7 +32,14 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const read = (p) => readFileSync(join(root, p), 'utf8')
 
 const { PREVIEWERS, previewerFor } = await import('../app/utils/previewer.ts')
-const { languageForFilename, loadLanguageExtension } = await import('../app/utils/code-language.ts')
+const {
+  CODE_LANGUAGES,
+  languageForFilename,
+  languageLabel,
+  isCodeLanguageId,
+  resolveCodeLanguage,
+  loadLanguageExtension
+} = await import('../app/utils/code-language.ts')
 const {
   CODE_THEMES,
   DEFAULT_CODE_THEME,
@@ -87,7 +94,28 @@ describe('languageForFilename：按扩展名挑语法', () => {
       'a.plist': 'xml',
       'a.sql': 'sql',
       'a.yml': 'yaml',
-      'a.yaml': 'yaml'
+      'a.yaml': 'yaml',
+      'a.toml': 'toml'
+    }
+    for (const [name, expected] of Object.entries(cases)) {
+      assert.equal(languageForFilename(name), expected, name)
+    }
+  })
+
+  test('项目里真正会遇到的源码类型：Vue / Go / Rust / Java / C / PHP / Shell', () => {
+    const cases = {
+      'App.vue': 'vue',
+      'main.go': 'go',
+      'lib.rs': 'rust',
+      'Main.java': 'java',
+      'a.c': 'cpp',
+      'a.h': 'cpp',
+      'a.cpp': 'cpp',
+      'a.hpp': 'cpp',
+      'index.php': 'php',
+      'run.sh': 'shell',
+      'run.bash': 'shell',
+      'run.zsh': 'shell'
     }
     for (const [name, expected] of Object.entries(cases)) {
       assert.equal(languageForFilename(name), expected, name)
@@ -109,24 +137,70 @@ describe('languageForFilename：按扩展名挑语法', () => {
 describe('loadLanguageExtension：按需加载，不把全部语法打进首屏', () => {
   test('每个 id 装的是对应的语法，不是随便一个语言包', async () => {
     // 只断「非空」的话，把 yaml 分支写成 json() 也能过 —— 屏幕上的高亮全错，
-    // 而测试仍然绿。LanguageSupport.language.name 是各语言包自己定的稳定名字。
+    // 而测试仍然绿。LanguageSupport.language.name 是各语言包自己定的稳定名字；
+    // legacy-modes 的 StreamLanguage 直接是 Language 实例，名字在顶层。
     const names = {
       javascript: 'typescript', // javascript({ typescript: true }) 的方言名
       json: 'json',
       html: 'html',
       css: 'css',
       markdown: 'markdown',
+      vue: 'vue',
       python: 'python',
-      xml: 'xml',
+      java: 'java',
+      go: 'go',
+      rust: 'rust',
+      cpp: 'cpp',
+      php: 'php',
+      shell: 'shell',
       sql: 'sql',
-      yaml: 'yaml'
+      yaml: 'yaml',
+      toml: 'toml',
+      xml: 'xml'
     }
+    const nameOf = (extension) => extension?.language?.name ?? extension?.name
     for (const [id, name] of Object.entries(names)) {
       const extension = await loadLanguageExtension(id)
       assert.ok(extension != null, `${id} 没有返回扩展`)
-      assert.equal(extension.language?.name, name, `${id} 装错了语言包`)
+      assert.equal(nameOf(extension), name, `${id} 装错了语言包`)
     }
     assert.deepEqual(await loadLanguageExtension('plaintext'), [], 'plaintext 不需要语法扩展')
+  })
+})
+
+describe('CODE_LANGUAGES / 语言下拉', () => {
+  test('顺序与 id 固定', () => {
+    assert.deepEqual(
+      CODE_LANGUAGES.map((l) => l.id),
+      ['javascript', 'json', 'html', 'css', 'markdown', 'vue', 'python', 'java', 'go',
+       'rust', 'cpp', 'php', 'shell', 'sql', 'yaml', 'toml', 'xml', 'plaintext']
+    )
+  })
+
+  test('id 唯一，label 非空，不含 markdown 星号', () => {
+    assert.equal(new Set(CODE_LANGUAGES.map((l) => l.id)).size, CODE_LANGUAGES.length)
+    for (const l of CODE_LANGUAGES) {
+      assert.ok(l.label.trim().length > 0, `${l.id} 的 label 是空的`)
+      assert.ok(!l.label.includes('**'), `${l.id} 的 label 漏出了 markdown 星号`)
+    }
+  })
+
+  test('languageLabel 对每个 id 都给出下拉里的同一句', () => {
+    for (const l of CODE_LANGUAGES) assert.equal(languageLabel(l.id), l.label, l.id)
+  })
+
+  test('isCodeLanguageId 只认表里的 id', () => {
+    for (const l of CODE_LANGUAGES) assert.equal(isCodeLanguageId(l.id), true, l.id)
+    for (const bad of ['auto', '', 'TYPESCRIPT', 'nope', null, undefined, 1]) {
+      assert.equal(isCodeLanguageId(bad), false, String(bad))
+    }
+  })
+
+  test('resolveCodeLanguage：auto 看扩展名，显式选择压过扩展名', () => {
+    assert.equal(resolveCodeLanguage('App.vue', 'auto'), 'vue')
+    assert.equal(resolveCodeLanguage('a.txt', 'auto'), 'plaintext')
+    assert.equal(resolveCodeLanguage('a.txt', 'javascript'), 'javascript')
+    assert.equal(resolveCodeLanguage('App.vue', 'python'), 'python')
   })
 })
 
@@ -300,8 +374,10 @@ describe('FilePreviewer：可编辑与解码', () => {
     assert.doesNotMatch(render, /blob\.text\(\)/)
   })
 
-  test('语言由文件名推出来，不在模板里写死', () => {
-    assert.match(previewerScript, /const codeLanguage = computed\(\(\) => languageForFilename\(/)
+  test('语言默认按扩展名推，可被用户选择覆盖', () => {
+    assert.match(previewerScript, /const autoCodeLanguage = computed\(\(\) => languageForFilename\(/)
+    assert.match(previewerScript, /const codeLanguage = computed\(\(\) => resolveCodeLanguage\(/)
+    assert.match(previewerScript, /const codeLanguageChoice = ref<CodeLanguageChoice>\('auto'\)/)
   })
 })
 
@@ -344,7 +420,7 @@ describe('FilePreviewer：代码分支的模板', () => {
     )
   })
 
-  test('分支里保留编码下拉，并新增主题下拉', () => {
+  test('分支里保留编码下拉，并新增语言与主题下拉', () => {
     const found = []
     walk(branch, (node) => found.push(node))
     const selects = found.filter((n) => n.tag === 'select')
@@ -353,6 +429,27 @@ describe('FilePreviewer：代码分支的模板', () => {
       (s.children ?? []).some((c) => c.type === 1 && c.tag === 'option' && norm(directiveExp(c, 'for')) === 'e in TEXT_ENCODINGS')
     )
     assert.ok(encoding, '合并分支里没有编码下拉')
+
+    const language = selects.find((s) =>
+      (s.children ?? []).some((c) => c.type === 1 && c.tag === 'option' && norm(directiveExp(c, 'for')) === 'l in CODE_LANGUAGES')
+    )
+    assert.ok(language, '没有语言下拉')
+    assert.equal(bound(language, 'value'), 'codeLanguageChoice')
+    assert.equal(norm(directiveExp(language, 'if')), "activePreviewer === 'code'", '语言只属于代码预览')
+    assert.equal(handler(language, 'change'), 'pickCodeLanguage')
+    assert.ok(attrNames(language).includes('title'))
+    assert.ok(attrNames(language).includes('aria-label'))
+
+    // 第一项是「自动」，并且把当前文件名解析出来的语言直接写进去 ——
+    // 否则用户选了 auto 却看不出到底选中的是哪套语法。
+    const autoOption = (language.children ?? []).find(
+      (c) => c.type === 1 && c.tag === 'option' && (c.props ?? []).some((p) => p.type === 6 && p.name === 'value' && p.value?.content === 'auto')
+    )
+    assert.ok(autoOption, '语言下拉没有 auto 选项')
+    const autoText = (autoOption.children ?? []).filter((c) => c.type === 2).map((c) => c.content).join('')
+    assert.ok(autoText.includes('自动'), `auto 选项的文案是「${autoText}」`)
+    const autoExpr = (autoOption.children ?? []).filter((c) => c.type === 5).map((c) => c.content?.content ?? '').join('')
+    assert.equal(autoExpr.trim(), 'languageLabel(autoCodeLanguage)')
 
     const theme = selects.find((s) =>
       (s.children ?? []).some((c) => c.type === 1 && c.tag === 'option' && norm(directiveExp(c, 'for')) === 't in CODE_THEMES')
@@ -392,6 +489,17 @@ describe('FilePreviewer：主题状态跟随系统并记住选择', () => {
     assert.match(previewerScript, /window\.matchMedia\('\(prefers-color-scheme: dark\)'\)/)
     assert.match(previewerScript, /addEventListener\('change', syncSystemTheme\)/)
     assert.match(previewerScript, /removeEventListener\('change', syncSystemTheme\)/)
+  })
+
+  test('换语言不落盘（只对当前文件有效），换文件回到 auto', () => {
+    const pick = sliceBetween('const pickCodeLanguage =', 'watch(() => props.file?.id')
+    assert.match(pick, /raw === 'auto'/)
+    assert.match(pick, /isCodeLanguageId\(raw\)/)
+    assert.match(pick, /codeLanguageChoice\.value = raw/)
+    assert.doesNotMatch(pick, /writeCodeTheme|localStorage/, '语言是文件属性，不该跨文件记住')
+
+    const fileWatch = sliceBetween('watch(() => props.file?.id', 'watch(() => props.file?.fileKey')
+    assert.match(fileWatch, /codeLanguageChoice\.value = 'auto'/)
   })
 })
 

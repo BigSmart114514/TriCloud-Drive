@@ -190,7 +190,7 @@
       -->
       <div v-else-if="activePreviewer === 'text' || activePreviewer === 'code'" class="flex h-full flex-col">
         <div class="flex items-center justify-between gap-2 border-b px-4 py-2 text-xs text-gray-500">
-          <div class="flex min-w-0 items-center gap-2">
+          <div class="flex min-w-0 flex-wrap items-center gap-2">
             <span class="truncate">{{ previewerLabel }} · 大小 {{ prettySize }}</span>
             <!--
               编码选择。GBK 的 .txt 按 UTF-8 解就是满屏「�」，只能靠这里换。
@@ -206,6 +206,22 @@
               @change="pickEncoding"
             >
               <option v-for="e in TEXT_ENCODINGS" :key="e.id" :value="e.id">{{ e.label }}</option>
+            </select>
+            <!--
+              语言选择。扩展名认不出来（.txt 里放代码、新建的无扩展名文件）时，
+              自动会落到纯文本 —— 这里让用户直接指定。默认 auto，换文件重置，
+              和「预览器/编码只对当前文件有效」同一口径。
+            -->
+            <select
+              v-if="activePreviewer === 'code'"
+              :value="codeLanguageChoice"
+              title="选择语言"
+              aria-label="选择语言"
+              class="shrink-0 rounded border border-gray-200 bg-white py-0.5 pl-1.5 pr-5 text-xs text-gray-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              @change="pickCodeLanguage"
+            >
+              <option value="auto">自动（{{ languageLabel(autoCodeLanguage) }}）</option>
+              <option v-for="l in CODE_LANGUAGES" :key="l.id" :value="l.id">{{ l.label }}</option>
             </select>
             <!--
               主题选择只属于代码预览。存的是「选择」（auto / light / dark），
@@ -278,7 +294,14 @@ import {
   type CodeThemeId,
   type ResolvedCodeTheme
 } from '~/utils/code-theme'
-import { languageForFilename } from '~/utils/code-language'
+import {
+  CODE_LANGUAGES,
+  isCodeLanguageId,
+  languageForFilename,
+  languageLabel,
+  resolveCodeLanguage,
+  type CodeLanguageChoice
+} from '~/utils/code-language'
 import { createPreviewSource } from '~/utils/preview-source'
 import type { FileRecord } from '~~/types/files'
 import type { ArchiveFileItem } from '~~/types/zip'
@@ -330,6 +353,11 @@ const encoding = ref<TextEncodingId>(DEFAULT_TEXT_ENCODING)
  * 换文件时不重置（与 chosenPreviewer / encoding 的口径相反）。
  */
 const codeTheme = ref<CodeThemeId>(readCodeTheme(getLocalStorage()))
+/**
+ * 代码预览的语法。auto = 按扩展名；显式选择只对当前文件有效 ——
+ * 和 chosenPreviewer / encoding 一样，换文件重置。
+ */
+const codeLanguageChoice = ref<CodeLanguageChoice>('auto')
 const systemDarkQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
   ? window.matchMedia('(prefers-color-scheme: dark)')
   : null
@@ -386,7 +414,8 @@ const previewerLabel = computed(() => {
   if (activePreviewer.value === 'code') return '代码'
   return isMd.value ? 'Markdown' : '纯文本'
 })
-const codeLanguage = computed(() => languageForFilename(props.file?.filename ?? ''))
+const autoCodeLanguage = computed(() => languageForFilename(props.file?.filename ?? ''))
+const codeLanguage = computed(() => resolveCodeLanguage(props.file?.filename ?? '', codeLanguageChoice.value))
 const resolvedCodeTheme = computed<ResolvedCodeTheme>(() => resolveCodeTheme(codeTheme.value, prefersDark.value))
 const isZip = computed(() => ext.value === 'zip')
 const archiveFormat = computed<'zip' | '7z'>(() => isZip.value ? 'zip' : '7z')
@@ -779,11 +808,24 @@ const pickCodeTheme = (event: Event) => {
   writeCodeTheme(getLocalStorage(), raw)
 }
 
+/**
+ * 换语言只换语法高亮，不碰文本内容 —— 所以不需要 confirm。
+ */
+const pickCodeLanguage = (event: Event) => {
+  const raw = (event.target as HTMLSelectElement).value
+  if (raw === 'auto') {
+    codeLanguageChoice.value = 'auto'
+    return
+  }
+  if (isCodeLanguageId(raw)) codeLanguageChoice.value = raw
+}
+
 watch(() => props.file?.id, (id) => {
   if (id === undefined) return
   currentFileKey.value = props.file.fileKey
   chosenPreviewer.value = null
   encoding.value = DEFAULT_TEXT_ENCODING
+  codeLanguageChoice.value = 'auto'
   void load()
 }, { immediate: true })
 
