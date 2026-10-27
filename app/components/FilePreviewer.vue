@@ -112,16 +112,16 @@
         </div>
       </div>
 
-      <div v-else-if="activePreviewer === 'archive'" class="h-full min-h-0">
+      <div v-else-if="activePreviewer === 'zip' || activePreviewer === '7z'" class="h-full min-h-0">
         <ZipPreview
-          v-if="archiveBlob && archiveFormat === 'zip'"
+          v-if="archiveBlob && activePreviewer === 'zip'"
           v-show="!zipEntry"
           :archive="archiveBlob"
           :archive-name="file.filename"
           @open-entry="openZipEntry"
         />
         <SevenZipPreview
-          v-if="archiveBlob && archiveFormat !== 'zip'"
+          v-if="archiveBlob && activePreviewer === '7z'"
           v-show="!zipEntry"
           :archive="archiveBlob"
           :archive-name="file.filename"
@@ -417,8 +417,6 @@ const previewerLabel = computed(() => {
 const autoCodeLanguage = computed(() => languageForFilename(props.file?.filename ?? ''))
 const codeLanguage = computed(() => resolveCodeLanguage(props.file?.filename ?? '', codeLanguageChoice.value))
 const resolvedCodeTheme = computed<ResolvedCodeTheme>(() => resolveCodeTheme(codeTheme.value, prefersDark.value))
-const isZip = computed(() => ext.value === 'zip')
-const archiveFormat = computed<'zip' | '7z'>(() => isZip.value ? 'zip' : '7z')
 /**
  * 链接视角。链接只给读+下载，所以「可编辑」在这里必须为 false ——
  * 否则会渲染出文本编辑框和保存按钮，而保存走的是上传接口（没有 link 分支）。
@@ -521,7 +519,7 @@ const renderPreview = async (blob: Blob | null) => {
     textContent.value = text
   } else if (target === 'image' || target === 'pdf') {
     blobUrl.value = URL.createObjectURL(blob)
-  } else if (target === 'archive') {
+  } else if (target === 'zip' || target === '7z') {
     archiveBlob.value = blob
   }
 }

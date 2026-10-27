@@ -15,7 +15,7 @@
 // 「这个文件真的不是那种东西」看起来一样：一个没有扩展名的文件可能是 PDF，
 // 也可能什么都不是。把选择权交出去，比替用户断定「暂不支持」要好。
 
-export type PreviewerId = 'image' | 'pdf' | 'text' | 'code' | 'archive' | 'none'
+export type PreviewerId = 'image' | 'pdf' | 'text' | 'code' | 'zip' | '7z' | 'none'
 
 export interface Previewer {
   id: PreviewerId
@@ -26,13 +26,18 @@ export interface Previewer {
  * 顺序即下拉里的顺序。
  *
  * 空的兜底项放最后：它是「别加载了」，不是一种内容呈现方式。
+ *
+ * ZIP 与 7z 是两个条目，不是隐藏在同一项后面的运行时二选一：两台引擎能力不同
+ * （7z 能读 zip，zip.js 只读 zip），合并之后遇到改名或无扩展名的文件，用户
+ * 既看不出正在用哪台，也没法换另一台重试。
  */
 export const PREVIEWERS: readonly Previewer[] = [
   { id: 'image', label: '图片预览' },
   { id: 'pdf', label: 'PDF 预览' },
   { id: 'text', label: '文本预览' },
   { id: 'code', label: '代码预览' },
-  { id: 'archive', label: '压缩包预览' },
+  { id: 'zip', label: 'ZIP 预览' },
+  { id: '7z', label: '7z 预览' },
   { id: 'none', label: '不预览内容' }
 ] as const
 
@@ -69,6 +74,9 @@ export function extensionOf(filename: string): string {
 /**
  * 按扩展名给出默认预览器。认不出来返回 null —— 调用方据此提示用户选择，
  * 而不是编一个默认值把一个二进制文件当文本打开。
+ *
+ * `.zip` 单独先判：它默认交给 zip.js，其余的压缩包交给 7z-wasm。这只是默认值，
+ * 用户在下拉里仍然可以把 `.zip` 交给 7z、把 `.7z` 交给 zip.js 重试。
  */
 export function previewerFor(filename: string): PreviewerId | null {
   const ext = extensionOf(filename)
@@ -76,7 +84,8 @@ export function previewerFor(filename: string): PreviewerId | null {
   if (IMAGE_EXTENSIONS.has(ext)) return 'image'
   if (ext === 'pdf') return 'pdf'
   if (TEXT_EXTENSIONS.has(ext)) return 'text'
-  if (ARCHIVE_EXTENSIONS.has(ext)) return 'archive'
+  if (ext === 'zip') return 'zip'
+  if (ARCHIVE_EXTENSIONS.has(ext)) return '7z'
   return null
 }
 

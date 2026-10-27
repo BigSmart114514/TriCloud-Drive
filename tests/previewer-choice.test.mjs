@@ -41,10 +41,13 @@ const {
 } = await import('../app/utils/previewer.ts')
 
 describe('PREVIEWERS：网站提供的全部预览器', () => {
-  test('顺序与 id 固定，且只此六个', () => {
+  test('顺序与 id 固定，且只此七个', () => {
+    // zip.js 与 7z-wasm 是两台引擎，能力并不一样：7z 认得出 zip，zip.js
+    // 只认 zip。合成一个「压缩包预览」再按扩展名偷偷二选一，遇到改名/无扩展名
+    // 的文件就只能报错，用户也没法换一台引擎重试。这里把它们拆成两个条目。
     assert.deepEqual(
       PREVIEWERS.map((p) => p.id),
-      ['image', 'pdf', 'text', 'code', 'archive', 'none']
+      ['image', 'pdf', 'text', 'code', 'zip', '7z', 'none']
     )
   })
 
@@ -92,9 +95,11 @@ describe('previewerFor：按扩展名给出默认预览器', () => {
     }
   })
 
-  test('压缩包（含只给最后一段扩展名的多层后缀）', () => {
-    for (const name of ['a.zip', 'a.7z', 'a.rar', 'a.tar', 'a.gz', 'a.tgz', 'a.bz2', 'a.xz', 'a.zst', 'a.cpio', 'a.iso', 'a.deb', 'a.tar.gz']) {
-      assert.equal(previewerFor(name), 'archive', name)
+  test('.zip 归 zip，其余压缩包归 7z（含只给最后一段扩展名的多层后缀）', () => {
+    assert.equal(previewerFor('a.zip'), 'zip')
+    assert.equal(previewerFor('A.ZIP'), 'zip')
+    for (const name of ['a.7z', 'a.rar', 'a.tar', 'a.gz', 'a.tgz', 'a.bz2', 'a.xz', 'a.zst', 'a.cpio', 'a.iso', 'a.deb', 'a.tar.gz']) {
+      assert.equal(previewerFor(name), '7z', name)
     }
   })
 
@@ -115,6 +120,13 @@ describe('resolvePreviewer：用户选择优先，没选才用默认', () => {
     assert.equal(resolvePreviewer('a.png', 'pdf'), 'pdf')
     assert.equal(resolvePreviewer('a.exe', 'image'), 'image')
     assert.equal(resolvePreviewer('a.png', 'none'), 'none')
+  })
+
+  test('两台压缩引擎可以互相顶上', () => {
+    // .zip 改坏了、.7z 其实是 zip —— 两个方向都要能手动换引擎重试。
+    assert.equal(resolvePreviewer('a.zip', '7z'), '7z')
+    assert.equal(resolvePreviewer('a.7z', 'zip'), 'zip')
+    assert.equal(resolvePreviewer('noext', 'zip'), 'zip')
   })
 
   test('认不出来又没选 = 没有预览器（要提示选择）', () => {
@@ -319,5 +331,35 @@ describe('FilePreviewer 的预览器下拉', () => {
     // 下次切换又得重新下载 —— 这正是要防的那件事。
     const invalids = (script.match(/\binvalidate\b/g) ?? []).length
     assert.equal(invalids, 1, `invalidate 只该出现在卸载清理里，实际 ${invalids} 处`)
+  })
+})
+
+describe('FilePreviewer 的压缩包分支：两台引擎各自成条', () => {
+  const exprOf = (node, name) => directiveExp(node, name).replace(/\s+/g, ' ').trim()
+
+  test('ZipPreview 与 SevenZipPreview 各挂一次，条件互斥', () => {
+    const zip = collectElements('ZipPreview')
+    const seven = collectElements('SevenZipPreview')
+    assert.equal(zip.length, 1, `ZipPreview 出现了 ${zip.length} 次`)
+    assert.equal(seven.length, 1, `SevenZipPreview 出现了 ${seven.length} 次`)
+
+    assert.equal(exprOf(zip[0], 'if'), "archiveBlob && activePreviewer === 'zip'")
+    assert.equal(exprOf(seven[0], 'if'), "archiveBlob && activePreviewer === '7z'")
+    // 包内文件打开时两个列表都要让位，不能只藏一个。
+    assert.equal(exprOf(zip[0], 'show'), '!zipEntry')
+    assert.equal(exprOf(seven[0], 'show'), '!zipEntry')
+  })
+
+  test('外层 else-if 同时接住 zip 与 7z', () => {
+    const wrappers = collectElements('div').filter((d) => exprOf(d, 'else-if').includes("activePreviewer === 'zip'"))
+    assert.equal(wrappers.length, 1, '没有找到同时包含两台引擎的外层分支')
+    assert.equal(exprOf(wrappers[0], 'else-if'), "activePreviewer === 'zip' || activePreviewer === '7z'")
+  })
+
+  test('script 里不再按扩展名在运行时二选一', () => {
+    const script = descriptor.scriptSetup?.content ?? ''
+    assert.doesNotMatch(script, /archiveFormat/, 'archiveFormat 又把两台引擎合并回一个隐藏开关了')
+    assert.doesNotMatch(script, /=== 'archive'/, '还留着旧的 archive id')
+    assert.match(script, /target === 'zip' \|\| target === '7z'/, '缓存字节那条路要同时认两台引擎')
   })
 })
