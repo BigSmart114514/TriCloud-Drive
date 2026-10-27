@@ -41,10 +41,10 @@ const {
 } = await import('../app/utils/previewer.ts')
 
 describe('PREVIEWERS：网站提供的全部预览器', () => {
-  test('顺序与 id 固定，且只此五个', () => {
+  test('顺序与 id 固定，且只此六个', () => {
     assert.deepEqual(
       PREVIEWERS.map((p) => p.id),
-      ['image', 'pdf', 'text', 'archive', 'none']
+      ['image', 'pdf', 'text', 'code', 'archive', 'none']
     )
   })
 
@@ -257,10 +257,11 @@ describe('FilePreviewer 顶栏按钮：全部换成图标', () => {
 })
 
 describe('FilePreviewer 的预览器下拉', () => {
-  test('两个 select：预览器一个，文本编码一个', () => {
-    // 编码下拉由 tests/text-encoding.test.mjs 负责，这里只钉住总数，
-    // 免得「预览器下拉被复制了一份」这种改动溜过去。
-    assert.equal(collectElements('select').length, 2)
+  test('三个 select：预览器、文本编码、代码主题', () => {
+    // 编码下拉由 tests/text-encoding.test.mjs 负责，主题下拉由
+    // tests/code-previewer.test.mjs 负责，这里只钉住总数，
+    // 免得「下拉被复制了一份」这种改动溜过去。
+    assert.equal(collectElements('select').length, 3)
   })
 
   test('option 来自 PREVIEWERS 的 v-for，且没有被条件挡住', () => {

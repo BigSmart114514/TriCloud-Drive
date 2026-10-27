@@ -223,14 +223,18 @@ describe('FilePreviewer：文本模式的编辑与编码', () => {
   test('可编辑只看视角，不再要求扩展名是文本（这是上次丢掉编辑的原因）', () => {
     assert.match(
       script,
-      /const isEditable = computed\(\(\) => !linkMode\.value && activePreviewer\.value === 'text'\)/,
-      'isEditable 必须正好是「不是链接视角 + 当前是文本预览器」'
+      /const isEditable = computed\(\(\) => !linkMode\.value && \(activePreviewer\.value === 'text' \|\| activePreviewer\.value === 'code'\)\)/,
+      'isEditable 必须正好是「不是链接视角 + 当前是文本或代码预览器」'
     )
     assert.doesNotMatch(script, /defaultPreviewer/, '按扩展名卡编辑权的判定已经被删掉了')
   })
 
   test('文本分支只有一个，textarea 与只读 pre 由 isEditable 二选一', () => {
-    const branches = collectElements('div').filter((d) => directiveExp(d, 'else-if') === "activePreviewer === 'text'")
+    const isTextLike = (d) => {
+      const exp = directiveExp(d, 'else-if').replace(/\s+/g, ' ').trim()
+      return exp === "activePreviewer === 'text' || activePreviewer === 'code'"
+    }
+    const branches = collectElements('div').filter(isTextLike)
     assert.equal(branches.length, 1, `文本分支应该有且只有一个，实际 ${branches.length}`)
 
     const textareas = []
@@ -241,7 +245,8 @@ describe('FilePreviewer：文本模式的编辑与编码', () => {
     })
     assert.equal(textareas.length, 1)
     assert.equal(pres.length, 1)
-    assert.equal(directiveExp(textareas[0], 'if'), 'isEditable')
+    // 代码预览器占了 v-if，文本的编辑框排在它后面，所以这里是 v-else-if。
+    assert.equal(directiveExp(textareas[0], 'else-if'), 'isEditable')
     // 必须是**存在**的 v-else：只断 exp 为空的话，把 v-else 改成 v-if 也是空，
     // 两个分支会同时渲染（textarea 和 pre 都在）。
     assert.ok(
@@ -273,12 +278,17 @@ describe('FilePreviewer：文本模式的编辑与编码', () => {
   })
 
   test('编码下拉在文本分支里，且没有被 v-if 挡住（只读视角也要能换编码看）', () => {
-    const branch = collectElements('div').find((d) => directiveExp(d, 'else-if') === "activePreviewer === 'text'")
+    const branch = collectElements('div').find(
+      (d) => directiveExp(d, 'else-if').replace(/\s+/g, ' ').trim() === "activePreviewer === 'text' || activePreviewer === 'code'"
+    )
+    assert.ok(branch, '没有找到 text/code 合并分支')
     let found = null
     walk(branch, (node) => {
-      if (node.tag === 'select') found = node
+      if (node.tag === 'select' && attrNames(node).includes('title') && (node.children ?? []).some(
+        (c) => c.type === 1 && c.tag === 'option' && directiveExp(c, 'for').includes('TEXT_ENCODINGS')
+      )) found = node
     })
-    assert.ok(found, '文本分支里没有编码下拉')
+    assert.ok(found, '合并分支里没有编码下拉')
     assert.ok(!(found.props ?? []).some((p) => p.type === 7 && (p.name === 'if' || p.name === 'show')))
   })
 

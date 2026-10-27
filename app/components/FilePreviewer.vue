@@ -180,15 +180,18 @@
       </div>
 
       <!--
-        文本预览：可不可编辑只看视角，不看扩展名。
-        用户把 .png 强行丢进文本预览器时也给编辑 —— 那是他自己选的，按当前编码
+        文本 / 代码预览：可不可编辑只看视角，不看扩展名。
+        用户把 .png 强行丢进预览器时也给编辑 —— 那是他自己选的，按当前编码
         写回。分享链接仍然是只读：保存走的是上传接口，没有 link 分支，给了按钮
         也只能失败。
+
+        代码只是同一份文本换了个渲染器：解码、编码、保存、大小全都共用，所以
+        两种模式挤在一个分支里 —— 编码下拉、未保存提示只有一份。
       -->
-      <div v-else-if="activePreviewer === 'text'" class="flex h-full flex-col">
+      <div v-else-if="activePreviewer === 'text' || activePreviewer === 'code'" class="flex h-full flex-col">
         <div class="flex items-center justify-between gap-2 border-b px-4 py-2 text-xs text-gray-500">
           <div class="flex min-w-0 items-center gap-2">
-            <span class="truncate">{{ isMd ? 'Markdown' : '纯文本' }} · 大小 {{ prettySize }}</span>
+            <span class="truncate">{{ previewerLabel }} · 大小 {{ prettySize }}</span>
             <!--
               编码选择。GBK 的 .txt 按 UTF-8 解就是满屏「�」，只能靠这里换。
               换编码只是重新解同一份字节（缓存层已有一份），不重新下载。
@@ -204,10 +207,33 @@
             >
               <option v-for="e in TEXT_ENCODINGS" :key="e.id" :value="e.id">{{ e.label }}</option>
             </select>
+            <!--
+              主题选择只属于代码预览。存的是「选择」（auto / light / dark），
+              不是解析后的明暗 —— 存死明暗的话，用户切了系统主题后已经打开的
+              预览器不会跟。解析在 resolvedCodeTheme 里做。
+            -->
+            <select
+              v-if="activePreviewer === 'code'"
+              :value="codeTheme"
+              title="选择主题"
+              aria-label="选择主题"
+              class="shrink-0 rounded border border-gray-200 bg-white py-0.5 pl-1.5 pr-5 text-xs text-gray-700 outline-none focus:border-indigo-500 focus:ring-2 focus:ring-indigo-100"
+              @change="pickCodeTheme"
+            >
+              <option v-for="t in CODE_THEMES" :key="t.id" :value="t.id">{{ t.label }}</option>
+            </select>
           </div>
           <span v-if="linkMode" class="shrink-0 rounded bg-gray-100 px-1.5 py-0.5 text-[11px] text-gray-600">分享链接 · 只读</span>
         </div>
-        <textarea v-if="isEditable" v-model="textContent" class="flex-1 w-full p-3 font-mono text-sm outline-none sm:p-4" placeholder="正在加载内容..." />
+        <CodeTextEditor
+          v-if="activePreviewer === 'code'"
+          v-model="textContent"
+          :language="codeLanguage"
+          :theme="resolvedCodeTheme"
+          :readonly="!isEditable"
+          class="min-h-0 flex-1"
+        />
+        <textarea v-else-if="isEditable" v-model="textContent" class="flex-1 w-full p-3 font-mono text-sm outline-none sm:p-4" placeholder="正在加载内容..." />
         <pre v-else class="flex-1 w-full overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-sm outline-none sm:p-4">{{ textContent }}</pre>
         <div v-if="tooLargeHint" class="border-t border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-700">{{ tooLargeHint }}</div>
       </div>
@@ -216,10 +242,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, ref, shallowRef, toRef, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch } from 'vue'
 import { ArrowDownTrayIcon, ArrowLeftIcon, ArrowUpTrayIcon, CheckIcon, EyeIcon, XMarkIcon } from '@heroicons/vue/24/outline'
 import ZipPreview from '~/components/ZipPreview.vue'
 import SevenZipPreview from '~/components/SevenZipPreview.vue'
+import CodeTextEditor from '~/components/CodeTextEditor.vue'
 import { FilesService } from '~/services/files.service'
 import { useFileUpload } from '~/composables/useFileUpload'
 import { openPrompt } from '~/composables/usePromptDialog'
@@ -242,6 +269,16 @@ import {
   isTextEncodingId,
   type TextEncodingId
 } from '~/utils/text-encoding'
+import {
+  CODE_THEMES,
+  isCodeTheme,
+  readCodeTheme,
+  resolveCodeTheme,
+  writeCodeTheme,
+  type CodeThemeId,
+  type ResolvedCodeTheme
+} from '~/utils/code-theme'
+import { languageForFilename } from '~/utils/code-language'
 import { createPreviewSource } from '~/utils/preview-source'
 import type { FileRecord } from '~~/types/files'
 import type { ArchiveFileItem } from '~~/types/zip'
@@ -273,10 +310,30 @@ const targetUserIdRef = toRef(props, 'targetUserId')
 const useAdminRef = toRef(props, 'useAdmin')
 const currentFileKey = ref(props.file.fileKey)
 const replaceInputRef = ref<HTMLInputElement | null>(null)
+/**
+ * 取 localStorage。读和写都可能抛（Safari 隐私模式、配额写满），
+ * 在这里一次性兜住；取不到就当没存过，不能让预览器不可用。
+ */
+const getLocalStorage = (): Storage | null => {
+  try {
+    return typeof window !== 'undefined' ? window.localStorage : null
+  } catch {
+    return null
+  }
+}
 /** 用户在当前文件上手动选过的预览器。null = 用默认（按扩展名判定）。 */
 const chosenPreviewer = ref<PreviewerId | null>(null)
 /** 文本按哪种编码解、按哪种编码写回。只对当前文件有效，换文件重置。 */
 const encoding = ref<TextEncodingId>(DEFAULT_TEXT_ENCODING)
+/**
+ * 代码预览的配色。这是**用户偏好**，不是文件属性，所以跨文件记住；
+ * 换文件时不重置（与 chosenPreviewer / encoding 的口径相反）。
+ */
+const codeTheme = ref<CodeThemeId>(readCodeTheme(getLocalStorage()))
+const systemDarkQuery = typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+  ? window.matchMedia('(prefers-color-scheme: dark)')
+  : null
+const prefersDark = ref(!!systemDarkQuery?.matches)
 const loading = ref(false)
 const error = ref('')
 const textContent = ref('')
@@ -324,19 +381,26 @@ const ext = computed(() => extensionOf(props.file?.filename ?? ''))
 /** 当前实际使用：用户选过的优先，否则按扩展名。 */
 const activePreviewer = computed(() => resolvePreviewer(props.file?.filename ?? '', chosenPreviewer.value))
 const isMd = computed(() => ext.value === 'md' || ext.value === 'markdown')
+/** 头部那行字：代码预览不显示「纯文本」，否则用户会以为自己选错了预览器。 */
+const previewerLabel = computed(() => {
+  if (activePreviewer.value === 'code') return '代码'
+  return isMd.value ? 'Markdown' : '纯文本'
+})
+const codeLanguage = computed(() => languageForFilename(props.file?.filename ?? ''))
+const resolvedCodeTheme = computed<ResolvedCodeTheme>(() => resolveCodeTheme(codeTheme.value, prefersDark.value))
 const isZip = computed(() => ext.value === 'zip')
 const archiveFormat = computed<'zip' | '7z'>(() => isZip.value ? 'zip' : '7z')
 /**
  * 链接视角。链接只给读+下载，所以「可编辑」在这里必须为 false ——
  * 否则会渲染出文本编辑框和保存按钮，而保存走的是上传接口（没有 link 分支）。
  *
- * 除此之外**只要求当前预览器是文本**，不再要求扩展名本身是文本。
+ * 除此之外**只要求当前预览器是文本或代码**，不再要求扩展名本身是文本。
  * 原来还卡了一层「扩展名是文本才给编辑」，结果是：没有扩展名的新建文件、
  * .js/.ts/.py 这些，点开文本预览只能看不能改。用户既然已经手动选中了文本
  * 预览器，编辑权就该给他 —— 把 .png 当文本改再保存是他自己的选择。
  */
 const linkMode = computed(() => !!props.link)
-const isEditable = computed(() => !linkMode.value && activePreviewer.value === 'text')
+const isEditable = computed(() => !linkMode.value && (activePreviewer.value === 'text' || activePreviewer.value === 'code'))
 const isZipEntryImage = computed(() => !!zipEntry.value && isImageName(zipEntry.value.filename))
 const isZipEntryPdf = computed(() => !!zipEntry.value && extensionOf(zipEntry.value.filename) === 'pdf')
 const isZipEntryText = computed(() => !!zipEntry.value && isTextName(zipEntry.value.filename) && zipEntry.value.fileSize <= 10 * 1024 * 1024)
@@ -421,7 +485,7 @@ const renderPreview = async (blob: Blob | null) => {
   if (!blob) return
 
   const target = activePreviewer.value
-  if (target === 'text') {
+  if (target === 'text' || target === 'code') {
     const text = decodeText(new Uint8Array(await blob.arrayBuffer()), encoding.value)
     if (id !== renderId) return
     originalContent.value = text
@@ -684,6 +748,35 @@ const pickEncoding = (event: Event) => {
   }
   encoding.value = raw
   void load()
+}
+
+/**
+ * 系统深浅变化只对 auto 有效；显式选了浅/深时 resolveCodeTheme 会忽略它。
+ * matchMedia 的监听要在卸载时摘掉，否则关掉预览器之后它还在改一个已销毁的 ref。
+ */
+const syncSystemTheme = (event?: MediaQueryListEvent) => {
+  prefersDark.value = event ? event.matches : !!systemDarkQuery?.matches
+}
+
+onMounted(() => {
+  if (!systemDarkQuery) return
+  systemDarkQuery.addEventListener('change', syncSystemTheme)
+  prefersDark.value = systemDarkQuery.matches
+})
+
+onBeforeUnmount(() => {
+  systemDarkQuery?.removeEventListener('change', syncSystemTheme)
+})
+
+/**
+ * 换主题只影响代码区，不动页面。选择存 localStorage —— 这是用户偏好，
+ * 不该每开一个文件就回到跟随系统。
+ */
+const pickCodeTheme = (event: Event) => {
+  const raw = (event.target as HTMLSelectElement).value
+  if (!isCodeTheme(raw) || raw === codeTheme.value) return
+  codeTheme.value = raw
+  writeCodeTheme(getLocalStorage(), raw)
 }
 
 watch(() => props.file?.id, (id) => {

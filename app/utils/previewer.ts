@@ -15,7 +15,7 @@
 // 「这个文件真的不是那种东西」看起来一样：一个没有扩展名的文件可能是 PDF，
 // 也可能什么都不是。把选择权交出去，比替用户断定「暂不支持」要好。
 
-export type PreviewerId = 'image' | 'pdf' | 'text' | 'archive' | 'none'
+export type PreviewerId = 'image' | 'pdf' | 'text' | 'code' | 'archive' | 'none'
 
 export interface Previewer {
   id: PreviewerId
@@ -31,6 +31,7 @@ export const PREVIEWERS: readonly Previewer[] = [
   { id: 'image', label: '图片预览' },
   { id: 'pdf', label: 'PDF 预览' },
   { id: 'text', label: '文本预览' },
+  { id: 'code', label: '代码预览' },
   { id: 'archive', label: '压缩包预览' },
   { id: 'none', label: '不预览内容' }
 ] as const
