@@ -43,6 +43,15 @@ export const PREVIEWERS: readonly Previewer[] = [
   { id: 'none', label: '不预览内容' }
 ] as const
 
+/**
+ * 空文本文件在编辑框里的占位提示。
+ *
+ * 不能写「正在加载内容...」：空文件没有内容可等，加载结束后 textarea 仍然
+ * 是空的，占位符就会原地留着，看起来像一直卡在加载。这里直接说明文件为空，
+ * 同时告诉用户可以输入 —— 空文件本来就是用来写东西的。
+ */
+export const EMPTY_TEXT_PLACEHOLDER = '空文件，可直接输入'
+
 export const IMAGE_EXTENSIONS: ReadonlySet<string> = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'svg', 'avif'
 ])

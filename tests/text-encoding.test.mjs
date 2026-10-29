@@ -39,6 +39,8 @@ const {
   UnencodableCharacterError
 } = await import('../app/utils/text-encoding.ts')
 
+const previewerModule = await import('../app/utils/previewer.ts')
+
 const bytesOf = (source, encoding) => [...encodeText(source, encoding)]
 const hex = (values) => values.map((b) => b.toString(16).padStart(2, '0')).join(' ')
 
@@ -201,6 +203,8 @@ const directiveExp = (node, name) =>
   String((node.props ?? []).find((p) => p.type === 7 && p.name === name)?.exp?.content ?? '')
 
 const attrNames = (node) => (node.props ?? []).filter((p) => p.type === 6).map((p) => p.name)
+const staticAttr = (node, name) =>
+  (node.props ?? []).find((p) => p.type === 6 && p.name === name)?.value?.content ?? ''
 const bound = (node, arg) =>
   String((node.props ?? []).find((p) => p.type === 7 && p.name === 'bind' && p.arg?.content === arg)?.exp?.content ?? '')
 
@@ -212,6 +216,33 @@ const sliceBetween = (start, end) => {
   assert.ok(to > from, `script 里找不到「${end}」`)
   return script.slice(from, to)
 }
+
+describe('FilePreviewer：空文件的提示', () => {
+  test('空字节解码得到空字符串，不是还要等的内容', () => {
+    assert.equal(decodeText(new Uint8Array(new ArrayBuffer(0)), 'utf-8'), '')
+  })
+
+  test('空文件提示说明「这里是空的」，不冒充加载状态', () => {
+    const hint = previewerModule.EMPTY_TEXT_PLACEHOLDER
+    assert.equal(hint, '空文件，可直接输入')
+    assert.ok(!hint.includes('加载'), `空文件没有内容可等，提示里不能写「加载」：${hint}`)
+  })
+
+  test('textarea 的 placeholder 用的是这个常量，且没有残留的加载文案', () => {
+    const textarea = collectElements('textarea').find(
+      (node) => directiveExp(node, 'model') === 'textContent'
+    )
+    assert.ok(textarea, '没有找到文本编辑框')
+    assert.equal(bound(textarea, 'placeholder'), 'EMPTY_TEXT_PLACEHOLDER')
+    assert.equal(staticAttr(textarea, 'placeholder'), '', '占位符要绑定常量，不能写死')
+    const previewerImport = sliceBetween('import {\n  PREVIEWERS', "} from '~/utils/previewer'")
+    assert.match(previewerImport, /\bEMPTY_TEXT_PLACEHOLDER\b/, '组件没有引入这个常量')
+    assert.ok(
+      !sfcSource.includes('正在加载内容'),
+      '「正在加载内容...」在空文件上会一直显示，必须删掉'
+    )
+  })
+})
 
 describe('FilePreviewer：文本模式的编辑与编码', () => {
   test('模板与脚本能解析', () => {

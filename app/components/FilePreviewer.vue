@@ -278,7 +278,7 @@
           :readonly="!isEditable"
           class="min-h-0 flex-1"
         />
-        <textarea v-else-if="isEditable" v-model="textContent" class="flex-1 w-full p-3 font-mono text-sm outline-none sm:p-4" placeholder="正在加载内容..." />
+        <textarea v-else-if="isEditable" v-model="textContent" :placeholder="EMPTY_TEXT_PLACEHOLDER" class="flex-1 w-full p-3 font-mono text-sm outline-none sm:p-4" />
         <pre v-else class="flex-1 w-full overflow-auto whitespace-pre-wrap break-words p-3 font-mono text-sm outline-none sm:p-4">{{ textContent }}</pre>
         <div v-if="tooLargeHint" class="border-t border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-700">{{ tooLargeHint }}</div>
       </div>
@@ -299,6 +299,7 @@ import { formatFileSize } from '~/utils/format'
 import { notify } from '~/utils/notify'
 import {
   PREVIEWERS,
+  EMPTY_TEXT_PLACEHOLDER,
   IMAGE_EXTENSIONS,
   VIDEO_EXTENSIONS,
   AUDIO_EXTENSIONS,
